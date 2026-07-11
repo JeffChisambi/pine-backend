@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+npm-debug.log*
+logs/
+
+# coverage
+coverage/
+.nyc_output/
+
+# ide
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# os
+.DS_Store
+
+# prisma
+prisma/generated/
+
+# misc
+*.tsbuildinfo
+.turbo/
+tmp/

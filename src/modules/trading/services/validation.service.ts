@@ -1,0 +1,186 @@
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Decimal } from '@prisma/client/runtime/library';
+import { TradingRepository } from '../repositories/trading.repository';
+import { MarketService } from './market.service';
+import { calculateTradingFees } from '../domain/trading-fee.calculator';
+
+/**
+ * Validation Service — Pre-trade gate checks.
+ *
+ * Sequential validation — fails fast at the first violation.
+ * Every check returns void on success or throws BadRequestException.
+ *
+ * Gate order:
+ * 1. Market open?
+ * 2. Stock active?
+ * 3. User KYC approved?
+ * 4. Account not frozen?
+ * 5. Sufficient funds (BUY) or sufficient shares (SELL)?
+ * 6. Minimum order size?
+ * 7. Order price valid? (LIMIT orders)
+ */
+@Injectable()
+export class ValidationService {
+  private readonly logger = new Logger(ValidationService.name);
+
+  private readonly MIN_ORDER_QUANTITY = new Decimal(1);
+  private readonly MAX_ORDER_VALUE_MWK = new Decimal('50000000'); // 50M MWK
+
+  constructor(
+    private readonly repo: TradingRepository,
+    private readonly marketService: MarketService,
+  ) {}
+
+  /**
+   * Run all pre-trade validations. Throws BadRequestException with
+   * a descriptive message on the first failed check.
+   */
+  async validate(order: {
+    userId: string;
+    stockId: string;
+    side: 'BUY' | 'SELL';
+    type: 'MARKET' | 'LIMIT';
+    quantity: Decimal;
+    limitPrice?: Decimal | null;
+    userKycStatus: string;
+  }): Promise<{ estimatedPrice: Decimal; fees: ReturnType<typeof calculateTradingFees> }> {
+    // 1. Market open?
+    await this.checkMarketOpen();
+
+    // 2. Stock active?
+    const stock = await this.checkStockActive(order.stockId);
+
+    // 3. User KYC approved?
+    this.checkKycStatus(order.userKycStatus);
+
+    // 4. Account not frozen?
+    await this.checkAccountNotFrozen(order.userId);
+
+    // 5. Minimum order size
+    this.checkMinimumQuantity(order.quantity);
+
+    // 6. Get estimated price
+    const price = this.getOrderPrice(order.type, order.limitPrice, stock.latestPrice);
+
+    // 7. Calculate fees and total cost
+    const fees = calculateTradingFees(price, order.quantity, order.side);
+
+    // 8. Check max order value
+    this.checkMaxOrderValue(fees.grossValue);
+
+    // 9. Sufficient funds (BUY) or sufficient shares (SELL)?
+    if (order.side === 'BUY') {
+      await this.checkSufficientFunds(order.userId, fees.totalCost);
+    } else {
+      await this.checkSufficientShares(order.userId, order.stockId, order.quantity);
+    }
+
+    this.logger.log(
+      { stockId: order.stockId, side: order.side, quantity: order.quantity.toString() },
+      'Order validated successfully',
+    );
+
+    return { estimatedPrice: price, fees };
+  }
+
+  private async checkMarketOpen(): Promise<void> {
+    const isOpen = await this.marketService.isMarketOpen();
+    if (!isOpen) {
+      throw new BadRequestException(
+        'Market is currently closed. MSE trading hours are 10:00 AM — 2:00 PM CAT, Monday — Friday.',
+      );
+    }
+  }
+
+  private async checkStockActive(stockId: string): Promise<{ latestPrice: Decimal }> {
+    const stock = await this.repo.findStockById(stockId);
+    if (!stock || !stock.isActive) {
+      throw new BadRequestException('This stock is not available for trading');
+    }
+
+    const latestPrice = stock.prices[0]?.closePrice;
+    if (!latestPrice) {
+      throw new BadRequestException('No price data available for this stock');
+    }
+
+    return { latestPrice };
+  }
+
+  private checkKycStatus(kycStatus: string): void {
+    if (kycStatus !== 'APPROVED') {
+      throw new BadRequestException(
+        'Your account must be verified (KYC approved) before you can trade. ' +
+        'Please complete identity verification in Settings.',
+      );
+    }
+  }
+
+  private async checkAccountNotFrozen(userId: string): Promise<void> {
+    const wallet = await this.repo.findWalletByUserId(userId);
+    if (!wallet) {
+      throw new BadRequestException('No wallet found. Please contact support.');
+    }
+    if (wallet.isFrozen) {
+      throw new BadRequestException(
+        `Your account is frozen: ${wallet.frozenReason ?? 'Contact support for details.'}`,
+      );
+    }
+  }
+
+  private checkMinimumQuantity(quantity: Decimal): void {
+    if (quantity.lt(this.MIN_ORDER_QUANTITY)) {
+      throw new BadRequestException(
+        `Minimum order quantity is ${this.MIN_ORDER_QUANTITY.toString()} share(s)`,
+      );
+    }
+  }
+
+  private checkMaxOrderValue(grossValue: Decimal): void {
+    if (grossValue.gt(this.MAX_ORDER_VALUE_MWK)) {
+      throw new BadRequestException(
+        `Order value exceeds maximum of MWK ${this.MAX_ORDER_VALUE_MWK.toNumber().toLocaleString()}`,
+      );
+    }
+  }
+
+  private getOrderPrice(
+    orderType: 'MARKET' | 'LIMIT',
+    limitPrice: Decimal | null | undefined,
+    latestMarketPrice: Decimal,
+  ): Decimal {
+    if (orderType === 'LIMIT') {
+      if (!limitPrice || limitPrice.lte(new Decimal(0))) {
+        throw new BadRequestException('Limit orders must specify a valid price');
+      }
+      return limitPrice;
+    }
+    // MARKET order uses latest price
+    return latestMarketPrice;
+  }
+
+  private async checkSufficientFunds(userId: string, totalCost: Decimal): Promise<void> {
+    const wallet = await this.repo.findWalletByUserId(userId);
+    if (!wallet || wallet.balance.lt(totalCost)) {
+      const balance = wallet?.balance.toNumber() ?? 0;
+      throw new BadRequestException(
+        `Insufficient funds. Required: MWK ${totalCost.toNumber().toLocaleString()}, ` +
+        `Available: MWK ${balance.toLocaleString()}`,
+      );
+    }
+  }
+
+  private async checkSufficientShares(
+    userId: string,
+    stockId: string,
+    quantity: Decimal,
+  ): Promise<void> {
+    const holding = await this.repo.findUserHolding(userId, stockId);
+    if (!holding || holding.quantity.lt(quantity)) {
+      const held = holding?.quantity.toNumber() ?? 0;
+      throw new BadRequestException(
+        `Insufficient shares. Required: ${quantity.toString()}, ` +
+        `Available: ${held}`,
+      );
+    }
+  }
+}

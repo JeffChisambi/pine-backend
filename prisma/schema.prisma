@@ -1,0 +1,1112 @@
+// Pine Backend — Prisma schema
+// PostgreSQL. UUID primary keys throughout. Money stored as
+// NUMERIC(18,4) (mapped to Prisma `Decimal`) — never Float/Int — and
+// only ever converted to the `Money` value object (`src/shared/money`)
+// at the repository boundary.
+//
+// Ledger tables (`LedgerEntry`) are insert-only by convention: no
+// `update`/`delete` call against them should ever exist in application
+// code, and `prisma/migrations/.../immutable_ledger_trigger.sql`
+// additionally enforces this at the database level with a trigger, so
+// even a bug or a compromised credential cannot rewrite financial
+// history — only append a compensating entry.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum Role {
+  CUSTOMER
+  SUPER_ADMIN
+  COMPLIANCE_OFFICER
+  FINANCE_OFFICER
+  CUSTOMER_SUPPORT
+  MARKET_OPERATIONS
+  AUDITOR
+}
+
+enum KycStatus {
+  NOT_SUBMITTED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum KycDocumentType {
+  NATIONAL_ID
+  PASSPORT
+  DRIVERS_LICENSE
+  PROOF_OF_RESIDENCE
+  SELFIE
+}
+
+enum KycReviewDecision {
+  APPROVED
+  REJECTED
+}
+
+enum DeviceTrustLevel {
+  UNKNOWN
+  TRUSTED
+  SUSPICIOUS
+  BLOCKED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  TRADE_BUY
+  TRADE_SELL
+  DIVIDEND_CREDIT
+  DIVIDEND_REINVESTMENT
+  FEE
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REVERSED
+  CANCELLED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+enum LedgerEntryDirection {
+  DEBIT
+  CREDIT
+}
+
+enum LedgerAccountType {
+  USER_WALLET
+  PLATFORM_CASH
+  PLATFORM_FEE_REVENUE
+  PLATFORM_SUSPENSE
+  EXCHANGE_SETTLEMENT
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_VALIDATION
+  VALIDATED
+  SUBMITTED
+  ACCEPTED
+  PARTIALLY_FILLED
+  FILLED
+  PENDING_SETTLEMENT
+  SETTLED
+  COMPLETED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum SettlementStatus {
+  PENDING
+  PROCESSING
+  SETTLED
+  FAILED
+}
+
+enum CorporateActionType {
+  DIVIDEND
+  STOCK_SPLIT
+  REVERSE_SPLIT
+  BONUS_ISSUE
+  RIGHTS_ISSUE
+  MERGER
+  DELISTING
+}
+
+enum CorporateActionStatus {
+  ANNOUNCED
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+enum DividendStatus {
+  ANNOUNCED
+  PROCESSING
+  CREDITED
+  REINVESTED
+  FAILED
+}
+
+enum NotificationChannel {
+  PUSH
+  EMAIL
+  SMS
+  IN_APP
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum PaymentProvider {
+  PAYCHANGU_CARD
+  PAYCHANGU_MOBILE_MONEY
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  INITIATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum MarketStatus {
+  OPEN
+  CLOSED
+  HOLIDAY
+  PRE_OPEN
+  HALTED
+}
+
+// ============================================================
+// Identity & Access
+// ============================================================
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  phone             String     @unique
+  phoneVerifiedAt   DateTime?
+  email             String?    @unique
+  emailVerifiedAt   DateTime?
+  firstName         String
+  lastName          String
+  passwordHash      String
+  pinHash           String?
+  pinFailedAttempts Int        @default(0)
+  pinLockedUntil    DateTime?
+  role              Role       @default(CUSTOMER)
+  kycStatus         KycStatus  @default(NOT_SUBMITTED)
+  avatarKey         String?
+  isActive          Boolean    @default(true)
+  deactivatedAt     DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  deletedAt         DateTime?
+
+  devices           Device[]
+  sessions          Session[]
+  otps              OtpCode[]
+  kycApplications   KycApplication[]
+  wallet            Wallet?
+  linkedBanks       LinkedBank[]
+  preferences       UserPreference?
+  orders            Order[]
+  holdings          Holding[]
+  notifications     Notification[]
+  payments          Payment[]
+  auditLogsAsActor  AuditLog[]        @relation("AuditActor")
+  kycReviewsAsAdmin KycApplication[]  @relation("KycReviewer")
+  mfaConfig         MfaConfig?
+
+  @@index([role])
+  @@index([kycStatus])
+  @@index([createdAt])
+  @@map("users")
+}
+
+/// TOTP-based multi-factor authentication configuration.
+/// Stores the AES-256-GCM encrypted TOTP secret and bcrypt-hashed
+/// recovery codes. Designed to support both staff and (future)
+/// customer MFA without schema changes.
+model MfaConfig {
+  id                       String    @id @default(uuid()) @db.Uuid
+  userId                   String    @unique @db.Uuid
+  user                     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// AES-256-GCM encrypted TOTP secret (base32-encoded before encryption)
+  totpSecretEnc            String
+  /// Initialisation vector for AES-256-GCM decryption
+  totpSecretIv             String
+  /// Auth tag for AES-256-GCM decryption
+  totpSecretTag            String
+  isEnabled                Boolean   @default(false)
+  enabledAt                DateTime?
+  /// Bcrypt-hashed recovery codes (array of hashes)
+  recoveryCodes            String[]
+  recoveryCodesUsedCount   Int       @default(0)
+  recoveryCodesGeneratedAt DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@map("mfa_configs")
+}
+
+model UserPreference {
+  id                    String   @id @default(uuid()) @db.Uuid
+  userId                String   @unique @db.Uuid
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushNotifications     Boolean  @default(true)
+  emailNotifications    Boolean  @default(true)
+  smsNotifications      Boolean  @default(true)
+  marketingOptIn        Boolean  @default(false)
+  language              String   @default("en")
+  currency              String   @default("MWK")
+  timezone              String   @default("Africa/Blantyre")
+  country               String   @default("MW")
+  biometricLoginEnabled Boolean  @default(false)
+  largeTextEnabled      Boolean  @default(false)
+  highContrastEnabled   Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+model Device {
+  id             String           @id @default(uuid()) @db.Uuid
+  userId         String           @db.Uuid
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint    String
+  platform       String
+  osVersion      String?
+  appVersion     String?
+  pushToken      String?
+  trustLevel     DeviceTrustLevel @default(UNKNOWN)
+  trustScore     Int              @default(50)
+  firstSeenAt    DateTime         @default(now())
+  lastSeenAt     DateTime         @default(now())
+  lastSeenIp     String?
+  lastSeenCountry String?
+  isRevoked      Boolean          @default(false)
+  revokedAt      DateTime?
+
+  sessions       Session[]
+
+  @@unique([userId, fingerprint])
+  @@index([userId])
+  @@index([trustLevel])
+  @@map("devices")
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId          String    @db.Uuid
+  device            Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  refreshTokenHash  String
+  /// Rotation family id — reused across a chain of rotated refresh
+  /// tokens so reuse of a superseded token can be detected and the
+  /// whole family revoked (refresh token theft mitigation).
+  familyId          String    @db.Uuid
+  ipAddress         String?
+  userAgent         String?
+  isRevoked         Boolean   @default(false)
+  revokedAt         DateTime?
+  revokedReason      String?
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+  lastUsedAt        DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model OtpCode {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @db.Uuid
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose       String
+  codeHash      String
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(5)
+  consumedAt    DateTime?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, purpose])
+  @@map("otp_codes")
+}
+
+// ============================================================
+// KYC
+// ============================================================
+
+model KycApplication {
+  id                String            @id @default(uuid()) @db.Uuid
+  userId            String            @db.Uuid
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status            KycStatus         @default(PENDING)
+  nationalIdNumber  String?
+  dateOfBirth       DateTime?
+  addressLine1      String?
+  addressLine2      String?
+  city              String?
+  district          String?
+  submittedAt       DateTime          @default(now())
+  reviewedAt        DateTime?
+  reviewedById      String?           @db.Uuid
+  reviewedBy        User?             @relation("KycReviewer", fields: [reviewedById], references: [id])
+  reviewDecision    KycReviewDecision?
+  rejectionReason   String?
+  ocrExtractedData  Json?
+  facialMatchScore  Decimal?          @db.Decimal(5, 4)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  documents         KycDocument[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("kyc_applications")
+}
+
+model KycDocument {
+  id               String          @id @default(uuid()) @db.Uuid
+  kycApplicationId String          @db.Uuid
+  kycApplication   KycApplication  @relation(fields: [kycApplicationId], references: [id], onDelete: Cascade)
+  type             KycDocumentType
+  storageBucket    String
+  storageKey       String
+  mimeType         String
+  sizeBytes        Int
+  uploadedAt       DateTime        @default(now())
+
+  @@index([kycApplicationId])
+  @@map("kyc_documents")
+}
+
+// ============================================================
+// Wallet & Ledger
+// ============================================================
+
+model Wallet {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @unique @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Denormalized running balance for fast reads. Always derived from
+  /// — and reconciled nightly against — the sum of `LedgerEntry` rows
+  /// for this wallet's `USER_WALLET` account; never the sole source of
+  /// truth. Every mutation happens inside the same DB transaction as
+  /// the ledger insert that justifies it (see
+  /// `FINANCIAL_TRANSACTION_OPTIONS`, `infrastructure/database`).
+  balance       Decimal  @default(0) @db.Decimal(18, 4)
+  currency      String   @default("MWK")
+  isFrozen      Boolean  @default(false)
+  frozenReason  String?
+  dailyDepositLimit    Decimal @default(5000000) @db.Decimal(18, 4)
+  dailyWithdrawalLimit Decimal @default(2000000) @db.Decimal(18, 4)
+  version       Int      @default(0) // optimistic-lock guard alongside pessimistic row locks
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  transactions  Transaction[]
+  ledgerEntries LedgerEntry[]
+  reservations  WalletReservation[]
+
+  @@map("wallets")
+}
+
+/// Fund reservation — holds cash for a pending order.
+/// Status: ACTIVE → CONSUMED (order filled) | RELEASED (cancelled/expired)
+model WalletReservation {
+  id          String            @id @default(uuid()) @db.Uuid
+  walletId    String            @db.Uuid
+  wallet      Wallet            @relation(fields: [walletId], references: [id])
+  orderId     String?           @db.Uuid
+  amount      Decimal           @db.Decimal(18, 4)
+  currency    String            @default("MWK")
+  status      ReservationStatus @default(ACTIVE)
+  reason      String?
+  expiresAt   DateTime?
+  releasedAt  DateTime?
+  consumedAt  DateTime?
+  createdAt   DateTime          @default(now())
+
+  @@index([walletId])
+  @@index([walletId, status])
+  @@index([orderId])
+  @@map("wallet_reservations")
+}
+
+/// Daily balance snapshots for graphs / statements.
+model WalletSnapshot {
+  id              String   @id @default(uuid()) @db.Uuid
+  walletId        String   @db.Uuid
+  snapshotDate    DateTime @db.Date
+  balance         Decimal  @db.Decimal(18, 4)
+  reservedAmount  Decimal  @default(0) @db.Decimal(18, 4)
+  availableAmount Decimal  @db.Decimal(18, 4)
+  createdAt       DateTime @default(now())
+
+  @@unique([walletId, snapshotDate])
+  @@index([walletId, snapshotDate])
+  @@map("wallet_snapshots")
+}
+
+/// One row per business event that moves money (a deposit, a
+/// withdrawal, a trade settlement, a dividend credit, ...). Each
+/// `Transaction` is backed by exactly two or more balanced
+/// `LedgerEntry` rows (double-entry).
+model Transaction {
+  id              String            @id @default(uuid()) @db.Uuid
+  walletId        String            @db.Uuid
+  wallet          Wallet            @relation(fields: [walletId], references: [id])
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  amount          Decimal           @db.Decimal(18, 4)
+  currency        String            @default("MWK")
+  /// Client-supplied Idempotency-Key — unique per wallet so retried
+  /// requests (network timeout + client retry) never double-process.
+  idempotencyKey  String?
+  reference       String            @unique @default(uuid())
+  relatedOrderId  String?           @db.Uuid
+  relatedPaymentId String?          @db.Uuid
+  description     String?
+  failureReason   String?
+  processedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  ledgerEntries   LedgerEntry[]
+
+  @@unique([walletId, idempotencyKey])
+  @@index([walletId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+/// Append-only. See the immutability note at the top of this file — no
+/// application code should ever call `.update()` or `.delete()` against
+/// this model; a correction is always a new, opposite-signed entry
+/// referencing the original via `transactionId`.
+model LedgerEntry {
+  id            String               @id @default(uuid()) @db.Uuid
+  transactionId String               @db.Uuid
+  transaction   Transaction          @relation(fields: [transactionId], references: [id])
+  walletId      String?              @db.Uuid
+  wallet        Wallet?              @relation(fields: [walletId], references: [id])
+  accountType   LedgerAccountType
+  direction     LedgerEntryDirection
+  amount        Decimal              @db.Decimal(18, 4)
+  currency      String               @default("MWK")
+  balanceAfter  Decimal              @db.Decimal(18, 4)
+  createdAt     DateTime             @default(now())
+
+  @@index([transactionId])
+  @@index([walletId])
+  @@index([accountType])
+  @@index([createdAt])
+  @@map("ledger_entries")
+}
+
+model LinkedBank {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankName      String
+  accountName   String
+  accountNumberMasked String
+  accountNumberEncrypted String
+  isVerified    Boolean  @default(false)
+  isPrimary     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  @@index([userId])
+  @@map("linked_banks")
+}
+
+// ============================================================
+// Stocks & Market Data
+// ============================================================
+
+model Stock {
+  id              String   @id @default(uuid()) @db.Uuid
+  symbol          String   @unique
+  name            String
+  sector          String
+  description     String?
+  logoKey         String?
+  listedShares    BigInt?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  prices          StockPrice[]
+  dividends       Dividend[]
+  orders          Order[]
+  holdings        Holding[]
+  corporateActions CorporateAction[]
+
+  @@index([sector])
+  @@map("stocks")
+}
+
+/// One row per trading-day close (plus optional intraday snapshots from
+/// Market Sync). `(stockId, tradedAt)` uniqueness makes daily-sync
+/// upserts idempotent regardless of how many times a sync job re-runs.
+model StockPrice {
+  id           String   @id @default(uuid()) @db.Uuid
+  stockId      String   @db.Uuid
+  stock        Stock    @relation(fields: [stockId], references: [id])
+  openPrice    Decimal  @db.Decimal(18, 4)
+  highPrice    Decimal  @db.Decimal(18, 4)
+  lowPrice     Decimal  @db.Decimal(18, 4)
+  closePrice   Decimal  @db.Decimal(18, 4)
+  volume       BigInt   @default(0)
+  changePct    Decimal? @db.Decimal(8, 4)
+  tradedAt     DateTime @db.Date
+  source       String   @default("mse")
+  createdAt    DateTime @default(now())
+
+  @@unique([stockId, tradedAt])
+  @@index([stockId, tradedAt])
+  @@map("stock_prices")
+}
+
+model MarketCalendar {
+  id          String       @id @default(uuid()) @db.Uuid
+  date        DateTime     @db.Date
+  status      MarketStatus
+  description String?
+  createdAt   DateTime     @default(now())
+
+  @@unique([date])
+  @@map("market_calendar")
+}
+
+// ============================================================
+// Trading
+// ============================================================
+
+model Order {
+  id              String      @id @default(uuid()) @db.Uuid
+  userId          String      @db.Uuid
+  user            User        @relation(fields: [userId], references: [id])
+  stockId         String      @db.Uuid
+  stock           Stock       @relation(fields: [stockId], references: [id])
+  side            OrderSide
+  type            OrderType
+  status          OrderStatus @default(DRAFT)
+  quantity        Decimal     @db.Decimal(18, 4)
+  filledQuantity  Decimal     @default(0) @db.Decimal(18, 4)
+  limitPrice      Decimal?    @db.Decimal(18, 4)
+  averageFillPrice Decimal?   @db.Decimal(18, 4)
+  totalFees       Decimal     @default(0) @db.Decimal(18, 4)
+  totalCost       Decimal     @default(0) @db.Decimal(18, 4)
+  idempotencyKey  String?
+  rejectionReason String?
+  brokerRef       String?
+  validatedAt     DateTime?
+  submittedAt     DateTime?
+  acceptedAt      DateTime?
+  filledAt        DateTime?
+  settledAt       DateTime?
+  cancelledAt     DateTime?
+  expiresAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  trades          Trade[]
+  executions      OrderExecution[]
+  audits          TradeAudit[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId])
+  @@index([stockId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model Trade {
+  id           String   @id @default(uuid()) @db.Uuid
+  orderId      String   @db.Uuid
+  order        Order    @relation(fields: [orderId], references: [id])
+  quantity     Decimal  @db.Decimal(18, 4)
+  price        Decimal  @db.Decimal(18, 4)
+  fee          Decimal  @default(0) @db.Decimal(18, 4)
+  settledAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  settlement   SettlementRecord?
+
+  @@index([orderId])
+  @@map("trades")
+}
+
+/// Records each partial or full execution against an order.
+/// Multiple executions can exist for a single order (partial fills).
+model OrderExecution {
+  id            String   @id @default(uuid()) @db.Uuid
+  orderId       String   @db.Uuid
+  order         Order    @relation(fields: [orderId], references: [id])
+  quantity      Decimal  @db.Decimal(18, 4)
+  price         Decimal  @db.Decimal(18, 4)
+  fee           Decimal  @default(0) @db.Decimal(18, 4)
+  brokerRef     String?
+  executedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  @@index([orderId])
+  @@map("order_executions")
+}
+
+/// Tracks the settlement lifecycle of each trade. Supports T+0
+/// (instant) and future T+1/T+2 settlement windows.
+model SettlementRecord {
+  id             String           @id @default(uuid()) @db.Uuid
+  tradeId        String           @unique @db.Uuid
+  trade          Trade            @relation(fields: [tradeId], references: [id])
+  status         SettlementStatus @default(PENDING)
+  settlementDate DateTime         @db.Date
+  settledAt      DateTime?
+  failureReason  String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([status])
+  @@map("settlement_records")
+}
+
+/// Immutable audit trail for every order state transition. Used for
+/// compliance reporting and dispute resolution.
+model TradeAudit {
+  id          String   @id @default(uuid()) @db.Uuid
+  orderId     String   @db.Uuid
+  order       Order    @relation(fields: [orderId], references: [id])
+  userId      String   @db.Uuid
+  action      String
+  fromStatus  String?
+  toStatus    String?
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("trade_audits")
+}
+
+/// Tracks daily MSE trading sessions — opened/closed times,
+/// used by MarketService to determine if trading is active.
+model TradingSession {
+  id         String       @id @default(uuid()) @db.Uuid
+  date       DateTime     @unique @db.Date
+  status     MarketStatus
+  openedAt   DateTime?
+  closedAt   DateTime?
+  createdAt  DateTime     @default(now())
+
+  @@map("trading_sessions")
+}
+
+model Holding {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  user             User     @relation(fields: [userId], references: [id])
+  stockId          String   @db.Uuid
+  stock            Stock    @relation(fields: [stockId], references: [id])
+  quantity         Decimal  @default(0) @db.Decimal(18, 4)
+  averageCost      Decimal  @default(0) @db.Decimal(18, 4)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, stockId])
+  @@index([userId])
+  @@map("holdings")
+}
+
+model PortfolioSnapshot {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  totalValue    Decimal  @db.Decimal(18, 4)
+  totalCost     Decimal  @db.Decimal(18, 4)
+  unrealizedPnl Decimal  @db.Decimal(18, 4)
+  snapshotDate  DateTime @db.Date
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, snapshotDate])
+  @@index([userId, snapshotDate])
+  @@map("portfolio_snapshots")
+}
+
+/// Pre-calculated performance metrics per user per day.
+/// Materialized projection — can be rebuilt from ledger + market data.
+model PortfolioPerformance {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  date            DateTime @db.Date
+  dailyReturn     Decimal  @default(0) @db.Decimal(18, 4)
+  dailyReturnPct  Decimal  @default(0) @db.Decimal(10, 4)
+  weeklyReturn    Decimal  @default(0) @db.Decimal(18, 4)
+  weeklyReturnPct Decimal  @default(0) @db.Decimal(10, 4)
+  monthlyReturn   Decimal  @default(0) @db.Decimal(18, 4)
+  monthlyReturnPct Decimal @default(0) @db.Decimal(10, 4)
+  yearlyReturn    Decimal  @default(0) @db.Decimal(18, 4)
+  yearlyReturnPct Decimal  @default(0) @db.Decimal(10, 4)
+  lifetimeReturn  Decimal  @default(0) @db.Decimal(18, 4)
+  lifetimeReturnPct Decimal @default(0) @db.Decimal(10, 4)
+  createdAt       DateTime @default(now())
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("portfolio_performance")
+}
+
+/// Asset allocation breakdown per user — stored as a snapshot so
+/// allocation pie charts load instantly without recomputation.
+model PortfolioAllocation {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  date            DateTime @db.Date
+  assetType       String   // 'STOCK', 'CASH', 'BOND', etc.
+  sector          String?  // stock sector when assetType = 'STOCK'
+  symbol          String?  // stock symbol when applicable
+  value           Decimal  @db.Decimal(18, 4)
+  percentage      Decimal  @db.Decimal(10, 4)
+  createdAt       DateTime @default(now())
+
+  @@index([userId, date])
+  @@map("portfolio_allocations")
+}
+// Corporate Actions
+// ============================================================
+
+/// Parent model for all corporate actions. Every action type
+/// (dividend, split, bonus, rights) references this.
+model CorporateAction {
+  id          String                @id @default(uuid()) @db.Uuid
+  stockId     String                @db.Uuid
+  stock       Stock                 @relation(fields: [stockId], references: [id])
+  type        CorporateActionType
+  title       String
+  description String?
+  status      CorporateActionStatus @default(ANNOUNCED)
+  effectiveDate DateTime            @db.Date
+  processedAt DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  dividend    Dividend?
+  stockSplit  StockSplit?
+  bonusIssue  BonusIssue?
+  rightsIssue RightsIssue?
+
+  @@index([stockId])
+  @@index([type])
+  @@index([status])
+  @@index([effectiveDate])
+  @@map("corporate_actions")
+}
+
+model Dividend {
+  id                String         @id @default(uuid()) @db.Uuid
+  corporateActionId String         @unique @db.Uuid
+  corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
+  stockId           String         @db.Uuid
+  stock             Stock          @relation(fields: [stockId], references: [id])
+  amountPerShare    Decimal        @db.Decimal(18, 4)
+  withholdingTaxPct Decimal        @default(0) @db.Decimal(5, 2) // e.g., 10.00%
+  exDividendDate    DateTime       @db.Date
+  recordDate        DateTime       @db.Date
+  paymentDate       DateTime       @db.Date
+  status            DividendStatus @default(ANNOUNCED)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  distributions     DividendDistribution[]
+
+  @@index([stockId])
+  @@index([paymentDate])
+  @@map("dividends")
+}
+
+model DividendDistribution {
+  id           String         @id @default(uuid()) @db.Uuid
+  dividendId   String         @db.Uuid
+  dividend     Dividend       @relation(fields: [dividendId], references: [id])
+  userId       String         @db.Uuid
+  quantityHeld Decimal        @db.Decimal(18, 4)
+  grossAmount  Decimal        @db.Decimal(18, 4)
+  taxWithheld  Decimal        @default(0) @db.Decimal(18, 4)
+  netAmount    Decimal        @db.Decimal(18, 4)
+  reinvested   Boolean        @default(false)
+  status       DividendStatus @default(PROCESSING)
+  processedAt  DateTime?
+  createdAt    DateTime       @default(now())
+
+  @@unique([dividendId, userId])
+  @@index([userId])
+  @@map("dividend_distributions")
+}
+
+model StockSplit {
+  id                String          @id @default(uuid()) @db.Uuid
+  corporateActionId String          @unique @db.Uuid
+  corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
+  stockId           String          @db.Uuid
+  ratioFrom         Int             // e.g., 1 (in 1-for-2)
+  ratioTo           Int             // e.g., 2 (in 1-for-2)
+  effectiveDate     DateTime        @db.Date
+  createdAt         DateTime        @default(now())
+
+  @@index([stockId])
+  @@map("stock_splits")
+}
+
+model BonusIssue {
+  id                String          @id @default(uuid()) @db.Uuid
+  corporateActionId String          @unique @db.Uuid
+  corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
+  stockId           String          @db.Uuid
+  ratioFrom         Int             // e.g., 10 (for every 10 shares)
+  ratioTo           Int             // e.g., 1  (get 1 bonus share)
+  recordDate        DateTime        @db.Date
+  effectiveDate     DateTime        @db.Date
+  createdAt         DateTime        @default(now())
+
+  @@index([stockId])
+  @@map("bonus_issues")
+}
+
+model RightsIssue {
+  id                String          @id @default(uuid()) @db.Uuid
+  corporateActionId String          @unique @db.Uuid
+  corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
+  stockId           String          @db.Uuid
+  ratioFrom         Int             // For every N shares
+  ratioTo           Int             // Get M rights
+  subscriptionPrice Decimal         @db.Decimal(18, 4)
+  openDate          DateTime        @db.Date
+  closeDate         DateTime        @db.Date
+  createdAt         DateTime        @default(now())
+
+  @@index([stockId])
+  @@map("rights_issues")
+}
+
+// ============================================================
+// Notifications
+// ============================================================
+
+model NotificationTemplate {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  channel   NotificationChannel
+  subject   String?
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notification_templates")
+}
+
+model Notification {
+  id              String              @id @default(uuid()) @db.Uuid
+  userId          String              @db.Uuid
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel         NotificationChannel
+  templateKey     String?
+  type            String              @default("INFORMATIONAL") // CRITICAL, IMPORTANT, INFORMATIONAL, PROMOTIONAL
+  priority        Int                 @default(2)               // 0=critical, 1=important, 2=info, 3=promo
+  category        String              @default("SYSTEM")        // SECURITY, TRADING, PORTFOLIO, WALLET, KYC, MARKET, SYSTEM, MARKETING
+  title           String
+  body            String
+  data            Json?
+  status          NotificationStatus  @default(QUEUED)
+  readAt          DateTime?
+  sentAt          DateTime?
+  failureReason   String?
+  retryCount      Int                 @default(0)
+  createdAt       DateTime            @default(now())
+
+  deliveries      NotificationDelivery[]
+
+  @@index([userId])
+  @@index([userId, readAt])
+  @@index([status])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+/// Per-user notification preferences. Each row maps a notification
+/// category (e.g. TRADING) to the channels the user wants to receive.
+model NotificationPreference {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  category    String   // SECURITY, TRADING, PORTFOLIO, WALLET, KYC, MARKET, SYSTEM, MARKETING
+  pushEnabled Boolean  @default(true)
+  emailEnabled Boolean @default(true)
+  smsEnabled  Boolean  @default(false)
+  inAppEnabled Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, category])
+  @@index([userId])
+  @@map("notification_preferences")
+}
+
+/// Tracks every delivery attempt for audit and retry logic.
+model NotificationDelivery {
+  id              String              @id @default(uuid()) @db.Uuid
+  notificationId  String              @db.Uuid
+  notification    Notification        @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  channel         NotificationChannel
+  provider        String              // 'firebase', 'smtp', 'sms_provider'
+  status          NotificationStatus  @default(QUEUED)
+  attemptCount    Int                 @default(0)
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  failureReason   String?
+  providerMsgId   String?
+  createdAt       DateTime            @default(now())
+
+  @@index([notificationId])
+  @@index([status])
+  @@map("notification_deliveries")
+}
+
+// ============================================================
+// Payments
+// ============================================================
+
+model Payment {
+  id               String        @id @default(uuid()) @db.Uuid
+  userId           String        @db.Uuid
+  user             User          @relation(fields: [userId], references: [id])
+  provider         PaymentProvider
+  status           PaymentStatus @default(INITIATED)
+  amount           Decimal       @db.Decimal(18, 4)
+  currency         String        @default("MWK")
+  providerReference String?      @unique
+  idempotencyKey   String?
+  failureReason    String?
+  initiatedAt      DateTime      @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  webhookEvents    WebhookEvent[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId])
+  @@index([status])
+  @@map("payments")
+}
+
+model WebhookEvent {
+  id              String                  @id @default(uuid()) @db.Uuid
+  provider        String
+  externalEventId String
+  paymentId       String?                 @db.Uuid
+  payment         Payment?                @relation(fields: [paymentId], references: [id])
+  status          WebhookProcessingStatus @default(RECEIVED)
+  payload         Json
+  signatureValid  Boolean
+  receivedAt      DateTime                @default(now())
+  processedAt     DateTime?
+  errorMessage    String?
+
+  @@unique([provider, externalEventId])
+  @@index([status])
+  @@map("webhook_events")
+}
+
+// ============================================================
+// Audit
+// ============================================================
+
+/// Immutable, append-only — same convention as `LedgerEntry`. Every
+/// financial action, every admin action, and every auth event of
+/// consequence (login, PIN change, KYC decision, ...) writes exactly
+/// one row here, produced from the corresponding domain event by an
+/// `AUDIT` queue consumer (Phase 6) so a slow audit write is never on
+/// the critical path of the action itself.
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  actorId      String?  @db.Uuid
+  actor        User?    @relation("AuditActor", fields: [actorId], references: [id])
+  actorRole    Role?
+  action       String
+  resourceType String
+  resourceId   String?
+  ipAddress    String?
+  userAgent    String?
+  requestId    String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([actorId])
+  @@index([resourceType, resourceId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// Analytics
+// ============================================================
+
+/// Pre-aggregated daily rollups, written by a nightly job (Phase 6) so
+/// Admin dashboards read one row per day instead of scanning raw
+/// transactional tables.
+model DailyMetric {
+  id                  String   @id @default(uuid()) @db.Uuid
+  date                DateTime @unique @db.Date
+  dailyActiveUsers    Int      @default(0)
+  newRegistrations    Int      @default(0)
+  totalTrades         Int      @default(0)
+  totalTradeVolume    Decimal  @default(0) @db.Decimal(18, 4)
+  totalDeposits       Decimal  @default(0) @db.Decimal(18, 4)
+  totalWithdrawals    Decimal  @default(0) @db.Decimal(18, 4)
+  platformRevenue     Decimal  @default(0) @db.Decimal(18, 4)
+  createdAt           DateTime @default(now())
+
+  @@map("daily_metrics")
+}

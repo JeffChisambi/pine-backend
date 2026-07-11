@@ -1,0 +1,123 @@
+import { Injectable, Logger } from '@nestjs/common';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
+import { AppConfigService } from '../../config/app-config.service';
+import { ServiceUnavailableException } from '../../core/exceptions/app.exception';
+
+export type StorageBucket = 'avatars' | 'kyc' | 'reports';
+
+export interface UploadFileInput {
+  bucket: StorageBucket;
+  /** Logical folder prefix within the bucket, e.g. `userId` or `userId/national-id`. */
+  keyPrefix: string;
+  fileName: string;
+  contentType: string;
+  body: Buffer;
+}
+
+export interface UploadFileResult {
+  key: string;
+  bucket: string;
+  /** ETag reported by the store — used as a cheap integrity check. */
+  etag?: string;
+}
+
+/**
+ * Thin, provider-agnostic wrapper around the AWS S3 SDK — works
+ * identically against AWS S3, Cloudflare R2, or a self-hosted MinIO
+ * instance, since all three speak the S3 API. Selected via
+ * `STORAGE_PROVIDER` + `STORAGE_ENDPOINT` in config; no other code in
+ * the app needs to know which one is in use.
+ *
+ * Files are NEVER stored on the application's own filesystem/disk —
+ * every upload (avatars, KYC documents, proof of residence, generated
+ * reports) streams straight to object storage. KYC documents live in a
+ * private bucket and are only ever exposed via short-lived signed URLs
+ * (`STORAGE_SIGNED_URL_TTL_SECONDS`), never a public/direct URL.
+ *
+ * Virus scanning: `scanBuffer` is a hook point — Phase 3 (KYC module)
+ * wires this to a real scanner (e.g. ClamAV sidecar or a cloud AV API)
+ * before a KYC upload is accepted; left as an explicit interface here
+ * so the call site is unambiguous rather than silently skipped.
+ */
+@Injectable()
+export class StorageService {
+  private readonly logger = new Logger(StorageService.name);
+  private readonly client: S3Client;
+
+  constructor(private readonly config: AppConfigService) {
+    const { endpoint, region, accessKeyId, secretAccessKey, forcePathStyle } = config.storage;
+
+    this.client = new S3Client({
+      endpoint,
+      region,
+      forcePathStyle,
+      credentials: { accessKeyId, secretAccessKey },
+    });
+  }
+
+  async upload(input: UploadFileInput): Promise<UploadFileResult> {
+    const key = this.buildKey(input.keyPrefix, input.fileName);
+    const bucketName = this.resolveBucketName(input.bucket);
+
+    try {
+      const result = await this.client.send(
+        new PutObjectCommand({
+          Bucket: bucketName,
+          Key: key,
+          Body: input.body,
+          ContentType: input.contentType,
+          // KYC and avatar buckets are private; access is exclusively
+          // through signed URLs generated below.
+          ServerSideEncryption: 'AES256',
+        }),
+      );
+
+      return { key, bucket: bucketName, etag: result.ETag };
+    } catch (error) {
+      this.logger.error({ err: error, bucket: bucketName, key }, 'Object storage upload failed');
+      throw new ServiceUnavailableException('File upload failed, please try again');
+    }
+  }
+
+  async getSignedDownloadUrl(bucket: StorageBucket, key: string): Promise<string> {
+    const bucketName = this.resolveBucketName(bucket);
+    const command = new GetObjectCommand({ Bucket: bucketName, Key: key });
+
+    return getSignedUrl(this.client, command, {
+      expiresIn: this.config.storage.signedUrlTtlSeconds,
+    });
+  }
+
+  async delete(bucket: StorageBucket, key: string): Promise<void> {
+    const bucketName = this.resolveBucketName(bucket);
+    await this.client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
+  }
+
+  async exists(bucket: StorageBucket, key: string): Promise<boolean> {
+    try {
+      await this.client.send(
+        new HeadObjectCommand({ Bucket: this.resolveBucketName(bucket), Key: key }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private buildKey(prefix: string, fileName: string): string {
+    const sanitized = fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    return `${prefix}/${Date.now()}-${randomUUID()}-${sanitized}`;
+  }
+
+  private resolveBucketName(bucket: StorageBucket): string {
+    return this.config.storage.buckets[bucket];
+  }
+}

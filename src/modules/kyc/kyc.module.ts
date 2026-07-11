@@ -1,0 +1,105 @@
+import { Module } from '@nestjs/common';
+import { MulterModule } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { ConfigModule } from '../../config/config.module';
+import { DatabaseModule } from '../../infrastructure/database/database.module';
+import { StorageModule } from '../../infrastructure/storage/storage.module';
+
+// Interfaces — DI tokens
+import { KYC_REPOSITORY } from './interfaces/kyc-repository.interface';
+import { IMAGE_PROCESSING_PROVIDER } from './image/image-processing.interface';
+import { OCR_PROVIDER } from './ocr/ocr.interface';
+import { FACE_RECOGNITION_PROVIDER } from './face/face-recognition.interface';
+
+// Controllers
+import { KycController } from './controllers/kyc.controller';
+import { KycAdminController } from './controllers/kyc-admin.controller';
+
+// Services
+import { KycWorkflowService } from './services/kyc-workflow.service';
+
+// Providers (Strategy pattern)
+import { SharpProvider } from './image/sharp.provider';
+import { TesseractProvider } from './ocr/tesseract.provider';
+import { InsightFaceProvider } from './face/insightface.provider';
+import { FaceMatchingService } from './face/face-matching.service';
+
+// Fraud + Confidence
+import { FraudDetectionService } from './fraud/fraud-detection.service';
+import { ConfidenceEngine } from './fraud/confidence-engine';
+
+// Domain
+import { MarketDataValidator } from '../market-sync/domain/market-data.validator';
+
+// Repository
+import { KycRepository } from './repositories/kyc.repository';
+
+/**
+ * KYC Module — Enterprise-grade identity verification.
+ *
+ * Architecture:
+ *   Upload → Validate → Enhance → OCR → Face Detect → Face Match →
+ *   Fraud Check → Score → Decide → Approve / Review / Reject
+ *
+ * Provider abstraction:
+ *   - IMAGE_PROCESSING_PROVIDER → SharpProvider
+ *   - OCR_PROVIDER → TesseractProvider
+ *   - FACE_RECOGNITION_PROVIDER → InsightFaceProvider
+ *   - KYC_REPOSITORY → KycRepository (Prisma)
+ *
+ * To swap any provider (e.g., add PaddleOCR, AWS Rekognition,
+ * or a commercial KYC service), change the `useClass` binding —
+ * no other code changes needed.
+ */
+@Module({
+  imports: [
+    ConfigModule,
+    DatabaseModule,
+    StorageModule,
+    MulterModule.register({
+      storage: memoryStorage(),
+      limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB
+        files: 1,
+      },
+    }),
+  ],
+  controllers: [KycController, KycAdminController],
+  providers: [
+    // ── Repository ──────────────────────────────────────────────
+    {
+      provide: KYC_REPOSITORY,
+      useClass: KycRepository,
+    },
+
+    // ── Image Processing (Strategy) ─────────────────────────────
+    {
+      provide: IMAGE_PROCESSING_PROVIDER,
+      useClass: SharpProvider,
+    },
+
+    // ── OCR Engine (Strategy) ───────────────────────────────────
+    {
+      provide: OCR_PROVIDER,
+      useClass: TesseractProvider,
+    },
+
+    // ── Face Recognition (Strategy) ─────────────────────────────
+    {
+      provide: FACE_RECOGNITION_PROVIDER,
+      useClass: InsightFaceProvider,
+    },
+
+    // ── Face Matching ───────────────────────────────────────────
+    FaceMatchingService,
+
+    // ── Fraud Detection ─────────────────────────────────────────
+    FraudDetectionService,
+    ConfidenceEngine,
+
+    // ── Workflow Orchestrator ────────────────────────────────────
+    KycWorkflowService,
+  ],
+  exports: [KycWorkflowService, KYC_REPOSITORY],
+})
+export class KycModule {}

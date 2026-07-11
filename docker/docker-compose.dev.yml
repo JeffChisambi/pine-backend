@@ -1,0 +1,12 @@
+version: '3.9'
+
+# Usage: docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up postgres redis minio minio-init mailhog
+# Runs only the infrastructure dependencies (DB, cache, storage, mail
+# catcher) in Docker while the API itself runs on the host via
+# `npm run start:dev` for fast-reload local development. The full
+# `docker-compose.yml` `app` service is for integration testing the
+# actual container image and for a one-command full-stack demo.
+
+services:
+  app:
+    profiles: ['full-stack-only']
