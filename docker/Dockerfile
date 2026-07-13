@@ -16,6 +16,7 @@ COPY prisma ./prisma
 RUN npx prisma generate
 COPY . .
 RUN npm run build
+RUN npm run build:seed
 RUN npm prune --omit=dev
 
 # ---- Production runtime ----
@@ -26,6 +27,7 @@ RUN addgroup -g 1001 -S nodejs && adduser -S -u 1001 -G nodejs pine
 COPY --from=build --chown=pine:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=pine:nodejs /app/dist ./dist
 COPY --from=build --chown=pine:nodejs /app/prisma ./prisma
+COPY --from=build --chown=pine:nodejs /app/scripts ./scripts
 COPY --from=build --chown=pine:nodejs /app/package.json ./package.json
 
 USER pine
@@ -36,3 +38,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/main.js"]
+
