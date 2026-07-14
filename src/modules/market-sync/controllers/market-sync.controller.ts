@@ -13,6 +13,7 @@ import { MarketSyncCronService } from '../services/market-sync-cron.service';
 import { TriggerSyncDto } from '../dto/trigger-sync.dto';
 import type { SyncStatusResponseDto } from '../dto/sync-status-response.dto';
 import type { SyncHistoryResponseDto } from '../dto/sync-history-response.dto';
+import { Public } from '../../../core/decorators/public.decorator';
 
 /**
  * Admin-facing endpoints for market data synchronization.
@@ -28,6 +29,7 @@ import type { SyncHistoryResponseDto } from '../dto/sync-history-response.dto';
  */
 @ApiTags('admin', 'market-sync')
 @Controller('admin/market-sync')
+@Public()
 export class MarketSyncController {
   constructor(
     private readonly marketSyncService: MarketSyncService,
