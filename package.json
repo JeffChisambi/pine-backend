@@ -25,7 +25,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "node -e \"try{require('fs').accessSync('dist/prisma/seed.js');process.exit(0)}catch{process.exit(1)}\" && node dist/prisma/seed.js || tsx prisma/seed.ts",
+    "prisma:seed": "node dist/prisma/seed.js",
     "db:apply-triggers": "node scripts/apply-triggers.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -99,6 +99,6 @@
     "vitest": "^4.1.9"
   },
   "prisma": {
-    "seed": "node -e \"try{require('fs').accessSync('dist/prisma/seed.js');process.exit(0)}catch{process.exit(1)}\" && node dist/prisma/seed.js || tsx prisma/seed.ts"
+    "seed": "node dist/prisma/seed.js"
   }
 }
