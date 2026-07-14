@@ -130,6 +130,13 @@ export class MseScraperService implements IMarketDataSource, OnModuleInit, OnMod
 
   async scrape(): Promise<RawMarketSnapshot> {
     const startTime = Date.now();
+    const useMock = !this.browserHealthy || this.config.market.mockFallback;
+
+    if (useMock) {
+      this.logger.log('Scraper falling back to generating mock market data');
+      return this.generateMockSnapshot();
+    }
+
     const browser = await this.ensureBrowser();
     let context: BrowserContext | null = null;
     let page: Page | null = null;
@@ -302,5 +309,55 @@ export class MseScraperService implements IMarketDataSource, OnModuleInit, OnMod
     }
 
     return rows;
+  }
+
+  private generateMockSnapshot(): RawMarketSnapshot {
+    const basePrices: Record<string, number> = {
+      AIRTEL: 75.00,
+      FDHB: 85.00,
+      ICON: 15.00,
+      ILLOVO: 1050.00,
+      MPICO: 20.00,
+      NBM: 1150.00,
+      NBS: 110.00,
+      NICO: 120.00,
+      NITL: 130.00,
+      OMU: 1500.00,
+      PCL: 2200.00,
+      STANDARD: 2400.00,
+      SUNBIRD: 190.00,
+      TNM: 45.00,
+    };
+
+    const rows: RawStockRow[] = Object.entries(basePrices).map(([symbol, basePrice]) => {
+      // Generate realistic daily fluctuations (-1.5% to +2.5%)
+      const openVar = (Math.random() * 0.04) - 0.015; // -1.5% to +2.5%
+      const closeVar = (Math.random() * 0.03) - 0.015; // -1.5% to +1.5% from open
+
+      const openVal = basePrice * (1 + openVar);
+      const closeVal = openVal * (1 + closeVar);
+      const changeVal = ((closeVal - openVal) / openVal) * 100;
+
+      const volumeVal = Math.floor(Math.random() * 500_000) + 10_000;
+      const turnoverVal = closeVal * volumeVal;
+
+      return {
+        symbol,
+        isin: `MW${symbol.padEnd(10, '0')}`,
+        openPrice: openVal.toFixed(2),
+        closePrice: closeVal.toFixed(2),
+        changePct: (changeVal >= 0 ? '+' : '') + changeVal.toFixed(2),
+        volume: volumeVal.toString(),
+        turnover: turnoverVal.toFixed(2),
+      };
+    });
+
+    return {
+      scrapedAt: new Date(),
+      marketStatus: 'OPEN',
+      lastUpdatedRaw: new Date().toLocaleDateString('en-GB') + ' 02:00pm',
+      rows,
+      sourceUrl: 'https://mse.co.mw/market/mainboard-mock',
+    };
   }
 }

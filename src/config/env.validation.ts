@@ -110,6 +110,7 @@ export const envSchema = z.object({
     .string()
     .regex(/^\d{2}:\d{2}$/)
     .default('14:00'),
+  MSE_MOCK_FALLBACK: booleanFromString.default('false'),
 
   // Observability
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

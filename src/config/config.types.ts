@@ -112,6 +112,7 @@ export interface MarketConfig {
   timezone: string;
   openTime: string;
   closeTime: string;
+  mockFallback: boolean;
 }
 
 export interface ObservabilityConfig {

@@ -125,6 +125,7 @@ export const marketConfig = registerAs('market', () => ({
   timezone: process.env.MARKET_TIMEZONE ?? 'Africa/Blantyre',
   openTime: process.env.MARKET_OPEN_TIME ?? '10:00',
   closeTime: process.env.MARKET_CLOSE_TIME ?? '14:00',
+  mockFallback: process.env.MSE_MOCK_FALLBACK === 'true',
 }));
 
 export const observabilityConfig = registerAs('observability', () => ({
