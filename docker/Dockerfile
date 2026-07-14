@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1
 
 # ---- Base ----
-FROM node:24-alpine AS base
-RUN apk add --no-cache openssl dumb-init
+FROM node:24-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    dumb-init \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # ---- Dependencies (cached separately from source for faster rebuilds) ----
@@ -22,7 +25,13 @@ RUN npm prune --omit=dev
 # ---- Production runtime ----
 FROM base AS production
 ENV NODE_ENV=production
-RUN addgroup -g 1001 -S nodejs && adduser -S -u 1001 -G nodejs pine
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -s /bin/sh -m pine
+
+# Install Playwright system dependencies and Chromium browser
+RUN npx playwright install --with-deps chromium && \
+    chown -R pine:nodejs /ms-playwright
 
 COPY --from=build --chown=pine:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=pine:nodejs /app/dist ./dist
@@ -38,4 +47,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/main.js"]
-

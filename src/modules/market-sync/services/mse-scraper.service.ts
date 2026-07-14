@@ -130,10 +130,9 @@ export class MseScraperService implements IMarketDataSource, OnModuleInit, OnMod
 
   async scrape(): Promise<RawMarketSnapshot> {
     const startTime = Date.now();
-    const useMock = !this.browserHealthy || this.config.market.mockFallback;
 
-    if (useMock) {
-      this.logger.log('Scraper falling back to generating mock market data');
+    if (this.config.market.mockFallback) {
+      this.logger.log('Scraper using configured mock market data');
       return this.generateMockSnapshot();
     }
 
