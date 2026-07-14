@@ -117,7 +117,7 @@ export class PaymentsController {
     // PayChangu returns checkout_url at result.data.checkout_url.
     // Guard against undefined in case the response shape changes.
     const checkoutUrl = result.data?.checkout_url;
-    const txRefResolved = result.data?.data?.tx_ref ?? result.data?.tx_ref ?? txRef;
+    const txRefResolved = result.data?.data?.tx_ref ?? txRef;
 
     if (!checkoutUrl) {
       this.logger.error({ txRef, result }, 'PayChangu response missing checkout_url');
