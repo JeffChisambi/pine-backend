@@ -272,6 +272,27 @@ export class WalletService {
   }
 
   /**
+   * Look up a PENDING deposit transaction by its idempotency key (txRef) and
+   * process it. Used by the PayChangu callback where we have the txRef but
+   * cannot reliably extract the transactionId from PayChangu's meta array.
+   */
+  async processDepositByTxRef(txRef: string): Promise<void> {
+    const prisma = this.repo.prismaClient;
+
+    // Find the PENDING deposit whose idempotencyKey matches the txRef
+    const transaction = await prisma.transaction.findFirst({
+      where: { idempotencyKey: txRef, type: 'DEPOSIT', status: 'PENDING' },
+    });
+
+    if (!transaction) {
+      this.logger.warn({ txRef }, 'No PENDING deposit found for txRef — may already be processed');
+      return;
+    }
+
+    await this.processDeposit(transaction.id);
+  }
+
+  /**
    * Process a completed withdrawal — creates ledger entries and updates wallet balance.
    *
    * Double-entry:

@@ -151,13 +151,11 @@ export class PaymentsController {
       const verification = await this.paychangu.verifyPayment(txRef);
 
       if (verification.data?.status === 'success') {
-        // Find the pending transaction by idempotency key (txRef)
-        const transactionId = verification.data?.meta?.transactionId;
-
-        if (transactionId) {
-          await this.walletService.processDeposit(transactionId);
-          this.logger.log({ txRef, transactionId }, 'Payment verified and deposit processed');
-        }
+        // Process the deposit by txRef (idempotency key stored on the transaction).
+        // We cannot use verification.data?.meta?.transactionId because PayChangu
+        // returns meta as an array of {key,value} pairs, not a plain object.
+        await this.walletService.processDepositByTxRef(txRef);
+        this.logger.log({ txRef }, 'Payment verified and deposit processed');
 
         // Redirect back to the app via the HTTPS sentinel page
         return res.redirect(`${baseUrl}/v1/payments/app-return?status=success&tx_ref=${txRef}`);
