@@ -71,8 +71,7 @@ export class PaymentsController {
     const txRef = `PINE-${randomUUID()}`;
     const purpose = dto.purpose || 'DEPOSIT';
 
-    // Determine callback/return URLs (use ngrok URL if set, else APP_URL)
-    const baseUrl = process.env.NGROK_URL || this.config.app.url;
+    const baseUrl = this.config.app.url;
     const callbackUrl = `${baseUrl}/v1/payments/callback`;
     const returnUrl = `${baseUrl}/v1/payments/return`;
 
@@ -115,9 +114,19 @@ export class PaymentsController {
       },
     });
 
+    // PayChangu returns checkout_url at result.data.checkout_url.
+    // Guard against undefined in case the response shape changes.
+    const checkoutUrl = result.data?.checkout_url;
+    const txRefResolved = result.data?.data?.tx_ref ?? result.data?.tx_ref ?? txRef;
+
+    if (!checkoutUrl) {
+      this.logger.error({ txRef, result }, 'PayChangu response missing checkout_url');
+      throw new Error('Payment gateway did not return a checkout URL. Please try again.');
+    }
+
     return {
-      checkoutUrl: result.data.checkout_url,
-      txRef: result.data.data.tx_ref,
+      checkoutUrl,
+      txRef: txRefResolved,
       transactionId,
       status: 'PENDING',
     };
@@ -135,9 +144,7 @@ export class PaymentsController {
   ) {
     this.logger.log({ txRef, status }, 'PayChangu callback received');
 
-    // HTTPS sentinel base — the mobile WebView can load this and intercept it
-    // by path. A custom scheme (pine://) is dropped by Android WebView.
-    const baseUrl = process.env.NGROK_URL || this.config.app.url;
+    const baseUrl = this.config.app.url;
 
     try {
       // Verify with PayChangu
@@ -177,7 +184,7 @@ export class PaymentsController {
     @Res() res: Response,
   ) {
     this.logger.log({ txRef, status }, 'PayChangu return (cancelled/failed)');
-    const baseUrl = process.env.NGROK_URL || this.config.app.url;
+    const baseUrl = this.config.app.url;
     return res.redirect(`${baseUrl}/v1/payments/app-return?status=cancelled&tx_ref=${txRef}`);
   }
 

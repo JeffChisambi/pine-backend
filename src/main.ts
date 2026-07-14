@@ -51,13 +51,9 @@ async function bootstrap(): Promise<void> {
   app.use(cookieParser(config.security.cookieSecret));
 
   // ---- CORS ----
-  // When NGROK_URL is set, allow all origins (needed for PayChangu callbacks and mobile access)
-  const ngrokUrl = process.env.NGROK_URL;
-  const corsOrigins = ngrokUrl
-    ? true // Allow all origins when tunneling
-    : config.cors.origins.length > 0
-      ? config.cors.origins
-      : false;
+  const corsOrigins = config.cors.origins.length > 0
+    ? config.cors.origins
+    : false;
 
   app.enableCors({
     origin: corsOrigins,
