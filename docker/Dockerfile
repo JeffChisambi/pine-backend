@@ -8,7 +8,7 @@ WORKDIR /app
 # ---- Dependencies (cached separately from source for faster rebuilds) ----
 FROM base AS dependencies
 COPY package.json package-lock.json* ./
-RUN npm ci --include=dev
+RUN npm install --include=dev
 
 # ---- Build ----
 FROM dependencies AS build
