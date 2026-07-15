@@ -272,6 +272,54 @@ export class MseScraperService implements IMarketDataSource, OnModuleInit, OnMod
     const rows = await page.$$eval(
       'table.table tbody tr',
       (trs: Element[]) => {
+        /**
+         * Normalize a raw percentage string from the MSE table.
+         *
+         * The MSE website renders the % Change column in various formats:
+         *   "(-0.03)"    →  "-0.03"
+         *   "+1.45"      →  "1.45"   (sign preserved via prefix)
+         *   "-0.32"      →  "-0.32"
+         *   "0.00"       →  "0.00"
+         *   "▲ 1.45"    →  "1.45"   (arrow prefix)
+         *   "▼ 0.32"    →  "-0.32"  (arrow prefix indicates negative)
+         *   "(+1.45)"   →  "1.45"
+         *
+         * We normalise to a plain signed numeric string like "-0.03" or "1.45".
+         */
+        function normalizeChangePct(raw: string): string {
+          const cleaned = raw.trim();
+
+          // Detect direction from arrow symbols before stripping them
+          const hasDownArrow = /[▼⬇↓]/.test(cleaned);
+          const hasUpArrow = /[▲⬆↑]/.test(cleaned);
+
+          // Strip all non-numeric characters except the minus sign and dot
+          let numeric = cleaned
+            .replace(/[▲▼⬆⬇↑↓]/g, '') // remove arrow characters
+            .replace(/[()%,\s]/g, '')    // remove parens, percent, commas, spaces
+            .replace(/^\+/, '')          // remove leading +
+            .trim();
+
+          // If nothing left, return '0.00'
+          if (!numeric || numeric === '' || numeric === '-') return '0.00';
+
+          // Validate it's a real number
+          if (!/^-?\d+(\.\d+)?$/.test(numeric)) return '0.00';
+
+          const numVal = parseFloat(numeric);
+
+          // If a down arrow was present and the number is positive, negate it
+          if (hasDownArrow && numVal > 0) {
+            return (-numVal).toFixed(2);
+          }
+          // If an up arrow was present and the number is negative, flip it
+          if (hasUpArrow && numVal < 0) {
+            return Math.abs(numVal).toFixed(2);
+          }
+
+          return numeric;
+        }
+
         return trs
           .map((tr) => {
             const cells = Array.from(tr.querySelectorAll('td'));
@@ -290,7 +338,8 @@ export class MseScraperService implements IMarketDataSource, OnModuleInit, OnMod
 
             const openPrice = (cells[1]?.textContent ?? '0').trim();
             const closePrice = (cells[2]?.textContent ?? '0').trim();
-            const changePct = (cells[3]?.textContent ?? '0').trim();
+            const rawChangePct = (cells[3]?.textContent ?? '0').trim();
+            const changePct = normalizeChangePct(rawChangePct);
             const volume = (cells[4]?.textContent ?? '0').trim();
             const turnover = (cells[5]?.textContent ?? '0').trim();
 

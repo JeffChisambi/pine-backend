@@ -18,6 +18,26 @@ function calcChangePct(current: string | null, previous: string | null): number 
   return ((cur - prev) / prev) * 100;
 }
 
+/**
+ * Maps a period string to a number of calendar days.
+ * Used for fetching price history for chart rendering.
+ */
+export type PeriodKey = '1M' | '3M' | '6M' | '1Y' | '2Y' | '5Y';
+
+const PERIOD_TO_DAYS: Record<PeriodKey, number> = {
+  '1M':  30,
+  '3M':  90,
+  '6M':  180,
+  '1Y':  365,
+  '2Y':  730,
+  '5Y':  1825,
+};
+
+export function periodToDays(period?: string): number {
+  if (!period) return 30;
+  return PERIOD_TO_DAYS[period.toUpperCase() as PeriodKey] ?? 30;
+}
+
 export interface StockListItem {
   id: string;
   symbol: string;
@@ -38,6 +58,7 @@ export interface StockDetailItem extends StockListItem {
   highPrice: string;
   lowPrice: string;
   listedShares: string | null;
+  period: string;
   priceHistory: Array<{
     date: string;          // "2026-07-04"
     close: number;
@@ -45,6 +66,7 @@ export interface StockDetailItem extends StockListItem {
     high: number;
     low: number;
     volume: number;
+    changePct: number | null;
   }>;
 }
 
@@ -94,11 +116,12 @@ export class StocksService {
     return rows.map(toListItem);
   }
 
-  async getStockDetail(symbol: string): Promise<StockDetailItem> {
+  async getStockDetail(symbol: string, period?: string): Promise<StockDetailItem> {
     const row = await this.repo.findBySymbol(symbol);
     if (!row) throw new NotFoundException(`Stock "${symbol}" not found`);
 
-    const history = await this.repo.findPriceHistory(row.id, 30);
+    const days = periodToDays(period);
+    const history = await this.repo.findPriceHistory(row.id, days);
 
     const base = toListItem(row);
 
@@ -111,6 +134,7 @@ export class StocksService {
       listedShares: row.listedShares
         ? Number(row.listedShares).toLocaleString('en')
         : null,
+      period: period?.toUpperCase() ?? '1M',
       priceHistory: history.map((h) => ({
         date: h.tradedAt.toISOString().slice(0, 10),
         close: parseFloat(h.closePrice.toString()),
@@ -118,6 +142,7 @@ export class StocksService {
         high: parseFloat(h.highPrice.toString()),
         low: parseFloat(h.lowPrice.toString()),
         volume: Number(h.volume),
+        changePct: h.changePct != null ? parseFloat(h.changePct.toString()) : null,
       })),
     };
   }

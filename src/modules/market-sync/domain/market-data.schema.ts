@@ -37,15 +37,37 @@ const volumeField = commaNumericString.refine(
 
 /**
  * Percentage change field: can be negative, zero, or positive.
- * Accepts formats like "+1.45", "-0.32", "0.00", "1.45".
+ * Accepts formats like "+1.45", "-0.32", "0.00", "1.45", "(-0.03)", "(+1.45)".
+ *
+ * The scraper's `normalizeChangePct` already pre-cleans these to plain
+ * numeric strings, so this schema mostly validates and normalises further.
  */
 const changePctField = z
   .string()
-  .transform((val) => val.replace(/[,%+]/g, '').trim())
   .transform((val) => {
-    // Handle the case where the original string had a '-' but was
-    // stripped — we need to preserve the sign from the raw string.
-    return val;
+    const cleaned = val.trim();
+
+    // Detect direction from arrow symbols before stripping them
+    const hasDownArrow = /[▼⬇↓]/.test(cleaned);
+    const hasUpArrow = /[▲⬆↑]/.test(cleaned);
+
+    // Strip non-numeric characters except '-' and '.'
+    let numeric = cleaned
+      .replace(/[▲▼⬆⬇↑↓]/g, '')
+      .replace(/[()%,\s]/g, '')
+      .replace(/^\+/, '')
+      .trim();
+
+    if (!numeric || numeric === '-') return '0.00';
+
+    const numVal = parseFloat(numeric);
+    if (isNaN(numVal)) return '0.00';
+
+    // Re-apply direction from arrows if needed
+    if (hasDownArrow && numVal > 0) return String(-numVal);
+    if (hasUpArrow && numVal < 0) return String(Math.abs(numVal));
+
+    return numeric;
   })
   .pipe(
     z.string().regex(/^-?\d+(\.\d+)?$/, 'Must be a valid percentage value'),

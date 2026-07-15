@@ -113,7 +113,7 @@ export class StocksRepository {
     };
   }
 
-  /** Last N days of daily prices for chart rendering. */
+  /** Last N days of daily prices for chart rendering, ordered oldest-first for charting. */
   async findPriceHistory(stockId: string, days = 30) {
     return this.prisma.stockPrice.findMany({
       where: { stockId },
@@ -126,6 +126,7 @@ export class StocksRepository {
         highPrice: true,
         lowPrice: true,
         volume: true,
+        changePct: true,
       },
     });
   }
