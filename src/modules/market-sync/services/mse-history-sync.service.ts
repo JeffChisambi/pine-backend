@@ -1,10 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
-import {
-  MseHistoryScraperService,
-  MSE_PERIOD_MONTHS,
-} from './mse-history-scraper.service';
+import { MseHistoryScraperService } from './mse-history-scraper.service';
 
 /**
  * Orchestrates daily historical price fetching from the MSE website.
