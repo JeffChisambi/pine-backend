@@ -336,13 +336,33 @@ export class MseHistoryScraperService {
    */
   parseChartHtml(html: string, symbol: string): MsePricePoint[] {
     try {
-      // ── Strategy 0 (PRIMARY): MSE data-bs-chart attribute ─────────────
-      // Response: <canvas id="chart" data-bs-chart='{"type":"line","data":{"labels":[...],"datasets":[{"data":[...]}]}}'>
-      // The bs-init.js reads this attribute and calls new Chart(canvas, config).
+      // ── Strategy 0 (PRIMARY): MSE x/y pair format ─────────────────────
+      // The MSE AJAX response contains data like:
+      //   var json = [{"label":"Price","data":[{"x":"15-Jun-2026","y":"3999.65"},{"x":"16-Jun-2026","y":"3999.63"}, ...]}]
+      // Sometimes the var json line is commented out with //, but the data
+      // is still there. We extract all {"x":"date","y":"price"} pairs
+      // directly with a global regex — no JSON.parse needed.
+      const xyPairRegex = /"x"\s*:\s*"([^"]+)"\s*,\s*"y"\s*:\s*"([^"]+)"/g;
+      const points: MsePricePoint[] = [];
+      let match: RegExpExecArray | null;
+
+      while ((match = xyPairRegex.exec(html)) !== null) {
+        const dateStr = match[1]; // e.g. "15-Jun-2026"
+        const priceStr = match[2]; // e.g. "3999.65"
+        const price = parseFloat(priceStr);
+        if (!price || isNaN(price) || price <= 0) continue;
+        const date = this.normaliseDate(dateStr);
+        if (date) points.push({ date, close: price });
+      }
+
+      if (points.length > 0) {
+        this.logger.log(`${symbol}: parsed ${points.length} points from MSE x/y pairs`);
+        return points;
+      }
+
+      // ── Strategy 1: data-bs-chart attribute ───────────────────────────
       const bsAttrMatch =
-        // Single-quoted attribute value
         html.match(/data-bs-chart\s*=\s*'([\s\S]*?)'\s*(?:>|\/?>|\s)/) ||
-        // Double-quoted attribute value
         html.match(/data-bs-chart\s*=\s*"([\s\S]*?)"\s*(?:>|\/?>|\s)/);
 
       if (bsAttrMatch) {
@@ -351,18 +371,12 @@ export class MseHistoryScraperService {
             .replace(/&quot;/g, '"')
             .replace(/&#39;/g, "'")
             .replace(/&amp;/g, '&');
-
           const cfg = JSON.parse(raw) as {
             data?: { labels?: string[]; datasets?: Array<{ data?: number[] }> };
           };
-
           const labels  = cfg?.data?.labels ?? [];
           const dataset = cfg?.data?.datasets?.[0]?.data ?? [];
-
           if (labels.length > 0 && dataset.length > 0) {
-            this.logger.debug(
-              `${symbol}: parsed ${Math.min(labels.length, dataset.length)} points from data-bs-chart`,
-            );
             return this.buildPoints(labels, dataset, symbol);
           }
         } catch (e) {
@@ -370,25 +384,15 @@ export class MseHistoryScraperService {
         }
       }
 
-      // ── Strategy 1: Standard Chart.js init — double-quoted labels ─────
+      // ── Strategy 2: Standard Chart.js labels/datasets ─────────────────
       const s1L = html.match(/labels\s*:\s*(\["[\s\S]*?"\])/);
       const s1D = html.match(/datasets\s*:\s*\[[\s\S]*?data\s*:\s*(\[\s*[\d.,\s]+\s*\])/);
       if (s1L && s1D) return this.parseLabelsAndData(s1L[1], s1D[1], symbol);
-
-      // ── Strategy 2: Single-quoted labels ─────────────────────────────
-      const s2L = html.match(/labels\s*:\s*(\['[\s\S]*?'\])/);
-      const s2D = html.match(/datasets\s*:\s*\[[\s\S]*?data\s*:\s*(\[\s*[\d.,\s]+\s*\])/);
-      if (s2L && s2D) return this.parseLabelsAndData(s2L[1], s2D[1], symbol);
 
       // ── Strategy 3: Loose labels + key-quoted data ────────────────────
       const s3L = html.match(/labels\s*:\s*(\[[\s\S]*?\](?=\s*[,}]))/);
       const s3D = html.match(/["']\s*data\s*["']\s*:\s*(\[[\d.,\s]+\])/);
       if (s3L && s3D) return this.parseLabelsAndData(s3L[1], s3D[1], symbol);
-
-      // ── Strategy 4: JSON {dates:[...], prices:[...]} ──────────────────
-      const s4D = html.match(/"dates"\s*:\s*(\[[\s\S]*?\])/);
-      const s4V = html.match(/"(?:prices|values|data)"\s*:\s*(\[[\d.,\s]+\])/);
-      if (s4D && s4V) return this.parseLabelsAndData(s4D[1], s4V[1], symbol);
 
       this.logger.debug(
         `No chart pattern found in HTML for ${symbol} (${html.length} chars) — ` +
@@ -431,12 +435,20 @@ export class MseHistoryScraperService {
 
   /**
    * Normalise various MSE date label formats to "YYYY-MM-DD".
-   * Handles: "15 Jul 2025", "Jul 15, 2025", "2025-07-15", "Jul 2025"
+   * Handles: "15-Jun-2026", "15 Jul 2025", "Jul 15, 2025", "2025-07-15", "Jul 2025"
    */
   private normaliseDate(raw: string): string | null {
     if (!raw) return null;
     const cleaned = raw.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) return cleaned;
+
+    // MSE format: "15-Jun-2026" (DD-Mon-YYYY)
+    const ddMonYyyy = cleaned.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+    if (ddMonYyyy) {
+      const d = new Date(`${ddMonYyyy[2]} ${ddMonYyyy[1]}, ${ddMonYyyy[3]}`);
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+
     const d = new Date(cleaned);
     if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
     return null;
