@@ -170,9 +170,18 @@ export class MseHistoryScraperService {
     this.logger.log(`Bulk history fetch complete — ${result.size} companies processed`);
     return result;
   }
-
   /**
    * Fetch history for a single company using an existing Playwright page.
+   *
+   * Strategy:
+   *   1. Navigate to the MSE company page to establish session cookies.
+   *   2. For > 1M periods: use page.evaluate() to POST to the chart AJAX
+   *      endpoint directly from the browser context — this automatically
+   *      includes all session/CSRF cookies, bypassing the firewall and
+   *      eliminating the need to click period tabs in headless mode.
+   *   3. Parse the Chart.js HTML fragment from the response.
+   *   4. Fallback: read the 1M data embedded in the initial page HTML.
+   *   5. Final fallback: extract from window.myChart / canvas.
    */
   private async fetchCompanyHistory(
     page: Page,
@@ -182,76 +191,67 @@ export class MseHistoryScraperService {
   ): Promise<MsePricePoint[]> {
     const companyUrl = `https://mse.co.mw/company/${isin}`;
 
-    if (months === 1) {
-      // 1-month data is embedded in the initial page HTML — no tab click needed
-      await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
-      // Give Chart.js time to initialise and inject data into the DOM
-      await page.waitForTimeout(3000);
-      const html = await page.content();
-      return this.parseChartHtml(html, symbol);
-    }
-
-    const tabText = MONTHS_TO_TAB_TEXT[months];
-    if (!tabText) {
-      this.logger.warn(`Unknown months value ${months} for ${symbol}`);
-      return [];
-    }
-
-    // Navigate to the company page (this sets session cookies and loads 1M chart)
-    // Use domcontentloaded — networkidle never resolves on MSE company pages
-    // because Chart.js keeps making background network requests.
+    // Navigate to company page — establishes session cookies + loads 1M chart
     await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
-    // Wait for the chart canvas to appear before registering the response interceptor
-    await page.waitForSelector('canvas', { timeout: 10_000 }).catch(() => {});
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2500);
 
-    // Set up interceptor BEFORE clicking the tab, so we don't miss the response
-    const chartUrlPattern = `/company/company/${isin}/`;
-    const responsePromise = page.waitForResponse(
-      (resp) =>
-        resp.url().includes(chartUrlPattern) &&
-        resp.request().method() === 'POST' &&
-        resp.status() < 400,
-      { timeout: 20_000 },
-    );
-
-    // Find and click the period tab — jQuery fires the POST with CSRF token
-    const tabLocator = page.locator(`a:has-text("${tabText}")`).first();
-    const tabVisible = await tabLocator.isVisible().catch(() => false);
-
-    if (!tabVisible) {
-      // Try alt selector formats (some MSE pages may differ slightly)
-      this.logger.warn(`Tab "${tabText}" not visible for ${symbol} — trying href pattern`);
-      const hrefTab = page.locator(`a[href*="/${months}"]`).first();
-      const hrefVisible = await hrefTab.isVisible().catch(() => false);
-      if (!hrefVisible) {
-        this.logger.warn(`No tab found for ${symbol} months=${months}`);
-        return this.tryExtractFromPageJs(page, symbol);
-      }
-      await hrefTab.click();
-    } else {
-      await tabLocator.click();
+    if (months === 1) {
+      // 1-month data is embedded in the initial page HTML
+      const html = await page.content();
+      const points = this.parseChartHtml(html, symbol);
+      if (points.length > 0) return points;
+      return this.tryExtractFromPageJs(page, symbol);
     }
 
-    // Wait for and capture the AJAX response
-    let html: string;
+    // For longer periods, POST to the MSE chart AJAX endpoint from within the
+    // browser. This carries all session cookies automatically, which bypasses
+    // the GoDaddy firewall without needing to click UI tabs.
+    const ajaxUrl = `https://mse.co.mw/company/company/${isin}/${months}`;
+
     try {
-      const response = await responsePromise;
-      html = await response.text();
-      this.logger.debug(`${symbol} AJAX response: ${html.length} chars`);
-    } catch (timeoutErr) {
-      this.logger.warn(
-        `AJAX response timed out for ${symbol} months=${months} — falling back to page JS`,
-      );
-      return this.tryExtractFromPageJs(page, symbol);
+      const html = await page.evaluate(async (url: string) => {
+        // Extract CSRF token from the page meta tag (Laravel standard)
+        const csrfMeta = document.querySelector(
+          'meta[name="csrf-token"]',
+        ) as HTMLMetaElement | null;
+        const csrfToken = csrfMeta?.content ?? '';
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'X-CSRF-TOKEN': csrfToken,
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'text/html, */*; q=0.01',
+          },
+          credentials: 'include',
+        });
+
+        if (!res.ok) return null;
+        return res.text();
+      }, ajaxUrl);
+
+      if (html && html.trim().length > 50) {
+        this.logger.debug(`${symbol} AJAX fetch: ${html.length} chars`);
+        const points = this.parseChartHtml(html, symbol);
+        if (points.length > 0) return points;
+        this.logger.warn(`${symbol}: AJAX response parsed 0 points — falling back to page content`);
+      } else {
+        this.logger.warn(`${symbol}: empty/short AJAX response (${html?.length ?? 0} chars)`);
+      }
+    } catch (err) {
+      this.logger.warn({ err, symbol }, `In-browser AJAX fetch failed for ${symbol}`);
     }
 
-    if (!html || html.trim().length < 50) {
-      this.logger.warn(`Short AJAX response for ${symbol} (${html?.length ?? 0} chars) — falling back`);
-      return this.tryExtractFromPageJs(page, symbol);
+    // Fallback: parse the 1M data from the initial page load
+    const pageHtml = await page.content();
+    const pagePoints = this.parseChartHtml(pageHtml, symbol);
+    if (pagePoints.length > 0) {
+      this.logger.warn(`${symbol}: using 1M fallback data (${pagePoints.length} points)`);
+      return pagePoints;
     }
 
-    return this.parseChartHtml(html, symbol);
+    // Final fallback: read from Chart.js canvas/window object
+    return this.tryExtractFromPageJs(page, symbol);
   }
 
   /**
