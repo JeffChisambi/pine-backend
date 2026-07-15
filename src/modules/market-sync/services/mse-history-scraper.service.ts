@@ -81,6 +81,35 @@ export class MseHistoryScraperService {
   }
 
   /**
+   * Fetch history for a single company (opens its own browser session).
+   * Used by syncSingleCompany for on-demand per-stock refreshes.
+   */
+  async fetchHistory(symbol: string, months = 12): Promise<MsePricePoint[]> {
+    const isin = this.getIsin(symbol);
+    if (!isin) {
+      this.logger.warn(`No ISIN for symbol ${symbol}`);
+      return [];
+    }
+
+    const browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+    const context = await browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    });
+    try {
+      const page = await context.newPage();
+      return await this.fetchCompanyHistory(page, isin, symbol, months);
+    } finally {
+      await context.close().catch(() => {});
+      await browser.close().catch(() => {});
+    }
+  }
+
+  /**
    * Bulk-fetch history for ALL MSE-listed companies in a single browser
    * session.  Returns a map of symbol → price points.
    *
