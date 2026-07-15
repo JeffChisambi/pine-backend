@@ -67,6 +67,10 @@ export class StorageService {
     const key = this.buildKey(input.keyPrefix, input.fileName);
     const bucketName = this.resolveBucketName(input.bucket);
 
+    this.logger.debug(
+      `Uploading to ${bucketName}/${key} (${input.contentType}, ${input.body.byteLength} bytes)`,
+    );
+
     try {
       const result = await this.client.send(
         new PutObjectCommand({
@@ -74,15 +78,23 @@ export class StorageService {
           Key: key,
           Body: input.body,
           ContentType: input.contentType,
-          // KYC and avatar buckets are private; access is exclusively
-          // through signed URLs generated below.
-          ServerSideEncryption: 'AES256',
         }),
       );
 
+      this.logger.log(`Upload successful: ${bucketName}/${key}`);
       return { key, bucket: bucketName, etag: result.ETag };
-    } catch (error) {
-      this.logger.error({ err: error, bucket: bucketName, key }, 'Object storage upload failed');
+    } catch (error: any) {
+      this.logger.error(
+        {
+          err: error,
+          bucket: bucketName,
+          key,
+          code: error?.Code ?? error?.$metadata?.httpStatusCode,
+          s3Message: error?.message,
+          endpoint: this.config.storage.endpoint,
+        },
+        'Object storage upload failed',
+      );
       throw new ServiceUnavailableException('File upload failed, please try again');
     }
   }
