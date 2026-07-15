@@ -16,6 +16,8 @@ import { MseScraperService } from './services/mse-scraper.service';
 import { MarketSyncService } from './services/market-sync.service';
 import { MarketSyncCronService } from './services/market-sync-cron.service';
 import { MarketSyncProcessor } from './services/market-sync.processor';
+import { MseHistoryScraperService } from './services/mse-history-scraper.service';
+import { MseHistorySyncService } from './services/mse-history-sync.service';
 
 // Repository
 import { MarketSyncRepository } from './repositories/market-sync.repository';
@@ -84,11 +86,14 @@ import { MarketSyncController } from './controllers/market-sync.controller';
     MarketSyncService,
     MarketSyncCronService,
 
+    // ── History services ─────────────────────────────────────────
+    MseHistoryScraperService,
+    MseHistorySyncService,
+
     // ── BullMQ processor ────────────────────────────────────────
     MarketSyncProcessor,
   ],
   // Export the service for potential use by other modules
-  // (e.g., a stocks controller that wants to trigger a sync)
-  exports: [MarketSyncService],
+  exports: [MarketSyncService, MseHistorySyncService],
 })
 export class MarketSyncModule {}

@@ -72,16 +72,31 @@ export interface StockDetailItem extends StockListItem {
 
 function toListItem(row: StockRow): StockListItem {
   const priceRaw = parseFloat(row.latestPrice?.closePrice ?? '0');
+  const open = parseFloat(row.latestPrice?.openPrice ?? '0');
+  const close = parseFloat(row.latestPrice?.closePrice ?? '0');
 
-  // Prefer the MSE-provided changePct (stored in DB) over recalculating
+  // The MSE mainboard table's % Change column renders 0 in static HTML;
+  // the true intraday value is computed from open vs close.
+  // Priority:
+  //   1. Stored MSE changePct if it is genuinely non-zero
+  //   2. Calculated from (close - open) / open × 100
+  //   3. Fall back to prevClose comparison
+  //   4. Zero
   const storedChangePct = row.latestPrice?.changePct != null
     ? parseFloat(row.latestPrice.changePct)
     : null;
-  const calculatedChangePct = calcChangePct(
+
+  const intradayPct = open > 0 ? ((close - open) / open) * 100 : 0;
+  const prevClosePct = calcChangePct(
     row.latestPrice?.closePrice ?? null,
     row.prevClosePrice,
   ) ?? 0;
-  const changePct = storedChangePct ?? calculatedChangePct;
+
+  // Use stored if genuinely non-zero; else intraday; else prev-close comparison
+  const changePct = (storedChangePct !== null && Math.abs(storedChangePct) > 0.001)
+    ? storedChangePct
+    : (Math.abs(intradayPct) > 0.001 ? intradayPct : prevClosePct);
+
   const positive = changePct >= 0;
 
   return {

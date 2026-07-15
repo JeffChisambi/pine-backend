@@ -113,12 +113,24 @@ export class StocksRepository {
     };
   }
 
-  /** Last N days of daily prices for chart rendering, ordered oldest-first for charting. */
+  /**
+   * Price history for chart rendering.
+   *
+   * Uses a calendar-day range filter (tradedAt >= since) rather than
+   * `take: N` so the correct window of trading days is returned even
+   * when there are gaps (weekends, holidays).  Results are ordered
+   * oldest-first as expected by the SVG chart component.
+   */
   async findPriceHistory(stockId: string, days = 30) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
     return this.prisma.stockPrice.findMany({
-      where: { stockId },
+      where: {
+        stockId,
+        tradedAt: { gte: since },
+      },
       orderBy: { tradedAt: 'asc' },
-      take: days,
       select: {
         tradedAt: true,
         closePrice: true,

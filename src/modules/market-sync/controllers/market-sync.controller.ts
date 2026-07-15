@@ -10,6 +10,7 @@ import {
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { MarketSyncService } from '../services/market-sync.service';
 import { MarketSyncCronService } from '../services/market-sync-cron.service';
+import { MseHistorySyncService } from '../services/mse-history-sync.service';
 import { TriggerSyncDto } from '../dto/trigger-sync.dto';
 import type { SyncStatusResponseDto } from '../dto/sync-status-response.dto';
 import type { SyncHistoryResponseDto } from '../dto/sync-history-response.dto';
@@ -34,7 +35,40 @@ export class MarketSyncController {
   constructor(
     private readonly marketSyncService: MarketSyncService,
     private readonly cronService: MarketSyncCronService,
+    private readonly historySyncService: MseHistorySyncService,
   ) {}
+
+  /**
+   * POST /admin/market-sync/trigger-history
+   * Kick off an immediate full-history fetch from MSE chart endpoints.
+   * Use this once after deploying to populate chart data.
+   * ?months=12  (default) — MSE period: 1=1M, 2=3M, 6=6M, 12=1Y, 24=2Y, 60=5Y
+   */
+  @Post('trigger-history')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Trigger MSE chart history sync',
+    description:
+      'Fetches historical price data for all MSE-listed stocks from the ' +
+      'MSE company chart AJAX endpoint. This populates the price history ' +
+      'database used by the stock detail chart. Takes ~30-60 seconds. ' +
+      'Use months=12 for 1 year, months=60 for 5 years.',
+  })
+  @ApiQuery({ name: 'months', required: false, description: 'MSE period months (1,2,6,12,24,60). Default: 12' })
+  @ApiResponse({ status: 202, description: 'History sync started — check logs for progress' })
+  async triggerHistorySync(
+    @Query('months') months?: string,
+  ): Promise<{ message: string; months: number }> {
+    const m = parseInt(months ?? '12', 10);
+    // Run in background — don't await
+    this.historySyncService.syncHistory(m).catch((err) => {
+      console.error('History sync failed:', err);
+    });
+    return {
+      message: 'History sync started in background — check server logs for progress',
+      months: m,
+    };
+  }
 
   @Post('trigger')
   @HttpCode(HttpStatus.ACCEPTED)
