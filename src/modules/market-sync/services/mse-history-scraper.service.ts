@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { Response, Page } from 'playwright';
+import type { Page } from 'playwright';
 import { chromium } from 'playwright';
 
 export interface MsePricePoint {
@@ -32,6 +32,7 @@ const SYMBOL_TO_ISIN: Record<string, string> = {
 
 /**
  * Maps period label → months parameter used by MSE AJAX endpoint.
+ * POST /company/{ISIN}/{months} returns an HTML snippet with the chart canvas.
  */
 export const MSE_PERIOD_MONTHS: Record<string, number> = {
   '1M':  1,
@@ -43,22 +44,27 @@ export const MSE_PERIOD_MONTHS: Record<string, number> = {
 };
 
 /**
- * Fetches historical price data from MSE company pages using Playwright.
+ * Fetches historical price data from MSE company chart AJAX endpoints.
  *
- * KEY INSIGHT (discovered from logs):
- *   The chart data is NOT embedded in the page HTML. The MSE company page
- *   fires an automatic AJAX POST to /company/company/{ISIN}/1 when it
- *   initialises, and the chart data is in that response.
+ * HOW THE MSE CHART WORKS (discovered via browser inspection):
+ *   1. Company page: https://mse.co.mw/company/{ISIN}
+ *   2. On load, jQuery fires: POST https://mse.co.mw/company/{ISIN}/1  (1M data)
+ *   3. Clicking a period tab fires: POST https://mse.co.mw/company/{ISIN}/{months}
+ *   4. The POST response is an HTML snippet:
+ *        <canvas id="chart" data-bs-chart='{"type":"line","data":{"labels":[...],"datasets":[{"data":[...]}]}}'>
+ *   5. bs-init.js reads `data-bs-chart` and calls `new Chart(canvas, config)`.
  *
- * Strategy for each company:
- *   1. Register a response interceptor BEFORE navigating (so we don't miss
- *      the automatic 1M AJAX call that fires on page init).
- *   2. Navigate to the company page and wait 5s for all AJAX to complete.
- *   3. Parse any captured AJAX responses for chart data.
- *   4. For periods > 1M, also issue a browser-side fetch() POST to the
- *      desired period endpoint using the CSRF token from cookies.
- *   5. Fall back to Chart.js window object inspection.
- *   6. Remove the response listener (page.off) after each company.
+ * WHY page.evaluate() / response interception DOESN'T WORK:
+ *   - GoDaddy WAF blocks in-page XHR (jQuery $.ajax) from headless browsers.
+ *   - The response interceptor (page.on('response')) never fires because the
+ *     AJAX POST is blocked before it reaches the server.
+ *
+ * THE SOLUTION — page.request.post():
+ *   - Playwright's APIRequestContext runs HTTP requests from Node.js (not the
+ *     browser page), using the same cookie jar as the browser.
+ *   - This bypasses WAF bot detection that targets in-page XHR.
+ *   - The Laravel session cookie (established by navigating to the company page)
+ *     is automatically included, satisfying the GoDaddy firewall.
  */
 @Injectable()
 export class MseHistoryScraperService {
@@ -93,8 +99,8 @@ export class MseHistoryScraperService {
         '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     });
     try {
-      // Establish session on the mainboard first
       const page = await context.newPage();
+      // Establish session via mainboard first
       await page.goto('https://mse.co.mw/market/mainboard', {
         waitUntil: 'domcontentloaded',
         timeout: 30_000,
@@ -107,8 +113,7 @@ export class MseHistoryScraperService {
   }
 
   /**
-   * Bulk-fetch history for ALL MSE-listed companies in a single browser
-   * session.  Returns a map of symbol → price points.
+   * Bulk-fetch history for ALL MSE-listed companies in a single browser session.
    *
    * @param months  MSE months value: 1=1M, 2=3M, 6=6M, 12=1Y, 24=2Y, 60=5Y
    */
@@ -134,7 +139,7 @@ export class MseHistoryScraperService {
     try {
       const page = await context.newPage();
 
-      // Prime the session on the mainboard before individual company pages
+      // Establish session on the mainboard — sets Laravel session cookie
       this.logger.log('Establishing MSE session via mainboard…');
       await page.goto('https://mse.co.mw/market/mainboard', {
         waitUntil: 'domcontentloaded',
@@ -142,7 +147,6 @@ export class MseHistoryScraperService {
       }).catch(() => {
         this.logger.warn('Mainboard navigation failed — continuing anyway');
       });
-      // Allow cookies to settle
       await page.waitForTimeout(2000);
 
       for (const symbol of Object.keys(SYMBOL_TO_ISIN)) {
@@ -172,9 +176,12 @@ export class MseHistoryScraperService {
   /**
    * Fetch history for a single company using an existing Playwright page.
    *
-   * IMPORTANT: The MSE site fires an AJAX POST to /company/company/{ISIN}/1
-   * when the company page first loads (for the default 1M view). We must
-   * register the response listener BEFORE navigating so we don't miss it.
+   * Uses page.request.post() — Playwright's APIRequestContext — which runs
+   * HTTP requests from Node.js but uses the browser's cookie jar. This
+   * bypasses the GoDaddy WAF bot detection that blocks in-page jQuery XHR.
+   *
+   * Endpoint: POST https://mse.co.mw/company/{ISIN}/{months}
+   * Response: HTML snippet with <canvas data-bs-chart='{ Chart.js config JSON }'>
    */
   private async fetchCompanyHistory(
     page: Page,
@@ -183,130 +190,78 @@ export class MseHistoryScraperService {
     months: number,
   ): Promise<MsePricePoint[]> {
     const companyUrl = `https://mse.co.mw/company/${isin}`;
-    const ajaxUrlFragment = `/company/company/${isin}/`;
 
-    // ── Step 1: Register response interceptor BEFORE navigating ──────────
-    // The company page fires an automatic AJAX POST for 1M data on load.
-    // We capture ALL responses matching the chart AJAX URL pattern.
-    const capturedBodies: string[] = [];
+    // Navigate to company page to establish per-company Laravel session cookie
+    await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
+    await page.waitForTimeout(1500);
 
-    const responseHandler = async (response: Response) => {
+    // Determine periods to try: requested period first, fall back to 1M
+    const periodsToTry = months === 1 ? [1] : [months, 1];
+
+    for (const period of periodsToTry) {
+      const ajaxUrl = `https://mse.co.mw/company/${isin}/${period}`;
+
       try {
-        if (
-          response.url().includes(ajaxUrlFragment) &&
-          response.status() >= 200 &&
-          response.status() < 300
-        ) {
-          const body = await response.text();
-          if (body.trim().length > 50) {
-            capturedBodies.push(body);
-            this.logger.debug(
-              `${symbol}: captured AJAX response from ${response.url()} (${body.length} chars)`,
-            );
-          }
+        this.logger.debug(`${symbol}: POST ${ajaxUrl}`);
+
+        // page.request.post() uses the browser's cookie jar from Node.js side
+        const response = await page.request.post(ajaxUrl, {
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'text/html, */*; q=0.01',
+            Referer: companyUrl,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          failOnStatusCode: false,
+        });
+
+        const status = response.status();
+
+        if (!response.ok()) {
+          this.logger.warn(`${symbol}: period=${period} returned HTTP ${status}`);
+          continue;
         }
-      } catch {
-        // Response body read failures are non-critical
-      }
-    };
 
-    page.on('response', responseHandler);
+        const html = await response.text();
+        this.logger.debug(`${symbol}: period=${period} response: ${html.length} chars`);
 
-    try {
-      // ── Step 2: Navigate to company page ─────────────────────────────
-      await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
+        if (html.trim().length < 50) {
+          this.logger.warn(`${symbol}: period=${period} response too short (${html.length} chars)`);
+          continue;
+        }
 
-      // Wait generously for the automatic 1M AJAX call + any slow network
-      await page.waitForTimeout(5000);
-
-      // ── Step 3: Check captured AJAX responses ─────────────────────────
-      for (const body of capturedBodies) {
-        const points = this.parseChartHtml(body, symbol);
+        const points = this.parseChartHtml(html, symbol);
         if (points.length > 0) {
-          if (months === 1) {
-            this.logger.debug(`${symbol}: returning ${points.length} points from captured 1M AJAX`);
-            return points;
+          if (period !== months) {
+            this.logger.warn(`${symbol}: using fallback period=${period} (${points.length} points)`);
           }
-          // For > 1M, keep these as a fallback and continue to the period request
-          this.logger.debug(`${symbol}: cached 1M AJAX data (${points.length} points) as fallback`);
+          return points;
         }
+
+        this.logger.warn(`${symbol}: period=${period} parsed 0 points — response snippet: ${html.slice(0, 200)}`);
+
+      } catch (err) {
+        this.logger.warn({ err, symbol }, `${symbol}: AJAX POST failed for period=${period}`);
       }
-
-      // ── Step 4: For periods > 1M, POST to the desired period endpoint ─
-      if (months !== 1) {
-        const ajaxUrl = `https://mse.co.mw/company/company/${isin}/${months}`;
-
-        try {
-          const html = await page.evaluate(async (url: string) => {
-            // Laravel stores the CSRF token in a meta tag
-            const csrfMeta = document.querySelector(
-              'meta[name="csrf-token"]',
-            ) as HTMLMetaElement | null;
-            const csrfToken = csrfMeta?.content ?? '';
-
-            const res = await fetch(url, {
-              method: 'POST',
-              headers: {
-                'X-CSRF-TOKEN': csrfToken,
-                'X-Requested-With': 'XMLHttpRequest',
-                Accept: 'text/html, */*; q=0.01',
-                'Content-Type': 'application/x-www-form-urlencoded',
-              },
-              credentials: 'include',
-            });
-
-            if (!res.ok) {
-              return `__HTTP_ERROR__:${res.status}`;
-            }
-            return res.text();
-          }, ajaxUrl);
-
-          if (html && !html.startsWith('__HTTP_ERROR__') && html.trim().length > 50) {
-            this.logger.debug(`${symbol} period AJAX fetch: ${html.length} chars`);
-            const points = this.parseChartHtml(html, symbol);
-            if (points.length > 0) return points;
-            this.logger.warn(`${symbol}: period AJAX parsed 0 points`);
-          } else {
-            this.logger.warn(`${symbol}: period AJAX returned: ${html?.slice(0, 80)}`);
-          }
-        } catch (err) {
-          this.logger.warn({ err, symbol }, `Period AJAX POST failed for ${symbol}`);
-        }
-
-        // Fall back to the captured 1M data
-        for (const body of capturedBodies) {
-          const points = this.parseChartHtml(body, symbol);
-          if (points.length > 0) {
-            this.logger.warn(`${symbol}: using 1M fallback data (${points.length} points)`);
-            return points;
-          }
-        }
-      }
-
-      // ── Step 5: Try to extract from Chart.js window object ────────────
-      return this.tryExtractFromPageJs(page, symbol);
-
-    } finally {
-      // CRITICAL: always remove the listener to prevent memory leaks / interference
-      page.off('response', responseHandler);
     }
+
+    // Last resort: try to extract from Chart.js window object (after page render)
+    return this.tryExtractFromPageJs(page, symbol);
   }
 
   /**
-   * Fallback: read Chart.js data directly from the JavaScript window object
-   * after the chart has been rendered on the page.
-   *
-   * Tries multiple Chart.js storage patterns (v2, v3, custom globals).
+   * Last-resort fallback: read Chart.js data from the JavaScript window object
+   * after the chart has rendered on the page.
    */
   private async tryExtractFromPageJs(
     page: Page,
     symbol: string,
   ): Promise<MsePricePoint[]> {
     try {
-      await page.waitForTimeout(2000); // let any pending JS finish
+      await page.waitForTimeout(2000);
 
       const chartData = await page.evaluate(() => {
-        // ── Chart.js v3+: global registry ──────────────────────────────
+        // Chart.js v3+: global registry
         const ChartJs = (window as any).Chart;
         if (ChartJs?.instances) {
           const instances = Object.values(ChartJs.instances) as any[];
@@ -320,13 +275,13 @@ export class MseHistoryScraperService {
           }
         }
 
-        // ── Chart.js v2: canvas._chart ──────────────────────────────────
+        // Chart.js v2: canvas._chart
         const canvases = Array.from(document.querySelectorAll('canvas'));
         for (const canvas of canvases) {
           const chart =
-            (canvas as any)._chart ||            // Chart.js v2
-            (canvas as any).__chartjs_chart__ || // Chart.js v3 alt
-            (window as any).Chart?.getChart?.(canvas); // Chart.js v3+
+            (canvas as any)._chart ||
+            (canvas as any).__chartjs_chart__ ||
+            (window as any).Chart?.getChart?.(canvas);
 
           if (chart?.data?.labels?.length && chart?.data?.datasets?.[0]?.data?.length) {
             return {
@@ -336,7 +291,7 @@ export class MseHistoryScraperService {
           }
         }
 
-        // ── Common globals ──────────────────────────────────────────────
+        // Common globals
         for (const key of ['myChart', 'chart', 'priceChart', 'stockChart', 'lineChart']) {
           const c = (window as any)[key];
           if (c?.data?.labels?.length && c?.data?.datasets?.[0]?.data?.length) {
@@ -371,52 +326,71 @@ export class MseHistoryScraperService {
   }
 
   /**
-   * Parse Chart.js init script from an HTML fragment returned by the MSE
-   * AJAX endpoint. The fragment contains a Chart.js initialisation call
-   * with labels (dates) and datasets (prices).
+   * Parse the HTML snippet returned by the MSE chart AJAX endpoint.
    *
-   * Tries multiple patterns to handle MSE page variations.
+   * The response is a <canvas> element with the chart config in the
+   * `data-bs-chart` attribute as JSON (the primary strategy).
+   * Additional strategies handle older/alternative formats.
    */
   parseChartHtml(html: string, symbol: string): MsePricePoint[] {
     try {
-      // ── Strategy 1: Standard Chart.js – double-quoted labels ──────────
-      const s1Labels = html.match(/labels\s*:\s*(\["[\s\S]*?"\])/);
-      const s1Data   = html.match(/datasets\s*:\s*\[[\s\S]*?data\s*:\s*(\[\s*[\d.,\s]+\s*\])/);
-      if (s1Labels && s1Data) {
-        return this.parseLabelsAndData(s1Labels[1], s1Data[1], symbol);
+      // ── Strategy 0 (PRIMARY): MSE data-bs-chart attribute ─────────────
+      // Response: <canvas id="chart" data-bs-chart='{"type":"line","data":{"labels":[...],"datasets":[{"data":[...]}]}}'>
+      // The bs-init.js reads this attribute and calls new Chart(canvas, config).
+      const bsAttrMatch =
+        // Single-quoted attribute value
+        html.match(/data-bs-chart\s*=\s*'([\s\S]*?)'\s*(?:>|\/?>|\s)/) ||
+        // Double-quoted attribute value
+        html.match(/data-bs-chart\s*=\s*"([\s\S]*?)"\s*(?:>|\/?>|\s)/);
+
+      if (bsAttrMatch) {
+        try {
+          const raw = bsAttrMatch[1]
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&amp;/g, '&');
+
+          const cfg = JSON.parse(raw) as {
+            data?: { labels?: string[]; datasets?: Array<{ data?: number[] }> };
+          };
+
+          const labels  = cfg?.data?.labels ?? [];
+          const dataset = cfg?.data?.datasets?.[0]?.data ?? [];
+
+          if (labels.length > 0 && dataset.length > 0) {
+            this.logger.debug(
+              `${symbol}: parsed ${Math.min(labels.length, dataset.length)} points from data-bs-chart`,
+            );
+            return this.buildPoints(labels, dataset, symbol);
+          }
+        } catch (e) {
+          this.logger.warn({ e, symbol }, 'data-bs-chart JSON parse failed');
+        }
       }
+
+      // ── Strategy 1: Standard Chart.js init — double-quoted labels ─────
+      const s1L = html.match(/labels\s*:\s*(\["[\s\S]*?"\])/);
+      const s1D = html.match(/datasets\s*:\s*\[[\s\S]*?data\s*:\s*(\[\s*[\d.,\s]+\s*\])/);
+      if (s1L && s1D) return this.parseLabelsAndData(s1L[1], s1D[1], symbol);
 
       // ── Strategy 2: Single-quoted labels ─────────────────────────────
-      const s2Labels = html.match(/labels\s*:\s*(\['[\s\S]*?'\])/);
-      const s2Data   = html.match(/datasets\s*:\s*\[[\s\S]*?data\s*:\s*(\[\s*[\d.,\s]+\s*\])/);
-      if (s2Labels && s2Data) {
-        return this.parseLabelsAndData(s2Labels[1], s2Data[1], symbol);
-      }
+      const s2L = html.match(/labels\s*:\s*(\['[\s\S]*?'\])/);
+      const s2D = html.match(/datasets\s*:\s*\[[\s\S]*?data\s*:\s*(\[\s*[\d.,\s]+\s*\])/);
+      if (s2L && s2D) return this.parseLabelsAndData(s2L[1], s2D[1], symbol);
 
-      // ── Strategy 3: Loose labels (any quote style) + key-quoted data ──
-      const s3Labels = html.match(/labels\s*:\s*(\[[\s\S]*?\](?=\s*[,}]))/);
-      const s3Data   = html.match(/["']\s*data\s*["']\s*:\s*(\[[\d.,\s]+\])/);
-      if (s3Labels && s3Data) {
-        return this.parseLabelsAndData(s3Labels[1], s3Data[1], symbol);
-      }
+      // ── Strategy 3: Loose labels + key-quoted data ────────────────────
+      const s3L = html.match(/labels\s*:\s*(\[[\s\S]*?\](?=\s*[,}]))/);
+      const s3D = html.match(/["']\s*data\s*["']\s*:\s*(\[[\d.,\s]+\])/);
+      if (s3L && s3D) return this.parseLabelsAndData(s3L[1], s3D[1], symbol);
 
-      // ── Strategy 4: JSON response {"dates":[...],"prices":[...]} ──────
-      const s4Dates  = html.match(/"dates"\s*:\s*(\[[\s\S]*?\])/);
-      const s4Values = html.match(/"(?:prices|values|data)"\s*:\s*(\[[\d.,\s]+\])/);
-      if (s4Dates && s4Values) {
-        return this.parseLabelsAndData(s4Dates[1], s4Values[1], symbol);
-      }
-
-      // ── Strategy 5: var labels=[...]; var data=[...]; ─────────────────
-      const s5Labels = html.match(/var\s+labels\s*=\s*(\[[\s\S]*?\]);/);
-      const s5Data   = html.match(/var\s+data\s*=\s*(\[[\d.,\s]+\]);/);
-      if (s5Labels && s5Data) {
-        return this.parseLabelsAndData(s5Labels[1], s5Data[1], symbol);
-      }
+      // ── Strategy 4: JSON {dates:[...], prices:[...]} ──────────────────
+      const s4D = html.match(/"dates"\s*:\s*(\[[\s\S]*?\])/);
+      const s4V = html.match(/"(?:prices|values|data)"\s*:\s*(\[[\d.,\s]+\])/);
+      if (s4D && s4V) return this.parseLabelsAndData(s4D[1], s4V[1], symbol);
 
       this.logger.debug(
-        `No Chart.js pattern found in HTML for ${symbol} (${html.length} chars) — ` +
-        `html snippet: ${html.slice(0, 300)}`,
+        `No chart pattern found in HTML for ${symbol} (${html.length} chars) — ` +
+        `snippet: ${html.slice(0, 300)}`,
       );
       return [];
     } catch (err) {
@@ -431,28 +405,26 @@ export class MseHistoryScraperService {
     symbol: string,
   ): MsePricePoint[] {
     try {
-      // Normalize: replace single quotes with double quotes for JSON.parse
-      const labelsNorm = labelsJson.replace(/'/g, '"');
-      const dataNorm   = dataJson.replace(/'/g, '"');
-
-      const rawLabels = JSON.parse(labelsNorm) as string[];
-      const rawData   = JSON.parse(dataNorm) as number[];
-      const count = Math.min(rawLabels.length, rawData.length);
-      const points: MsePricePoint[] = [];
-
-      for (let i = 0; i < count; i++) {
-        const price = Number(rawData[i]);
-        if (!price || isNaN(price) || price <= 0) continue;
-        const date = this.normaliseDate(rawLabels[i]);
-        if (date) points.push({ date, close: price });
-      }
-
-      this.logger.debug(`Parsed ${points.length} price points for ${symbol}`);
-      return points;
+      const rawLabels = JSON.parse(labelsJson.replace(/'/g, '"')) as string[];
+      const rawData   = JSON.parse(dataJson.replace(/'/g, '"')) as number[];
+      return this.buildPoints(rawLabels, rawData, symbol);
     } catch (err) {
-      this.logger.warn({ err, symbol }, 'Failed to JSON.parse chart labels/data');
+      this.logger.warn({ err, symbol }, 'JSON.parse failed for chart labels/data');
       return [];
     }
+  }
+
+  private buildPoints(labels: string[], data: number[], symbol: string): MsePricePoint[] {
+    const count = Math.min(labels.length, data.length);
+    const points: MsePricePoint[] = [];
+    for (let i = 0; i < count; i++) {
+      const price = Number(data[i]);
+      if (!price || isNaN(price) || price <= 0) continue;
+      const date = this.normaliseDate(labels[i]);
+      if (date) points.push({ date, close: price });
+    }
+    this.logger.debug(`Built ${points.length} price points for ${symbol}`);
+    return points;
   }
 
   /**
