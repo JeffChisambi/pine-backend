@@ -184,7 +184,9 @@ export class MseHistoryScraperService {
 
     if (months === 1) {
       // 1-month data is embedded in the initial page HTML — no tab click needed
-      await page.goto(companyUrl, { waitUntil: 'networkidle', timeout: 25_000 });
+      await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
+      // Give Chart.js time to initialise and inject data into the DOM
+      await page.waitForTimeout(3000);
       const html = await page.content();
       return this.parseChartHtml(html, symbol);
     }
@@ -196,7 +198,12 @@ export class MseHistoryScraperService {
     }
 
     // Navigate to the company page (this sets session cookies and loads 1M chart)
-    await page.goto(companyUrl, { waitUntil: 'networkidle', timeout: 25_000 });
+    // Use domcontentloaded — networkidle never resolves on MSE company pages
+    // because Chart.js keeps making background network requests.
+    await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
+    // Wait for the chart canvas to appear before registering the response interceptor
+    await page.waitForSelector('canvas', { timeout: 10_000 }).catch(() => {});
+    await page.waitForTimeout(1500);
 
     // Set up interceptor BEFORE clicking the tab, so we don't miss the response
     const chartUrlPattern = `/company/company/${isin}/`;
