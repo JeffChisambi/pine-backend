@@ -62,7 +62,7 @@ export class StocksRepository {
             highPrice: s.prices[0].highPrice.toString(),
             lowPrice: s.prices[0].lowPrice.toString(),
             volume: s.prices[0].volume,
-            turnover: (s.prices[0] as any).turnover?.toString() ?? null,
+            turnover: s.prices[0].turnover?.toString() ?? null,
             tradedAt: s.prices[0].tradedAt,
             changePct: s.prices[0].changePct?.toString() ?? null,
           }
@@ -172,6 +172,7 @@ export class StocksRepository {
             highPrice: true,
             lowPrice: true,
             volume: true,
+            turnover: true,
             tradedAt: true,
             changePct: true,
           },
@@ -193,6 +194,7 @@ export class StocksRepository {
             highPrice: s.prices[0].highPrice.toString(),
             lowPrice: s.prices[0].lowPrice.toString(),
             volume: s.prices[0].volume,
+            turnover: s.prices[0].turnover?.toString() ?? null,
             tradedAt: s.prices[0].tradedAt,
             changePct: s.prices[0].changePct?.toString() ?? null,
           }
