@@ -14,6 +14,7 @@ export interface StockRow {
     highPrice: string;
     lowPrice: string;
     volume: bigint;
+    turnover: string | null;
     tradedAt: Date;
     changePct: string | null;
   } | null;
@@ -39,6 +40,7 @@ export class StocksRepository {
             highPrice: true,
             lowPrice: true,
             volume: true,
+            turnover: true,
             tradedAt: true,
             changePct: true,
           },
@@ -60,6 +62,7 @@ export class StocksRepository {
             highPrice: s.prices[0].highPrice.toString(),
             lowPrice: s.prices[0].lowPrice.toString(),
             volume: s.prices[0].volume,
+            turnover: (s.prices[0] as any).turnover?.toString() ?? null,
             tradedAt: s.prices[0].tradedAt,
             changePct: s.prices[0].changePct?.toString() ?? null,
           }
@@ -82,6 +85,7 @@ export class StocksRepository {
             highPrice: true,
             lowPrice: true,
             volume: true,
+            turnover: true,
             tradedAt: true,
             changePct: true,
           },
@@ -105,6 +109,7 @@ export class StocksRepository {
             highPrice: stock.prices[0].highPrice.toString(),
             lowPrice: stock.prices[0].lowPrice.toString(),
             volume: stock.prices[0].volume,
+            turnover: stock.prices[0].turnover?.toString() ?? null,
             tradedAt: stock.prices[0].tradedAt,
             changePct: stock.prices[0].changePct?.toString() ?? null,
           }
@@ -138,6 +143,7 @@ export class StocksRepository {
         highPrice: true,
         lowPrice: true,
         volume: true,
+        turnover: true,
         changePct: true,
       },
     });

@@ -163,6 +163,7 @@ export class MarketSyncService {
             highPrice,
             lowPrice,
             volume: row.volume,
+            turnover: row.turnover,
             changePct: row.changePct,
             tradedAt: tradingDate,
           };

@@ -74,6 +74,7 @@ export class MarketSyncRepository implements IMarketSyncRepository {
       highPrice: string;
       lowPrice: string;
       volume: string;
+      turnover?: string;
       changePct?: string;
       tradedAt: Date;
     }>,
@@ -98,6 +99,7 @@ export class MarketSyncRepository implements IMarketSyncRepository {
             highPrice: price.highPrice,
             lowPrice: price.lowPrice,
             volume: BigInt(Math.floor(parseFloat(price.volume))),
+            ...(price.turnover != null ? { turnover: price.turnover.replace(/,/g, '') } : {}),
             ...(price.changePct != null ? { changePct: price.changePct } : {}),
           },
           create: {
@@ -107,6 +109,7 @@ export class MarketSyncRepository implements IMarketSyncRepository {
             highPrice: price.highPrice,
             lowPrice: price.lowPrice,
             volume: BigInt(Math.floor(parseFloat(price.volume))),
+            turnover: price.turnover != null ? price.turnover.replace(/,/g, '') : null,
             changePct: price.changePct ?? null,
             tradedAt: price.tradedAt,
             source: 'mse-scraper',

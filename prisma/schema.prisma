@@ -597,6 +597,7 @@ model StockPrice {
   lowPrice     Decimal  @db.Decimal(18, 4)
   closePrice   Decimal  @db.Decimal(18, 4)
   volume       BigInt   @default(0)
+  turnover     Decimal? @db.Decimal(24, 4)
   changePct    Decimal? @db.Decimal(8, 4)
   tradedAt     DateTime @db.Date
   source       String   @default("mse")

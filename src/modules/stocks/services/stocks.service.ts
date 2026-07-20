@@ -58,6 +58,8 @@ export interface StockDetailItem extends StockListItem {
   highPrice: string;
   lowPrice: string;
   listedShares: string | null;
+  marketCap: string | null;    // formatted MWK string
+  turnover: string | null;     // latest day turnover formatted
   period: string;
   priceHistory: Array<{
     date: string;          // "2026-07-04"
@@ -66,6 +68,7 @@ export interface StockDetailItem extends StockListItem {
     high: number;
     low: number;
     volume: number;
+    turnover: number | null;
     changePct: number | null;
   }>;
 }
@@ -140,6 +143,20 @@ export class StocksService {
 
     const base = toListItem(row);
 
+    // Market cap = listedShares × latestClosePrice
+    const listedSharesNum = row.listedShares ? Number(row.listedShares) : null;
+    const closePriceNum   = row.latestPrice ? parseFloat(row.latestPrice.closePrice) : null;
+    const marketCapRaw    = listedSharesNum && closePriceNum ? listedSharesNum * closePriceNum : null;
+    const marketCapFmt    = marketCapRaw != null
+      ? `MWK ${(marketCapRaw / 1_000_000_000).toFixed(2)}B`
+      : null;
+
+    // Turnover from latest price record (scraper stores it per day)
+    const turnoverRaw  = row.latestPrice?.turnover ?? null;
+    const turnoverFmt  = turnoverRaw != null
+      ? `MWK ${(parseFloat(turnoverRaw) / 1_000_000).toFixed(2)}M`
+      : null;
+
     return {
       ...base,
       description: row.description,
@@ -149,6 +166,8 @@ export class StocksService {
       listedShares: row.listedShares
         ? Number(row.listedShares).toLocaleString('en')
         : null,
+      marketCap: marketCapFmt,
+      turnover: turnoverFmt,
       period: period?.toUpperCase() ?? '1M',
       priceHistory: history.map((h) => ({
         date: h.tradedAt.toISOString().slice(0, 10),
@@ -157,6 +176,7 @@ export class StocksService {
         high: parseFloat(h.highPrice.toString()),
         low: parseFloat(h.lowPrice.toString()),
         volume: Number(h.volume),
+        turnover: h.turnover != null ? parseFloat(h.turnover.toString()) : null,
         changePct: h.changePct != null ? parseFloat(h.changePct.toString()) : null,
       })),
     };
