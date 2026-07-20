@@ -15,7 +15,9 @@ const prisma = new PrismaClient();
 
 const MSE_STOCKS = [
   { symbol: 'AIRTEL', name: 'Airtel Malawi plc', sector: 'Telecommunications' },
+  { symbol: 'BHL', name: 'Blantyre Hotels Ltd', sector: 'Hospitality' },
   { symbol: 'FDHB', name: 'FDH Bank plc', sector: 'Banking' },
+  { symbol: 'FMBCH', name: 'FMB Capital Holdings plc', sector: 'Banking' },
   { symbol: 'ICON', name: 'ICON Properties plc', sector: 'Real Estate' },
   { symbol: 'ILLOVO', name: 'Illovo Sugar (Malawi) plc', sector: 'Agriculture' },
   { symbol: 'MPICO', name: 'MPICO plc', sector: 'Real Estate' },
