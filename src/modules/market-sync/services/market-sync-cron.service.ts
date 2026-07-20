@@ -65,9 +65,10 @@ export class MarketSyncCronService {
         { trigger: 'cron', force: false },
         {
           ...DEFAULT_JOB_OPTIONS,
-          jobId: `market-sync-cron-${new Date().toISOString().slice(0, 10)}`,
-          // Prevent duplicate jobs for the same date
-          // (if the cron fires multiple times before the previous job completes)
+          // Include date + hour so each hour gets a fresh deduplication window.
+          // Previously using only the date caused all cron runs in a day to be
+          // blocked if one job got stuck in a non-final state.
+          jobId: `market-sync-cron-${new Date().toISOString().slice(0, 13)}`,
         },
       );
 
