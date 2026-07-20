@@ -361,20 +361,22 @@ export class MseScraperService implements IMarketDataSource, OnModuleInit, OnMod
 
   private generateMockSnapshot(): RawMarketSnapshot {
     const basePrices: Record<string, number> = {
-      AIRTEL: 75.00,
-      FDHB: 85.00,
-      ICON: 15.00,
-      ILLOVO: 1050.00,
-      MPICO: 20.00,
-      NBM: 1150.00,
-      NBS: 110.00,
-      NICO: 120.00,
-      NITL: 130.00,
-      OMU: 1500.00,
-      PCL: 2200.00,
+      AIRTEL:   75.00,
+      BHL:      550.00,
+      FDHB:     85.00,
+      FMBCH:    320.00,
+      ICON:     15.00,
+      ILLOVO:   1050.00,
+      MPICO:    20.00,
+      NBM:      1150.00,
+      NBS:      110.00,
+      NICO:     120.00,
+      NITL:     130.00,
+      OMU:      1500.00,
+      PCL:      2200.00,
       STANDARD: 2400.00,
-      SUNBIRD: 190.00,
-      TNM: 45.00,
+      SUNBIRD:  190.00,
+      TNM:      45.00,
     };
 
     const rows: RawStockRow[] = Object.entries(basePrices).map(([symbol, basePrice]) => {
