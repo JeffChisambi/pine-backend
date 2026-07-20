@@ -245,6 +245,7 @@ model User {
   auditLogsAsActor  AuditLog[]        @relation("AuditActor")
   kycReviewsAsAdmin KycApplication[]  @relation("KycReviewer")
   mfaConfig         MfaConfig?
+  watchlistEntries  WatchlistEntry[]
 
   @@index([role])
   @@index([kycStatus])
@@ -580,9 +581,25 @@ model Stock {
   orders          Order[]
   holdings        Holding[]
   corporateActions CorporateAction[]
+  watchlistEntries WatchlistEntry[]
 
   @@index([sector])
   @@map("stocks")
+}
+
+/// User watchlist entries — one row per (user, stock) pair.
+/// Unique on (userId, stockId) so toggling is idempotent.
+model WatchlistEntry {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stockId   String   @db.Uuid
+  stock     Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, stockId])
+  @@index([userId])
+  @@map("watchlist_entries")
 }
 
 /// One row per trading-day close (plus optional intraday snapshots from

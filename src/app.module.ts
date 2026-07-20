@@ -29,6 +29,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { WatchlistModule } from './modules/watchlist/watchlist.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
     AdminModule,
     AuditModule,
     AnalyticsModule,
+    WatchlistModule,
   ],
   providers: [
     // Applied globally, outermost-to-innermost as Nest resolves them:
