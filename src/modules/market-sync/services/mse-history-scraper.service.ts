@@ -33,10 +33,11 @@ const SYMBOL_TO_ISIN: Record<string, string> = {
 /**
  * Maps period label → months parameter used by MSE AJAX endpoint.
  * POST /company/{ISIN}/{months} returns an HTML snippet with the chart canvas.
+ * Values verified against the MSE website's chart tab network requests.
  */
 export const MSE_PERIOD_MONTHS: Record<string, number> = {
   '1M':  1,
-  '3M':  2,
+  '3M':  3,   // was incorrectly set to 2 — MSE API uses months=3 for 3M
   '6M':  6,
   '1Y':  12,
   '2Y':  24,
