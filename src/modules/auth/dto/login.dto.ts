@@ -1,16 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  Matches,
-  IsEmail,
-  ValidateIf,
-} from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsOptional, IsString, Matches, IsEmail, ValidateIf } from 'class-validator';
+import { normalizeMalawiPhoneNumber } from '../../../shared/phone/malawi-phone';
 
 export class LoginDto {
   @ApiPropertyOptional({ example: '+265991234567', description: 'Login with phone number' })
   @ValidateIf((o) => !o.email)
+  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
   @IsString()
   @IsNotEmpty({ message: 'Either phone or email is required' })
   @Matches(/^\+265\d{9}$/, {

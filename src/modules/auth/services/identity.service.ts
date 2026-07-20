@@ -7,6 +7,7 @@ import {
   ResourceNotFoundException,
 } from '../../../core/exceptions/app.exception';
 import { ErrorCode } from '../../../core/constants/error-codes.constant';
+import { normalizeMalawiPhoneNumber } from '../../../shared/phone/malawi-phone';
 
 /**
  * Identity service — pure user identity management.
@@ -49,9 +50,11 @@ export class IdentityService {
     role: string;
     kycStatus: string;
   }> {
+    const phone = normalizeMalawiPhoneNumber(data.phone);
+
     // Check for existing phone
     const existingByPhone = await this.prisma.user.findUnique({
-      where: { phone: data.phone },
+      where: { phone },
     });
     if (existingByPhone) {
       throw new ConflictException(
@@ -79,7 +82,7 @@ export class IdentityService {
     // Create user + default preferences in a transaction
     const user = await this.prisma.user.create({
       data: {
-        phone: data.phone,
+        phone,
         firstName: data.firstName,
         lastName: data.lastName,
         passwordHash,
@@ -99,7 +102,7 @@ export class IdentityService {
       },
     });
 
-    this.logger.log({ userId: user.id, phone: data.phone }, 'User created');
+    this.logger.log({ userId: user.id, phone }, 'User created');
     return user;
   }
 
@@ -123,9 +126,12 @@ export class IdentityService {
     pinHash: string | null;
     isActive: boolean;
   }> {
-    const whereClause = identifierType === 'email'
-      ? { email: identifier }
-      : { phone: identifier };
+    const normalizedIdentifier =
+      identifierType === 'phone' ? normalizeMalawiPhoneNumber(identifier) : identifier;
+    const whereClause =
+      identifierType === 'email'
+        ? { email: normalizedIdentifier }
+        : { phone: normalizedIdentifier };
 
     const user = await this.prisma.user.findUnique({
       where: whereClause,
@@ -153,17 +159,11 @@ export class IdentityService {
 
     // Check account status
     if (!user.isActive) {
-      throw new UnauthorizedException(
-        'Account is deactivated',
-        ErrorCode.ACCOUNT_LOCKED,
-      );
+      throw new UnauthorizedException('Account is deactivated', ErrorCode.ACCOUNT_LOCKED);
     }
 
     // Verify password
-    const isValid = await this.passwordService.verify(
-      password,
-      user.passwordHash,
-    );
+    const isValid = await this.passwordService.verify(password, user.passwordHash);
 
     if (!isValid) {
       throw new UnauthorizedException(
@@ -232,10 +232,7 @@ export class IdentityService {
     }
 
     // Verify current password
-    const isValid = await this.passwordService.verify(
-      currentPassword,
-      user.passwordHash,
-    );
+    const isValid = await this.passwordService.verify(currentPassword, user.passwordHash);
 
     if (!isValid) {
       throw new UnauthorizedException(
@@ -261,14 +258,15 @@ export class IdentityService {
    * is handled by the AuthService orchestrator before calling this).
    */
   async resetPassword(phone: string, newPassword: string): Promise<void> {
+    const normalizedPhone = normalizeMalawiPhoneNumber(phone);
     const newHash = await this.passwordService.hash(newPassword);
 
     await this.prisma.user.update({
-      where: { phone },
+      where: { phone: normalizedPhone },
       data: { passwordHash: newHash },
     });
 
-    this.logger.log({ phone }, 'Password reset');
+    this.logger.log({ phone: normalizedPhone }, 'Password reset');
   }
 
   /**

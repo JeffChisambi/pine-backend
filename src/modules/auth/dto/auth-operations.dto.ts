@@ -1,15 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsNotEmpty,
-  IsString,
-  Matches,
-  MinLength,
-  MaxLength,
-  IsEnum,
-} from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsString, Matches, MinLength, MaxLength, IsEnum } from 'class-validator';
+import { normalizeMalawiPhoneNumber } from '../../../shared/phone/malawi-phone';
 
 export class ForgotPasswordDto {
   @ApiProperty({ example: '+265991234567' })
+  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
   @IsString()
   @IsNotEmpty()
   @Matches(/^\+265\d{9}$/)
@@ -18,6 +14,7 @@ export class ForgotPasswordDto {
 
 export class ResetPasswordDto {
   @ApiProperty({ example: '+265991234567' })
+  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
   @IsString()
   @IsNotEmpty()
   @Matches(/^\+265\d{9}$/)
@@ -33,8 +30,7 @@ export class ResetPasswordDto {
   @MinLength(8)
   @MaxLength(128)
   @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).{8,}$/, {
-    message:
-      'Password must contain uppercase, lowercase, digit, and special character',
+    message: 'Password must contain uppercase, lowercase, digit, and special character',
   })
   newPassword: string;
 }
@@ -50,8 +46,7 @@ export class ChangePasswordDto {
   @MinLength(8)
   @MaxLength(128)
   @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).{8,}$/, {
-    message:
-      'Password must contain uppercase, lowercase, digit, and special character',
+    message: 'Password must contain uppercase, lowercase, digit, and special character',
   })
   newPassword: string;
 }
@@ -84,6 +79,7 @@ export class ChangePinDto {
 
 export class SendOtpDto {
   @ApiProperty({ example: '+265991234567', description: 'Phone number to send OTP to' })
+  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
   @IsString()
   @IsNotEmpty()
   destination: string;
@@ -96,6 +92,7 @@ export class SendOtpDto {
 
 export class VerifyOtpDto {
   @ApiProperty({ example: '+265991234567' })
+  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
   @IsString()
   @IsNotEmpty()
   destination: string;

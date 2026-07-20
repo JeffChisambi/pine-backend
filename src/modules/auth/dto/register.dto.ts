@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsNotEmpty,
   IsString,
@@ -8,9 +9,11 @@ import {
   IsOptional,
   IsEmail,
 } from 'class-validator';
+import { normalizeMalawiPhoneNumber } from '../../../shared/phone/malawi-phone';
 
 export class RegisterDto {
   @ApiProperty({ example: '+265991234567' })
+  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
   @IsString()
   @IsNotEmpty()
   @Matches(/^\+265\d{9}$/, {
