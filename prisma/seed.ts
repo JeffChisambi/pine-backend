@@ -14,22 +14,22 @@ import * as argon2 from 'argon2';
 const prisma = new PrismaClient();
 
 const MSE_STOCKS = [
-  { symbol: 'AIRTEL', name: 'Airtel Malawi plc', sector: 'Telecommunications' },
-  { symbol: 'BHL', name: 'Blantyre Hotels Ltd', sector: 'Hospitality' },
-  { symbol: 'FDHB', name: 'FDH Bank plc', sector: 'Banking' },
-  { symbol: 'FMBCH', name: 'FMB Capital Holdings plc', sector: 'Banking' },
-  { symbol: 'ICON', name: 'ICON Properties plc', sector: 'Real Estate' },
-  { symbol: 'ILLOVO', name: 'Illovo Sugar (Malawi) plc', sector: 'Agriculture' },
-  { symbol: 'MPICO', name: 'MPICO plc', sector: 'Real Estate' },
-  { symbol: 'NBM', name: 'National Bank of Malawi plc', sector: 'Banking' },
-  { symbol: 'NBS', name: 'NBS Bank plc', sector: 'Banking' },
-  { symbol: 'NICO', name: 'NICO Holdings plc', sector: 'Insurance' },
-  { symbol: 'NITL', name: 'National Investment Trust plc', sector: 'Investment' },
-  { symbol: 'OMU', name: 'Old Mutual Limited', sector: 'Insurance' },
-  { symbol: 'PCL', name: 'Press Corporation plc', sector: 'Conglomerate' },
-  { symbol: 'STANDARD', name: 'Standard Bank Malawi plc', sector: 'Banking' },
-  { symbol: 'SUNBIRD', name: 'Sunbird Tourism plc', sector: 'Hospitality' },
-  { symbol: 'TNM', name: 'Telekom Networks Malawi plc', sector: 'Telecommunications' },
+  { symbol: 'AIRTEL',   name: 'Airtel Malawi plc',               sector: 'Telecommunications', listedShares: BigInt('2_000_000_000') },
+  { symbol: 'BHL',      name: 'Blantyre Hotels Ltd',              sector: 'Hospitality',         listedShares: BigInt('26_906_250')    },
+  { symbol: 'FDHB',     name: 'FDH Bank plc',                     sector: 'Banking',             listedShares: BigInt('1_220_000_000') },
+  { symbol: 'FMBCH',    name: 'FMB Capital Holdings plc',         sector: 'Banking',             listedShares: BigInt('1_163_239_860') },
+  { symbol: 'ICON',     name: 'ICON Properties plc',              sector: 'Real Estate',         listedShares: BigInt('270_000_000')   },
+  { symbol: 'ILLOVO',   name: 'Illovo Sugar (Malawi) plc',        sector: 'Agriculture',         listedShares: BigInt('430_525_870')   },
+  { symbol: 'MPICO',    name: 'MPICO plc',                        sector: 'Real Estate',         listedShares: BigInt('600_000_000')   },
+  { symbol: 'NBM',      name: 'National Bank of Malawi plc',      sector: 'Banking',             listedShares: BigInt('450_000_000')   },
+  { symbol: 'NBS',      name: 'NBS Bank plc',                     sector: 'Banking',             listedShares: BigInt('1_000_000_000') },
+  { symbol: 'NICO',     name: 'NICO Holdings plc',                sector: 'Insurance',           listedShares: BigInt('1_500_000_000') },
+  { symbol: 'NITL',     name: 'National Investment Trust plc',    sector: 'Investment',          listedShares: BigInt('168_000_000')   },
+  { symbol: 'OMU',      name: 'Old Mutual Limited',               sector: 'Insurance',           listedShares: BigInt('2_900_000_000') },
+  { symbol: 'PCL',      name: 'Press Corporation plc',            sector: 'Conglomerate',        listedShares: BigInt('568_000_000')   },
+  { symbol: 'STANDARD', name: 'Standard Bank Malawi plc',         sector: 'Banking',             listedShares: BigInt('1_200_000_000') },
+  { symbol: 'SUNBIRD',  name: 'Sunbird Tourism plc',              sector: 'Hospitality',         listedShares: BigInt('120_000_000')   },
+  { symbol: 'TNM',      name: 'Telekom Networks Malawi plc',      sector: 'Telecommunications', listedShares: BigInt('1_300_000_000') },
 ];
 
 const PUBLIC_HOLIDAYS_2026 = [
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   for (const stock of MSE_STOCKS) {
     await prisma.stock.upsert({
       where: { symbol: stock.symbol },
-      update: { name: stock.name, sector: stock.sector },
+      update: { name: stock.name, sector: stock.sector, listedShares: stock.listedShares },
       create: stock,
     });
   }
