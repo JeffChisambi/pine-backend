@@ -29,12 +29,13 @@ export class MseHistorySyncService {
 
   /**
    * Run once per day at 2:00 AM to refresh the chart history for all
-   * MSE-listed companies.  Fetches 1-year of data (MSE months=12).
+   * MSE-listed companies.  Fetches 5 years of data (MSE months=60) so
+   * all chart periods (1M, 3M, 6M, 1Y, 2Y, 5Y) are accurately populated.
    */
   @Cron('0 2 * * *', { name: 'mse-history-sync' })
   async runDailySync(): Promise<void> {
     this.logger.log('Daily MSE history sync triggered by cron');
-    await this.syncHistory(12);
+    await this.syncHistory(60); // months=60 → 5 years
   }
 
   /**
