@@ -22,9 +22,10 @@ import { Public } from '../../../core/decorators/public.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
 import { AppConfigService } from '../../../config/app-config.service';
 import { PaychanguService } from '../services/paychangu.service';
+import { BankCardService } from '../services/bank-card.service';
 import { WalletService } from '../../wallet/services/wallet.service';
-import { TradingService } from '../../trading/services/trading.service';
 import { InitiatePaymentDto } from '../dto/payment.dto';
+import { InitiateBankCardPaymentDto, BankCardPaymentResponse } from '../dto/bank-card.dto';
 import { randomUUID } from 'crypto';
 
 /**
@@ -53,6 +54,7 @@ export class PaymentsController {
 
   constructor(
     private readonly paychangu: PaychanguService,
+    private readonly bankCardService: BankCardService,
     private readonly walletService: WalletService,
     private readonly config: AppConfigService,
   ) {}
@@ -249,7 +251,7 @@ export class PaymentsController {
     };
   }
 
-  // ── Webhook (PayChangu server-to-server) ──────────────────
+  // ── Webhook (PayChangu server-to-server) ──────────────────────────────────
 
   @Post('webhook')
   @Public()
@@ -262,5 +264,109 @@ export class PaymentsController {
     // For now, just log — the callback flow is the primary path
 
     return { received: true };
+  }
+
+  // ── Bank Card: Initiate ───────────────────────────────────────────────────
+
+  /**
+   * POST /payments/card/initiate
+   *
+   * Initiates a bank card payment:
+   *   1. Creates a PENDING wallet deposit transaction
+   *   2. Forwards card details to BankCardService (skeleton — integrate processor)
+   *   3. Returns txRef + status to the mobile app
+   *
+   * ⚠️  PCI-DSS note: In production, tokenise card data client-side before
+   *      sending to this endpoint to reduce PCI scope.
+   */
+  @Post('card/initiate')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Initiate a bank card payment (skeleton — processor TODO)' })
+  @ApiResponse({ status: 201, description: 'Card charge initiated', type: BankCardPaymentResponse })
+  @ApiResponse({ status: 501, description: 'Bank card processor not yet configured' })
+  async initiateCardPayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: InitiateBankCardPaymentDto,
+  ): Promise<BankCardPaymentResponse> {
+    const txRef = `PINE-CARD-${randomUUID()}`;
+    const purpose = dto.purpose ?? 'wallet_deposit';
+
+    this.logger.log(
+      { userId: user.id, amount: dto.amount, currency: dto.currency, purpose, txRef },
+      'Initiating bank card payment',
+    );
+
+    // Step 1: Create a PENDING wallet deposit so the transaction is recorded
+    // regardless of whether the processor call succeeds.
+    const { transactionId } = await this.walletService.initiateDeposit({
+      userId: user.id,
+      amount: dto.amount,
+      idempotencyKey: txRef,
+    });
+
+    // Step 2: Forward to BankCardService (will throw NotImplementedException
+    // until a real processor is wired up).
+    const chargeResult = await this.bankCardService.chargeCard({
+      txRef,
+      amount: dto.amount,
+      currency: dto.currency,
+      cardholderName: dto.cardholderName,
+      cardNumber: dto.cardNumber,
+      expiryMonth: dto.expiryMonth,
+      expiryYear: dto.expiryYear,
+      cvv: dto.cvv,
+      email: user.email ?? undefined,
+      meta: {
+        userId: user.id,
+        transactionId,
+        purpose,
+        stockSymbol: dto.stockSymbol,
+        quantity: dto.quantity,
+      },
+    });
+
+    return {
+      txRef: chargeResult.txRef,
+      transactionId,
+      status: chargeResult.status,
+      amount: chargeResult.amount,
+      currency: chargeResult.currency as 'MWK' | 'USD',
+      message: chargeResult.message,
+      processorReference: chargeResult.processorReference,
+      last4: chargeResult.last4,
+      cardBrand: chargeResult.cardBrand,
+    };
+  }
+
+  // ── Bank Card: Verify ─────────────────────────────────────────────────────
+
+  /**
+   * GET /payments/card/verify/:txRef
+   *
+   * Poll the bank card processor for the current status of a transaction.
+   * The mobile app calls this after initiating a card payment.
+   */
+  @Get('card/verify/:txRef')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Verify a bank card payment status (skeleton — processor TODO)' })
+  @ApiResponse({ status: 200, description: 'Current payment status' })
+  async verifyCardPayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('txRef') txRef: string,
+  ) {
+    this.logger.log({ userId: user.id, txRef }, 'Verifying bank card payment');
+
+    const result = await this.bankCardService.verifyTransaction(txRef);
+
+    return {
+      txRef: result.txRef,
+      status: result.status,
+      amount: result.amount,
+      currency: result.currency,
+      processorReference: result.processorReference,
+      updatedAt: result.updatedAt,
+      failureReason: result.failureReason,
+    };
   }
 }
