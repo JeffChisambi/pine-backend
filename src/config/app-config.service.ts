@@ -7,6 +7,7 @@ import type {
   EmailConfig,
   JwtConfig,
   MarketConfig,
+  MastercardGatewayConfig,
   ObservabilityConfig,
   OtpConfig,
   PaychanguConfig,
@@ -82,5 +83,9 @@ export class AppConfigService {
 
   get observability(): ObservabilityConfig {
     return this.configService.getOrThrow<ObservabilityConfig>('observability');
+  }
+
+  get mastercardGateway(): MastercardGatewayConfig {
+    return this.configService.getOrThrow<MastercardGatewayConfig>('mastercardGateway');
   }
 }

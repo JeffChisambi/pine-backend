@@ -135,6 +135,16 @@ export const observabilityConfig = registerAs('observability', () => ({
   metricsPath: process.env.PROMETHEUS_METRICS_PATH ?? '/metrics',
 }));
 
+export const mastercardGatewayConfig = registerAs('mastercardGateway', () => ({
+  baseUrl:
+    process.env.MCGS_BASE_URL ??
+    'https://test-nbm.mtf.gateway.mastercard.com',
+  merchantId: process.env.MCGS_MERCHANT_ID || undefined,
+  apiPassword: process.env.MCGS_API_PASSWORD || undefined,
+  apiVersion: parseInt(process.env.MCGS_API_VERSION ?? '100', 10),
+  environment: (process.env.MCGS_ENVIRONMENT ?? 'test') as 'test' | 'production',
+}));
+
 export const allConfigs = [
   appConfig,
   corsConfig,
@@ -150,4 +160,5 @@ export const allConfigs = [
   paychanguConfig,
   marketConfig,
   observabilityConfig,
+  mastercardGatewayConfig,
 ];

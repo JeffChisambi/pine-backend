@@ -122,6 +122,13 @@ export const envSchema = z.object({
   TRUST_PROXY: booleanFromString.default('true'),
   BODY_LIMIT: z.string().default('1mb'),
   COOKIE_SECRET: z.string().min(32, 'COOKIE_SECRET must be at least 32 characters'),
+
+  // Mastercard Gateway (Direct Payment)
+  MCGS_BASE_URL: z.string().url().default('https://test-nbm.mtf.gateway.mastercard.com'),
+  MCGS_MERCHANT_ID: z.string().optional(),
+  MCGS_API_PASSWORD: z.string().optional(),
+  MCGS_API_VERSION: z.coerce.number().int().positive().default(100),
+  MCGS_ENVIRONMENT: z.enum(['test', 'production']).default('test'),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

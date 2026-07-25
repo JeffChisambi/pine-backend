@@ -121,3 +121,16 @@ export interface ObservabilityConfig {
   otelEndpoint?: string;
   metricsPath: string;
 }
+
+export interface MastercardGatewayConfig {
+  /** Gateway base URL. Use test URL for sandbox, production URL for live. */
+  baseUrl: string;
+  /** Merchant ID issued by the payment provider — up to 12 characters. */
+  merchantId?: string;
+  /** API password for HTTP Basic authentication. */
+  apiPassword?: string;
+  /** REST API version (e.g. 100). Check the gateway docs for the latest. */
+  apiVersion: number;
+  /** 'test' or 'production' — controls logging verbosity and safety checks. */
+  environment: 'test' | 'production';
+}
