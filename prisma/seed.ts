@@ -14,22 +14,22 @@ import * as argon2 from 'argon2';
 const prisma = new PrismaClient();
 
 const MSE_STOCKS = [
-  { symbol: 'AIRTEL',   name: 'Airtel Malawi plc',               sector: 'Telecommunications', listedShares: BigInt('2_000_000_000') },
-  { symbol: 'BHL',      name: 'Blantyre Hotels Ltd',              sector: 'Hospitality',         listedShares: BigInt('26_906_250')    },
-  { symbol: 'FDHB',     name: 'FDH Bank plc',                     sector: 'Banking',             listedShares: BigInt('1_220_000_000') },
-  { symbol: 'FMBCH',    name: 'FMB Capital Holdings plc',         sector: 'Banking',             listedShares: BigInt('1_163_239_860') },
-  { symbol: 'ICON',     name: 'ICON Properties plc',              sector: 'Real Estate',         listedShares: BigInt('270_000_000')   },
-  { symbol: 'ILLOVO',   name: 'Illovo Sugar (Malawi) plc',        sector: 'Agriculture',         listedShares: BigInt('430_525_870')   },
-  { symbol: 'MPICO',    name: 'MPICO plc',                        sector: 'Real Estate',         listedShares: BigInt('600_000_000')   },
-  { symbol: 'NBM',      name: 'National Bank of Malawi plc',      sector: 'Banking',             listedShares: BigInt('450_000_000')   },
-  { symbol: 'NBS',      name: 'NBS Bank plc',                     sector: 'Banking',             listedShares: BigInt('1_000_000_000') },
-  { symbol: 'NICO',     name: 'NICO Holdings plc',                sector: 'Insurance',           listedShares: BigInt('1_500_000_000') },
-  { symbol: 'NITL',     name: 'National Investment Trust plc',    sector: 'Investment',          listedShares: BigInt('168_000_000')   },
-  { symbol: 'OMU',      name: 'Old Mutual Limited',               sector: 'Insurance',           listedShares: BigInt('2_900_000_000') },
-  { symbol: 'PCL',      name: 'Press Corporation plc',            sector: 'Conglomerate',        listedShares: BigInt('568_000_000')   },
-  { symbol: 'STANDARD', name: 'Standard Bank Malawi plc',         sector: 'Banking',             listedShares: BigInt('1_200_000_000') },
-  { symbol: 'SUNBIRD',  name: 'Sunbird Tourism plc',              sector: 'Hospitality',         listedShares: BigInt('120_000_000')   },
-  { symbol: 'TNM',      name: 'Telekom Networks Malawi plc',      sector: 'Telecommunications', listedShares: BigInt('1_300_000_000') },
+  { symbol: 'AIRTEL',   name: 'Airtel Malawi plc',               sector: 'Telecommunications', listedShares: BigInt('2000000000')  },
+  { symbol: 'BHL',      name: 'Blantyre Hotels Ltd',              sector: 'Hospitality',         listedShares: BigInt('26906250')    },
+  { symbol: 'FDHB',     name: 'FDH Bank plc',                     sector: 'Banking',             listedShares: BigInt('1220000000')  },
+  { symbol: 'FMBCH',    name: 'FMB Capital Holdings plc',         sector: 'Banking',             listedShares: BigInt('1163239860')  },
+  { symbol: 'ICON',     name: 'ICON Properties plc',              sector: 'Real Estate',         listedShares: BigInt('270000000')   },
+  { symbol: 'ILLOVO',   name: 'Illovo Sugar (Malawi) plc',        sector: 'Agriculture',         listedShares: BigInt('430525870')   },
+  { symbol: 'MPICO',    name: 'MPICO plc',                        sector: 'Real Estate',         listedShares: BigInt('600000000')   },
+  { symbol: 'NBM',      name: 'National Bank of Malawi plc',      sector: 'Banking',             listedShares: BigInt('450000000')   },
+  { symbol: 'NBS',      name: 'NBS Bank plc',                     sector: 'Banking',             listedShares: BigInt('1000000000')  },
+  { symbol: 'NICO',     name: 'NICO Holdings plc',                sector: 'Insurance',           listedShares: BigInt('1500000000')  },
+  { symbol: 'NITL',     name: 'National Investment Trust plc',    sector: 'Investment',          listedShares: BigInt('168000000')   },
+  { symbol: 'OMU',      name: 'Old Mutual Limited',               sector: 'Insurance',           listedShares: BigInt('2900000000')  },
+  { symbol: 'PCL',      name: 'Press Corporation plc',            sector: 'Conglomerate',        listedShares: BigInt('568000000')   },
+  { symbol: 'STANDARD', name: 'Standard Bank Malawi plc',         sector: 'Banking',             listedShares: BigInt('1200000000')  },
+  { symbol: 'SUNBIRD',  name: 'Sunbird Tourism plc',              sector: 'Hospitality',         listedShares: BigInt('120000000')   },
+  { symbol: 'TNM',      name: 'Telekom Networks Malawi plc',      sector: 'Telecommunications', listedShares: BigInt('1300000000')  },
 ];
 
 const PUBLIC_HOLIDAYS_2026 = [
