@@ -32,6 +32,7 @@ enum Role {
   CUSTOMER_SUPPORT
   MARKET_OPERATIONS
   AUDITOR
+  BROKER
 }
 
 enum KycStatus {

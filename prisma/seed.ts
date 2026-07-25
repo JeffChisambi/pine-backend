@@ -117,6 +117,43 @@ async function main(): Promise<void> {
 
   console.log('  ✓ Admin: admin@pine.mw / PineAdmin2026!');
 
+  console.log('🌱 Seeding broker user...');
+  const brokerPassword = await argon2.hash('PineBroker2026!', {
+    type: argon2.argon2id,
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1,
+  });
+
+  await prisma.user.upsert({
+    where: { phone: '+265888000002' },
+    update: {
+      email: 'broker@pine.mw',
+      firstName: 'Pine',
+      lastName: 'Broker',
+      role: 'BROKER',
+      passwordHash: brokerPassword,
+      isActive: true,
+      phoneVerifiedAt: new Date(),
+      emailVerifiedAt: new Date(),
+      kycStatus: 'APPROVED',
+    },
+    create: {
+      phone: '+265888000002',
+      email: 'broker@pine.mw',
+      firstName: 'Pine',
+      lastName: 'Broker',
+      passwordHash: brokerPassword,
+      role: 'BROKER',
+      isActive: true,
+      phoneVerifiedAt: new Date(),
+      emailVerifiedAt: new Date(),
+      kycStatus: 'APPROVED',
+    },
+  });
+
+  console.log('  ✓ Broker: broker@pine.mw / PineBroker2026!');
+
   console.log('✅ Seed complete');
 }
 

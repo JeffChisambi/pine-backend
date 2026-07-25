@@ -99,5 +99,19 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ADMIN_ACCESS,
   ],
 
+  [Role.BROKER]: [
+    Permission.USERS_READ,
+    Permission.KYC_REVIEW,
+    Permission.KYC_APPROVE,
+    Permission.WALLET_READ,
+    Permission.TRADE_EXECUTE,
+    Permission.TRADE_CANCEL,
+    Permission.MARKET_READ,
+    Permission.REPORTS_VIEW,
+    Permission.REPORTS_EXPORT,
+    Permission.AUDIT_VIEW,
+    Permission.ADMIN_ACCESS,
+  ],
+
   [Role.SUPER_ADMIN]: Object.values(Permission),
 };

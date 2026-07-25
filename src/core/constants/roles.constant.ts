@@ -14,6 +14,7 @@ export enum Role {
   CUSTOMER_SUPPORT = 'CUSTOMER_SUPPORT',
   MARKET_OPERATIONS = 'MARKET_OPERATIONS',
   AUDITOR = 'AUDITOR',
+  BROKER = 'BROKER',
 }
 
 /** Roles that may authenticate through the staff/admin surface at all. */
@@ -24,6 +25,7 @@ export const STAFF_ROLES: readonly Role[] = [
   Role.CUSTOMER_SUPPORT,
   Role.MARKET_OPERATIONS,
   Role.AUDITOR,
+  Role.BROKER,
 ];
 
 export const IS_STAFF_ROLE = (role: Role): boolean => STAFF_ROLES.includes(role);

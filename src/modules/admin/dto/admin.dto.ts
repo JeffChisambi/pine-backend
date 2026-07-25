@@ -97,7 +97,7 @@ export class ListUsersQueryDto {
   @IsString()
   kycStatus?: string;
 
-  @ApiPropertyOptional({ enum: ['CUSTOMER', 'SUPER_ADMIN', 'COMPLIANCE_OFFICER', 'FINANCE_OFFICER', 'CUSTOMER_SUPPORT', 'MARKET_OPERATIONS', 'AUDITOR'] })
+  @ApiPropertyOptional({ enum: ['CUSTOMER', 'SUPER_ADMIN', 'COMPLIANCE_OFFICER', 'FINANCE_OFFICER', 'CUSTOMER_SUPPORT', 'MARKET_OPERATIONS', 'AUDITOR', 'BROKER'] })
   @IsOptional()
   @IsString()
   role?: string;
