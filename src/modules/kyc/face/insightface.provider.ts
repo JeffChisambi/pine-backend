@@ -109,14 +109,7 @@ export class InsightFaceProvider
 
     try {
       if (!fs.existsSync(this.modelDir)) {
-        const isProduction = process.env.NODE_ENV === 'production';
-        if (isProduction) {
-          throw new Error(
-            `Model directory not found: ${this.modelDir}. ` +
-            `Mount the InsightFace buffalo_l models at ${this.modelDir}.`,
-          );
-        }
-        this.logger.warn(
+        this.logger.error(
           `Model directory ${this.modelDir} not found. ` +
           `Face recognition unavailable until models are installed. ` +
           `Place det_10g.onnx and w600k_r50.onnx in ${this.modelDir}.`,
@@ -152,8 +145,7 @@ export class InsightFaceProvider
       );
     } catch (error) {
       this.ready = false;
-      this.logger.error({ err: error }, 'Failed to initialize InsightFace provider');
-      if (process.env.NODE_ENV === 'production') throw error;
+      this.logger.error({ err: error }, 'Failed to initialize InsightFace provider — face recognition unavailable');
     }
   }
 
