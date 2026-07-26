@@ -39,6 +39,12 @@ COPY --from=build --chown=pine:nodejs /app/prisma ./prisma
 COPY --from=build --chown=pine:nodejs /app/scripts ./scripts
 COPY --from=build --chown=pine:nodejs /app/package.json ./package.json
 
+# KYC: Tesseract OCR language data (Tesseract.js reads from CWD)
+COPY --from=build --chown=pine:nodejs /app/eng.traineddata ./eng.traineddata
+
+# KYC: InsightFace models directory (mount via docker-compose volume)
+RUN mkdir -p /app/models/insightface && chown pine:nodejs /app/models/insightface
+
 USER pine
 EXPOSE 3000
 
@@ -47,3 +53,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/main.js"]
+

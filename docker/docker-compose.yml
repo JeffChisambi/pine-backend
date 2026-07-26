@@ -88,8 +88,11 @@ services:
       STORAGE_ENDPOINT: http://minio:9000
       EMAIL_HOST: mailhog
       EMAIL_PORT: 1025
+      KYC_MODEL_DIR: /app/models/insightface
     ports:
       - '3000:3000'
+    volumes:
+      - ../models/insightface:/app/models/insightface:ro
     depends_on:
       postgres:
         condition: service_healthy
