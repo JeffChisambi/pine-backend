@@ -130,8 +130,8 @@ export class InsightFaceProvider
 
       await this.verifyChecksums();
 
-      const sessionOpts = new ort.SessionOptions();
-      sessionOpts.executionMode = 'sequential';
+      // onnxruntime-node v1.20+ accepts a plain options object (not a class)
+      const sessionOpts = { executionMode: 'sequential' };
 
       this.detectionSession = await ort.InferenceSession.create(detPath, sessionOpts);
       this.recognitionSession = await ort.InferenceSession.create(recPath, sessionOpts);
