@@ -91,6 +91,11 @@ export class PaymentsController {
       userId: user.id,
       amount: dto.amount,
       idempotencyKey: txRef,
+      metadata: {
+        purpose,
+        stockSymbol: dto.stockSymbol,
+        quantity: dto.quantity,
+      },
     });
 
     // Call PayChangu to create checkout
@@ -153,11 +158,11 @@ export class PaymentsController {
       const verification = await this.paychangu.verifyPayment(txRef);
 
       if (verification.data?.status === 'success') {
-        // Process the deposit by txRef (idempotency key stored on the transaction).
-        // We cannot use verification.data?.meta?.transactionId because PayChangu
-        // returns meta as an array of {key,value} pairs, not a plain object.
-        await this.walletService.processDepositByTxRef(txRef);
-        this.logger.log({ txRef }, 'Payment verified and deposit processed');
+        // Process the payment by txRef — branches on metadata.purpose:
+        //   DEPOSIT    → credit wallet only
+        //   BUY_SHARES → credit wallet, then submit buy order
+        await this.walletService.processPaymentByTxRef(txRef);
+        this.logger.log({ txRef }, 'Payment verified and processed');
 
         // Redirect back to the app via the HTTPS sentinel page
         return res.redirect(`${baseUrl}/v1/payments/app-return?status=success&tx_ref=${txRef}`);

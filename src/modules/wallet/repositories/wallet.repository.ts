@@ -62,6 +62,7 @@ export class WalletRepository {
     relatedOrderId?: string;
     relatedPaymentId?: string;
     description?: string;
+    metadata?: Record<string, any>;
   }) {
     return this.prisma.transaction.create({
       data: {
@@ -73,6 +74,7 @@ export class WalletRepository {
         relatedOrderId: data.relatedOrderId,
         relatedPaymentId: data.relatedPaymentId,
         description: data.description,
+        metadata: data.metadata ?? undefined,
         status: 'PENDING',
       },
     });

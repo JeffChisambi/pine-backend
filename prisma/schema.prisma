@@ -504,6 +504,9 @@ model Transaction {
   relatedOrderId  String?           @db.Uuid
   relatedPaymentId String?          @db.Uuid
   description     String?
+  /// Structured metadata for this transaction, e.g.
+  /// { purpose: "BUY_SHARES", stockSymbol: "NBM", quantity: 10 }
+  metadata        Json?
   failureReason   String?
   processedAt     DateTime?
   createdAt       DateTime          @default(now())

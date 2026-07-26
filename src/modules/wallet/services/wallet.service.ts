@@ -8,6 +8,7 @@ import { BalanceService } from './balance.service';
 import { ReservationService } from './reservation.service';
 import { StatementService } from './statement.service';
 import { FINANCIAL_TRANSACTION_OPTIONS } from '../../../infrastructure/database/prisma.service';
+import type { TradingService } from '../../trading/services/trading.service';
 
 /**
  * Wallet Service — the orchestrator.
@@ -34,6 +35,12 @@ const WALLET_UPDATED_EVENT = 'wallet.updated';
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
 
+  /**
+   * Lazily resolved TradingService — set by PaymentsModule after bootstrap
+   * to break the circular dependency (Wallet ↔ Trading).
+   */
+  private tradingService?: TradingService;
+
   constructor(
     private readonly repo: WalletRepository,
     private readonly calculator: WalletCalculator,
@@ -42,6 +49,11 @@ export class WalletService {
     private readonly statementService: StatementService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
+
+  /** Called by PaymentsModule to wire the TradingService without circular DI. */
+  setTradingService(tradingService: TradingService): void {
+    this.tradingService = tradingService;
+  }
 
   // ── API Methods ─────────────────────────────────────────────
 
@@ -87,6 +99,7 @@ export class WalletService {
     userId: string;
     amount: number;
     idempotencyKey?: string;
+    metadata?: Record<string, any>;
   }): Promise<{ transactionId: string; status: string }> {
     // Ensure wallet exists (auto-create on first deposit)
     const walletId = await this.balanceService.ensureWallet(params.userId);
@@ -121,10 +134,11 @@ export class WalletService {
       amount: new Decimal(params.amount),
       idempotencyKey: params.idempotencyKey,
       description: `Deposit of MWK ${params.amount.toLocaleString()}`,
+      metadata: params.metadata,
     });
 
     this.logger.log(
-      { userId: params.userId, amount: params.amount, txId: tx.id },
+      { userId: params.userId, amount: params.amount, txId: tx.id, metadata: params.metadata },
       'Deposit initiated',
     );
 
@@ -272,16 +286,20 @@ export class WalletService {
   }
 
   /**
-   * Look up a PENDING deposit transaction by its idempotency key (txRef) and
-   * process it. Used by the PayChangu callback where we have the txRef but
-   * cannot reliably extract the transactionId from PayChangu's meta array.
+   * Process a confirmed payment by txRef.
+   *
+   * Reads the transaction's `metadata.purpose` to decide what to do:
+   *   - `BUY_SHARES` → credit wallet, then submit a buy order through the
+   *     trading pipeline (the wallet now has funds to pass the balance check).
+   *   - `DEPOSIT` (or no purpose) → credit wallet only.
    */
-  async processDepositByTxRef(txRef: string): Promise<void> {
+  async processPaymentByTxRef(txRef: string): Promise<void> {
     const prisma = this.repo.prismaClient;
 
     // Find the PENDING deposit whose idempotencyKey matches the txRef
     const transaction = await prisma.transaction.findFirst({
       where: { idempotencyKey: txRef, type: 'DEPOSIT', status: 'PENDING' },
+      include: { wallet: true },
     });
 
     if (!transaction) {
@@ -289,7 +307,77 @@ export class WalletService {
       return;
     }
 
+    // Always credit the wallet first (the payment has been confirmed by PayChangu)
     await this.processDeposit(transaction.id);
+
+    // Check if this payment was for a stock purchase
+    const meta = transaction.metadata as Record<string, any> | null;
+    const purpose = meta?.purpose;
+
+    if (purpose === 'BUY_SHARES') {
+      const stockSymbol = meta?.stockSymbol as string | undefined;
+      const quantity = meta?.quantity as number | undefined;
+      const userId = transaction.wallet.userId;
+
+      if (!stockSymbol || !quantity) {
+        this.logger.error(
+          { txRef, meta },
+          'BUY_SHARES payment missing stockSymbol or quantity in metadata',
+        );
+        return;
+      }
+
+      if (!this.tradingService) {
+        this.logger.error(
+          { txRef },
+          'TradingService not wired — cannot process BUY_SHARES. Deposit credited but trade not executed.',
+        );
+        return;
+      }
+
+      try {
+        // Look up user KYC status for the trading pipeline
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { kycStatus: true },
+        });
+
+        this.logger.log(
+          { txRef, userId, stockSymbol, quantity },
+          'Processing BUY_SHARES — submitting buy order after deposit',
+        );
+
+        await this.tradingService.submitBuyOrder(
+          userId,
+          {
+            stockSymbol,
+            quantity,
+            orderType: 'MARKET',
+            idempotencyKey: `${txRef}-BUY`,
+          },
+          user?.kycStatus ?? 'APPROVED',
+        );
+
+        this.logger.log(
+          { txRef, userId, stockSymbol, quantity },
+          'BUY_SHARES order submitted successfully',
+        );
+      } catch (error) {
+        // The deposit has already been processed — the user has the money.
+        // Log the trade failure so it can be investigated / retried manually.
+        this.logger.error(
+          { err: error, txRef, userId, stockSymbol, quantity },
+          'BUY_SHARES trade failed after deposit was credited. User wallet has been credited but shares were not purchased.',
+        );
+      }
+    }
+  }
+
+  /**
+   * @deprecated Use processPaymentByTxRef instead — it handles both DEPOSIT and BUY_SHARES.
+   */
+  async processDepositByTxRef(txRef: string): Promise<void> {
+    return this.processPaymentByTxRef(txRef);
   }
 
   /**
