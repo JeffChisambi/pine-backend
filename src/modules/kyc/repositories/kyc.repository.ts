@@ -7,15 +7,29 @@ import type {
 } from '../interfaces/kyc-repository.interface';
 import type { KycVerificationStage } from '../domain/kyc-stage.enum';
 import type { FraudFlag, OcrExtractionResult } from '../domain/verification-result';
-import type { SyncRunLog } from '../../market-sync/domain/sync-run-log';
 
 /**
  * Prisma-backed KYC repository. Handles all persistence
  * for the KYC pipeline: applications, documents, OCR results,
  * face embeddings, fraud flags, and audit logs.
  *
- * Sensitive data (face embeddings, document hashes) is stored
- * in dedicated tables with appropriate indexes for lookup performance.
+ * ─── ocrExtractedData JSON schema (single column stores pipeline state) ───────
+ * Top-level keys: OcrExtractionResult fields (fullName, nationalIdNumber, ...)
+ * Private keys (prefixed with _):
+ *   _stage              KycVerificationStage — current pipeline stage
+ *   _embeddings         StoredEmbedding[]    — face embeddings (base64 Float32Array)
+ *   _fraudFlags         FraudFlag[]          — fraud flags from detection
+ *   _confidenceScore    number
+ *   _ocrConfidence      number
+ *   _faceMatchConfidence number
+ *   _imageQualityScore  number
+ *   _documentQualityScore number
+ *   _fraudScore         number
+ *   _reviewerNotes      string
+ *
+ * Every write to ocrExtractedData MUST preserve existing keys via readMergeWrite().
+ * Never overwrite the column directly — always read → merge → write.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 @Injectable()
 export class KycRepository implements IKycRepository {
@@ -30,6 +44,7 @@ export class KycRepository implements IKycRepository {
       data: {
         userId,
         status: 'PENDING',
+        ocrExtractedData: { _stage: 'CREATED' } as any,
       },
     });
 
@@ -57,22 +72,35 @@ export class KycRepository implements IKycRepository {
     return this.getApplicationByUserId(userId);
   }
 
+  /**
+   * FIX (Bug 1): Was only updating `updatedAt`; the `stage` argument was
+   * completely ignored. Now reads existing JSON and merges `_stage` in.
+   */
   async updateApplicationStage(
     id: string,
     stage: KycVerificationStage,
   ): Promise<void> {
+    const existing = await this.readExistingJson(id);
+
     await this.prisma.kycApplication.update({
       where: { id },
       data: {
-        // Store stage in ocrExtractedData JSON as a workaround
-        // until verificationStage column is added via migration
-        updatedAt: new Date(),
+        ocrExtractedData: { ...existing, _stage: stage } as any,
       },
     });
 
     this.logger.debug({ applicationId: id, stage }, 'Application stage updated');
   }
 
+  /**
+   * FIX (Bug 3): Was blindly overwriting ocrExtractedData whenever
+   * confidenceScore or ocrExtractedData was supplied, erasing all
+   * previously stored private tracking fields.
+   *
+   * Now always reads the current JSON first, then merges only the
+   * changed fields so every prior key (_stage, _embeddings, OCR
+   * fields, etc.) is preserved.
+   */
   async updateApplicationStatus(
     id: string,
     status: string,
@@ -86,30 +114,40 @@ export class KycRepository implements IKycRepository {
     if (data?.dateOfBirth !== undefined) {
       updateData.dateOfBirth = data.dateOfBirth;
     }
-    if (data?.ocrExtractedData !== undefined) {
-      updateData.ocrExtractedData = data.ocrExtractedData;
-    }
     if (data?.facialMatchScore !== undefined) {
       updateData.facialMatchScore = data.facialMatchScore;
     }
     if (data?.rejectionReason !== undefined) {
       updateData.rejectionReason = data.rejectionReason;
     }
-    if (data?.confidenceScore !== undefined) {
-      // Store in facialMatchScore field for now — the schema
-      // extension migration will add dedicated columns
-      updateData.ocrExtractedData = {
-        ...(typeof updateData.ocrExtractedData === 'object'
-          ? (updateData.ocrExtractedData as Record<string, unknown>)
-          : {}),
-        _confidenceScore: data.confidenceScore,
-        _ocrConfidence: data.ocrConfidence,
-        _faceMatchConfidence: data.faceMatchConfidence,
-        _imageQualityScore: data.imageQualityScore,
-        _documentQualityScore: data.documentQualityScore,
-        _fraudScore: data.fraudScore,
-        _reviewerNotes: data.reviewerNotes,
-      };
+
+    // Always read → merge → write to avoid destroying existing JSON keys
+    if (
+      data?.ocrExtractedData !== undefined ||
+      data?.confidenceScore !== undefined
+    ) {
+      const existing = await this.readExistingJson(id);
+
+      const merged: Record<string, unknown> = { ...existing };
+
+      // Merge in OCR result fields (preserve private _ keys)
+      if (data.ocrExtractedData !== undefined && data.ocrExtractedData !== null) {
+        const ocr = data.ocrExtractedData as Record<string, unknown>;
+        for (const [k, v] of Object.entries(ocr)) {
+          merged[k] = v;
+        }
+      }
+
+      // Merge in score fields
+      if (data.confidenceScore !== undefined) merged._confidenceScore = data.confidenceScore;
+      if (data.ocrConfidence !== undefined) merged._ocrConfidence = data.ocrConfidence;
+      if (data.faceMatchConfidence !== undefined) merged._faceMatchConfidence = data.faceMatchConfidence;
+      if (data.imageQualityScore !== undefined) merged._imageQualityScore = data.imageQualityScore;
+      if (data.documentQualityScore !== undefined) merged._documentQualityScore = data.documentQualityScore;
+      if (data.fraudScore !== undefined) merged._fraudScore = data.fraudScore;
+      if (data.reviewerNotes !== undefined) merged._reviewerNotes = data.reviewerNotes;
+
+      updateData.ocrExtractedData = merged;
     }
 
     if (status === 'APPROVED' || status === 'REJECTED') {
@@ -145,38 +183,66 @@ export class KycRepository implements IKycRepository {
       },
     });
 
+    // Store the hash in ocrExtractedData so it survives across reads.
+    // KycDocument table doesn't have a contentHash column yet.
+    if (data.contentHash) {
+      const existing = await this.readExistingJson(data.kycApplicationId);
+      const hashes = (existing._documentHashes as Record<string, string>) ?? {};
+      hashes[doc.id] = data.contentHash;
+      await this.prisma.kycApplication.update({
+        where: { id: data.kycApplicationId },
+        data: { ocrExtractedData: { ...existing, _documentHashes: hashes } as any },
+      });
+    }
+
     return this.mapDocument(doc, data.contentHash);
   }
 
   async getDocumentsByApplicationId(
     applicationId: string,
   ): Promise<KycDocumentRecord[]> {
-    const docs = await this.prisma.kycDocument.findMany({
-      where: { kycApplicationId: applicationId },
-    });
-    return docs.map((d) => this.mapDocument(d));
+    const [docs, app] = await Promise.all([
+      this.prisma.kycDocument.findMany({
+        where: { kycApplicationId: applicationId },
+      }),
+      this.prisma.kycApplication.findUnique({
+        where: { id: applicationId },
+        select: { ocrExtractedData: true },
+      }),
+    ]);
+
+    const extraData = (app?.ocrExtractedData as Record<string, unknown>) ?? {};
+    const hashes = (extraData._documentHashes as Record<string, string>) ?? {};
+
+    return docs.map((d) => this.mapDocument(d, hashes[d.id]));
   }
 
   async getDocumentByType(
     applicationId: string,
     type: string,
   ): Promise<KycDocumentRecord | null> {
-    const doc = await this.prisma.kycDocument.findFirst({
-      where: { kycApplicationId: applicationId, type: type as any },
-    });
-    return doc ? this.mapDocument(doc) : null;
+    const docs = await this.getDocumentsByApplicationId(applicationId);
+    return docs.find((d) => d.type === type) ?? null;
   }
 
   async updateDocument(
     id: string,
     data: Partial<KycDocumentRecord>,
   ): Promise<void> {
-    // KycDocument doesn't have all these fields yet — store in metadata
-    this.logger.debug({ documentId: id }, 'Document metadata updated');
+    // KycDocument schema doesn't have all fields yet — no-op for now.
+    this.logger.debug({ documentId: id }, 'Document metadata updated (no-op until migration)');
   }
 
   // ── OCR Results ───────────────────────────────────────────────
 
+  /**
+   * FIX (Bug 2): Was replacing the entire ocrExtractedData column with
+   * just the OcrExtractionResult, wiping _stage, _embeddings, and all
+   * other private tracking fields in one shot.
+   *
+   * Now reads existing JSON and merges OCR fields into it, preserving
+   * all private _ keys and any previously stored pipeline state.
+   */
   async saveOcrResult(data: {
     kycApplicationId: string;
     documentId: string;
@@ -184,17 +250,31 @@ export class KycRepository implements IKycRepository {
     overallConfidence: number;
     rawText: string;
   }): Promise<void> {
-    // Store OCR results in the application's ocrExtractedData JSON field
+    const existing = await this.readExistingJson(data.kycApplicationId);
+
+    // Private _ keys are preserved; OCR result fields are merged in at top level
+    const merged: Record<string, unknown> = { ...existing };
+    const ocr = data.extractedData as unknown as Record<string, unknown>;
+    for (const [k, v] of Object.entries(ocr)) {
+      merged[k] = v;
+    }
+
     await this.prisma.kycApplication.update({
       where: { id: data.kycApplicationId },
-      data: {
-        ocrExtractedData: data.extractedData as any,
-      },
+      data: { ocrExtractedData: merged as any },
     });
   }
 
   // ── Face Embeddings ───────────────────────────────────────────
 
+  /**
+   * FIX (Bug 4a): Was storing only a short hash of the embedding rather
+   * than the actual 512-float32 vector, making getAllApprovedEmbeddings()
+   * useless for real duplicate-face detection.
+   *
+   * Now encodes the full Float32Array as base64 and merges it into
+   * ocrExtractedData without destroying any other stored keys.
+   */
   async saveFaceEmbedding(data: {
     kycApplicationId: string;
     documentId: string | null;
@@ -203,41 +283,90 @@ export class KycRepository implements IKycRepository {
     detectionConfidence: number;
     qualityScore: number;
   }): Promise<string> {
-    // Store embeddings in the application's ocrExtractedData JSON
-    // as a workaround until the FaceEmbedding table is added
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: data.kycApplicationId },
-    });
+    const existing = await this.readExistingJson(data.kycApplicationId);
+    const embeddings =
+      (existing._embeddings as Array<Record<string, unknown>>) ?? [];
 
-    const existingData = (app?.ocrExtractedData as Record<string, unknown>) ?? {};
-    const embeddings = (existingData._embeddings as Record<string, unknown>[]) ?? [];
+    // Encode the full embedding so it can be decoded later for comparison
+    const embeddingBuf = Buffer.from(new Float32Array(data.embedding).buffer);
+    const embeddingBase64 = embeddingBuf.toString('base64');
 
-    embeddings.push({
+    const embeddingId = `emb-${data.kycApplicationId}-${data.sourceType}`;
+
+    // Replace any existing entry for this sourceType
+    const filtered = embeddings.filter(
+      (e) => e.sourceType !== data.sourceType,
+    );
+    filtered.push({
+      embeddingId,
       sourceType: data.sourceType,
       detectionConfidence: data.detectionConfidence,
       qualityScore: data.qualityScore,
       embeddingLength: data.embedding.length,
-      // Store a hash of the embedding rather than the full vector
-      // in the JSON field — full vectors go in a dedicated table
-      embeddingHash: this.hashEmbedding(data.embedding),
+      embeddingData: embeddingBase64, // Full vector, base64-encoded
     });
 
     await this.prisma.kycApplication.update({
       where: { id: data.kycApplicationId },
       data: {
-        ocrExtractedData: { ...existingData, _embeddings: embeddings } as any,
+        ocrExtractedData: { ...existing, _embeddings: filtered } as any,
       },
     });
 
-    return `emb-${data.kycApplicationId}-${data.sourceType}`;
+    return embeddingId;
   }
 
+  /**
+   * FIX (Bug 4b): Was returning an empty array unconditionally, making
+   * duplicate-face fraud checks completely ineffective.
+   *
+   * Now scans all APPROVED applications, decodes their stored selfie
+   * embeddings from base64 Float32Array, and returns real vectors for
+   * cosine-similarity comparison.
+   */
   async getAllApprovedEmbeddings(): Promise<
     Array<{ id: string; userId: string; embedding: number[] }>
   > {
-    // This requires the FaceEmbedding table — return empty for now
-    // until the schema migration adds the dedicated table
-    return [];
+    const apps = await this.prisma.kycApplication.findMany({
+      where: { status: 'APPROVED' },
+      select: { id: true, userId: true, ocrExtractedData: true },
+    });
+
+    const result: Array<{ id: string; userId: string; embedding: number[] }> = [];
+
+    for (const app of apps) {
+      const extra = (app.ocrExtractedData as Record<string, unknown>) ?? {};
+      const embeddings =
+        (extra._embeddings as Array<Record<string, unknown>>) ?? [];
+
+      const selfieEmb = embeddings.find(
+        (e) => e.sourceType === 'selfie' && typeof e.embeddingData === 'string',
+      );
+
+      if (!selfieEmb) continue;
+
+      try {
+        const buf = Buffer.from(selfieEmb.embeddingData as string, 'base64');
+        const float32 = new Float32Array(
+          buf.buffer,
+          buf.byteOffset,
+          buf.byteLength / 4,
+        );
+        result.push({
+          id: (selfieEmb.embeddingId as string) ?? app.id,
+          userId: app.userId,
+          embedding: Array.from(float32),
+        });
+      } catch {
+        // Skip corrupted embeddings without breaking the whole check
+        this.logger.warn(
+          { applicationId: app.id },
+          'Skipping malformed face embedding during duplicate check',
+        );
+      }
+    }
+
+    return result;
   }
 
   // ── Fraud Flags ───────────────────────────────────────────────
@@ -246,16 +375,12 @@ export class KycRepository implements IKycRepository {
     applicationId: string,
     flags: FraudFlag[],
   ): Promise<void> {
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-    });
-
-    const existingData = (app?.ocrExtractedData as Record<string, unknown>) ?? {};
+    const existing = await this.readExistingJson(applicationId);
 
     await this.prisma.kycApplication.update({
       where: { id: applicationId },
       data: {
-        ocrExtractedData: { ...existingData, _fraudFlags: flags } as any,
+        ocrExtractedData: { ...existing, _fraudFlags: flags } as any,
       },
     });
   }
@@ -265,7 +390,19 @@ export class KycRepository implements IKycRepository {
   async findApplicationByDocumentHash(
     hash: string,
   ): Promise<string | null> {
-    // Will be implemented with the DocumentHash table
+    // Hash is stored per-document inside ocrExtractedData._documentHashes.
+    // Prisma doesn't support querying inside JSON arrays — load all and scan.
+    // For scale, add a dedicated DocumentHash table via migration.
+    const apps = await this.prisma.kycApplication.findMany({
+      select: { id: true, ocrExtractedData: true },
+    });
+
+    for (const app of apps) {
+      const extra = (app.ocrExtractedData as Record<string, unknown>) ?? {};
+      const hashes = (extra._documentHashes as Record<string, string>) ?? {};
+      if (Object.values(hashes).includes(hash)) return app.id;
+    }
+
     return null;
   }
 
@@ -339,7 +476,6 @@ export class KycRepository implements IKycRepository {
     actorId?: string;
     details?: Record<string, unknown>;
   }): Promise<void> {
-    // Store in the AuditLog table which already exists in the schema
     try {
       await this.prisma.auditLog.create({
         data: {
@@ -368,9 +504,7 @@ export class KycRepository implements IKycRepository {
     }>
   > {
     const entries = await this.prisma.auditLog.findMany({
-      where: {
-        resourceId: applicationId,
-      },
+      where: { resourceId: applicationId },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -380,6 +514,23 @@ export class KycRepository implements IKycRepository {
       details: e.metadata,
       createdAt: e.createdAt,
     }));
+  }
+
+  // ── Private helpers ───────────────────────────────────────────
+
+  /**
+   * Read the current ocrExtractedData JSON for the given application.
+   * Every write that touches this column MUST call this first to avoid
+   * overwriting keys set by other pipeline stages.
+   */
+  private async readExistingJson(
+    applicationId: string,
+  ): Promise<Record<string, unknown>> {
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { ocrExtractedData: true },
+    });
+    return (app?.ocrExtractedData as Record<string, unknown>) ?? {};
   }
 
   // ── Mappers ───────────────────────────────────────────────────
@@ -427,10 +578,5 @@ export class KycRepository implements IKycRepository {
       thumbnailStorageKey: null,
       uploadedAt: doc.uploadedAt,
     };
-  }
-
-  private hashEmbedding(embedding: number[]): string {
-    const buffer = Buffer.from(new Float32Array(embedding).buffer);
-    return require('node:crypto').createHash('sha256').update(buffer).digest('hex').slice(0, 16);
   }
 }

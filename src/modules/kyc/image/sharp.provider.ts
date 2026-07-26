@@ -26,9 +26,13 @@ const MIN_HEIGHT = 480;
  * - Metadata extraction and stripping
  * - Quality analysis (blur, brightness, resolution)
  *
- * Sharp uses libvips under the hood — the fastest image processing
- * library available for Node.js, significantly faster than
- * ImageMagick/GraphicsMagick.
+ * FIX (Bug 12): `withMetadata({ orientation: undefined })` does NOT strip
+ * metadata — it preserves all EXIF and only overrides the orientation field
+ * with `undefined`, which Sharp silently ignores. To actually strip EXIF/GPS
+ * data (required for privacy), simply do NOT call `withMetadata()` at all;
+ * Sharp strips metadata by default before output. Conversely, to preserve
+ * metadata (e.g. for the admin review copy), call `withMetadata()` with no
+ * arguments. The `stripMetadata` option now controls this correctly.
  */
 @Injectable()
 export class SharpProvider implements IImageProcessingProvider {
@@ -50,7 +54,7 @@ export class SharpProvider implements IImageProcessingProvider {
 
     let pipeline = sharp(buffer);
 
-    // Auto-rotate based on EXIF orientation
+    // Auto-rotate based on EXIF orientation (always safe to do)
     if (autoRotate) {
       pipeline = pipeline.rotate();
     }
@@ -61,7 +65,7 @@ export class SharpProvider implements IImageProcessingProvider {
       withoutEnlargement: true,
     });
 
-    // Normalize contrast and brightness
+    // Normalize contrast and brightness (improves OCR accuracy on washed-out scans)
     if (normalize) {
       pipeline = pipeline.normalize();
     }
@@ -71,22 +75,17 @@ export class SharpProvider implements IImageProcessingProvider {
       pipeline = pipeline.median(3);
     }
 
-    // Moderate sharpening to improve OCR accuracy
-    pipeline = pipeline.sharpen({
-      sigma: 1.0,
-      m1: 1.0,
-      m2: 0.5,
-    });
+    // Moderate sharpening to improve OCR accuracy on slightly blurry images
+    pipeline = pipeline.sharpen({ sigma: 1.0, m1: 1.0, m2: 0.5 });
 
-    // Strip metadata (GPS, camera info) for privacy
-    if (stripMetadata) {
-      pipeline = pipeline.withMetadata({ orientation: undefined });
+    // FIX: Sharp strips metadata by default when encoding to JPEG.
+    // Calling withMetadata() opts back IN to keeping EXIF/GPS data.
+    // Only call it when the caller explicitly wants metadata preserved.
+    if (!stripMetadata) {
+      pipeline = pipeline.withMetadata();
     }
 
-    // Output as JPEG
-    return pipeline
-      .jpeg({ quality, mozjpeg: true })
-      .toBuffer();
+    return pipeline.jpeg({ quality, mozjpeg: true }).toBuffer();
   }
 
   async generateThumbnail(
@@ -94,7 +93,7 @@ export class SharpProvider implements IImageProcessingProvider {
     options: ThumbnailOptions,
   ): Promise<Buffer> {
     return sharp(buffer)
-      .rotate() // auto-rotate
+      .rotate()
       .resize(options.width, options.height, {
         fit: options.fit ?? 'cover',
         position: 'centre',
@@ -104,10 +103,7 @@ export class SharpProvider implements IImageProcessingProvider {
   }
 
   async toJpeg(buffer: Buffer, quality = DEFAULT_QUALITY): Promise<Buffer> {
-    return sharp(buffer)
-      .rotate()
-      .jpeg({ quality, mozjpeg: true })
-      .toBuffer();
+    return sharp(buffer).rotate().jpeg({ quality, mozjpeg: true }).toBuffer();
   }
 
   async getMetadata(buffer: Buffer): Promise<ImageMetadata> {
@@ -138,13 +134,13 @@ export class SharpProvider implements IImageProcessingProvider {
       );
     }
 
-    // ── Sharpness detection (via sharp stats) ───────────────────
-    // We use the standard deviation of pixel values as a proxy for
-    // sharpness. Low StdDev = flat/blurry, high = sharp/detailed.
+    // ── Sharpness detection ─────────────────────────────────────
+    // Standard deviation of greyscale pixel values as a proxy for sharpness.
+    // Low StdDev = flat/blurry image; high = sharp/detailed.
     const stats = await sharp(buffer).greyscale().stats();
     const stdDev = stats.channels[0]?.stdev ?? 0;
 
-    // Normalize StdDev to 0-1 range (empirical: 0-80 range typical)
+    // Normalize to 0–1 (empirical: 0–80 range typical for ID card photos)
     const sharpnessScore = Math.min(stdDev / 60, 1.0);
     if (sharpnessScore < 0.25) {
       failureReasons.push(
@@ -154,7 +150,6 @@ export class SharpProvider implements IImageProcessingProvider {
 
     // ── Brightness check ────────────────────────────────────────
     const mean = stats.channels[0]?.mean ?? 128;
-    // Ideal range: 80-200 (out of 255)
     let brightnessScore: number;
     if (mean < 40) {
       brightnessScore = mean / 40;
@@ -163,17 +158,13 @@ export class SharpProvider implements IImageProcessingProvider {
       brightnessScore = (255 - mean) / 35;
       failureReasons.push('Image overexposed');
     } else {
-      // Map 40-200 to 0.7-1.0, 200-220 to 1.0-0.7
-      brightnessScore = mean <= 200
-        ? 0.7 + ((mean - 40) / 160) * 0.3
-        : 1.0 - ((mean - 200) / 20) * 0.3;
+      brightnessScore =
+        mean <= 200 ? 0.7 + ((mean - 40) / 160) * 0.3 : 1.0 - ((mean - 200) / 20) * 0.3;
     }
 
     // ── Overall score ───────────────────────────────────────────
     const overallScore =
-      resolutionScore * 0.3 +
-      sharpnessScore * 0.5 +
-      brightnessScore * 0.2;
+      resolutionScore * 0.3 + sharpnessScore * 0.5 + brightnessScore * 0.2;
 
     const passesMinimum =
       resolutionScore >= 0.5 &&

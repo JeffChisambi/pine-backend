@@ -28,9 +28,6 @@ import { FaceMatchingService } from './face/face-matching.service';
 import { FraudDetectionService } from './fraud/fraud-detection.service';
 import { ConfidenceEngine } from './fraud/confidence-engine';
 
-// Domain
-import { MarketDataValidator } from '../market-sync/domain/market-data.validator';
-
 // Repository
 import { KycRepository } from './repositories/kyc.repository';
 
@@ -43,13 +40,15 @@ import { KycRepository } from './repositories/kyc.repository';
  *
  * Provider abstraction:
  *   - IMAGE_PROCESSING_PROVIDER → SharpProvider
- *   - OCR_PROVIDER → TesseractProvider
- *   - FACE_RECOGNITION_PROVIDER → InsightFaceProvider
- *   - KYC_REPOSITORY → KycRepository (Prisma)
+ *   - OCR_PROVIDER              → TesseractProvider  (eng.traineddata from repo root)
+ *   - FACE_RECOGNITION_PROVIDER → InsightFaceProvider (InsightFace buffalo_l ONNX)
+ *   - KYC_REPOSITORY            → KycRepository (Prisma)
  *
- * To swap any provider (e.g., add PaddleOCR, AWS Rekognition,
- * or a commercial KYC service), change the `useClass` binding —
- * no other code changes needed.
+ * To swap any provider, change the `useClass` binding — no other changes needed.
+ *
+ * FIX (Bug 13): Removed the erroneous import of MarketDataValidator from the
+ * market-sync module. It was present in the original module but never used,
+ * creating an unnecessary cross-module coupling.
  */
 @Module({
   imports: [
@@ -59,7 +58,7 @@ import { KycRepository } from './repositories/kyc.repository';
     MulterModule.register({
       storage: memoryStorage(),
       limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB
+        fileSize: 10 * 1024 * 1024, // 10 MB
         files: 1,
       },
     }),
@@ -67,28 +66,16 @@ import { KycRepository } from './repositories/kyc.repository';
   controllers: [KycController, KycAdminController],
   providers: [
     // ── Repository ──────────────────────────────────────────────
-    {
-      provide: KYC_REPOSITORY,
-      useClass: KycRepository,
-    },
+    { provide: KYC_REPOSITORY, useClass: KycRepository },
 
-    // ── Image Processing (Strategy) ─────────────────────────────
-    {
-      provide: IMAGE_PROCESSING_PROVIDER,
-      useClass: SharpProvider,
-    },
+    // ── Image Processing ────────────────────────────────────────
+    { provide: IMAGE_PROCESSING_PROVIDER, useClass: SharpProvider },
 
-    // ── OCR Engine (Strategy) ───────────────────────────────────
-    {
-      provide: OCR_PROVIDER,
-      useClass: TesseractProvider,
-    },
+    // ── OCR Engine ──────────────────────────────────────────────
+    { provide: OCR_PROVIDER, useClass: TesseractProvider },
 
-    // ── Face Recognition (Strategy) ─────────────────────────────
-    {
-      provide: FACE_RECOGNITION_PROVIDER,
-      useClass: InsightFaceProvider,
-    },
+    // ── Face Recognition ────────────────────────────────────────
+    { provide: FACE_RECOGNITION_PROVIDER, useClass: InsightFaceProvider },
 
     // ── Face Matching ───────────────────────────────────────────
     FaceMatchingService,

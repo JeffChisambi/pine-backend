@@ -1,0 +1,3 @@
+- [KYC ocrExtractedData JSON schema](kyc-ocr-json-schema.md) — single Prisma JSON column stores stage, embeddings, scores, fraud flags; every write must read-merge-write via readExistingJson()
+- [KYC face detection coordinate space](kyc-face-detection-coords.md) — detection and cropping must share the same 640×640 buffer; SCRFD uses (pixel−127.5)/128 normalization not pixel/255
+- [Malawi NRC format](malawi-nrc-format.md) — ID number is NNNNNN/NN/N (6/2/1 digits); OCR noise correction required before regex matching

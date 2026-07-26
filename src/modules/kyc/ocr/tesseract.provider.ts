@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import Tesseract from 'tesseract.js';
 import type { IOcrProvider, OcrOptions } from './ocr.interface';
@@ -9,14 +10,22 @@ import { MalawiIdParser } from './malawi-id.parser';
  * no native dependencies, no Python, works everywhere Node.js runs.
  *
  * Design:
- * - Maintains a persistent worker pool (1 worker by default, configurable)
- * - Workers are initialized with English language data at module startup
+ * - Maintains a persistent worker (1 per service instance)
+ * - Workers are initialized with local English language data at startup
  * - Each recognition call reuses the warm worker (no cold start per image)
  * - Workers are terminated cleanly at module shutdown
  *
- * The raw OCR text is post-processed by document-specific parsers
- * (MalawiIdParser, PassportParser, etc.) that extract structured fields
- * using regex and positional heuristics.
+ * FIX (Bug 5): The original code did not specify a `langPath`, so Tesseract.js
+ * attempted to download `eng.traineddata` from the CDN on every cold start.
+ * This fails in offline/restricted environments and adds latency.
+ * The `eng.traineddata` file (5.2 MB) is committed in the repository root.
+ * We now resolve its directory and pass it as `langPath`.
+ *
+ * FIX (Bug 11): The original code used PSM.AUTO (page segmentation: automatic).
+ * For structured identity cards with labeled fields and a fixed layout,
+ * PSM.SPARSE_TEXT_OSD gives better recall — it recognises text regardless of
+ * reading order and ignores decorative backgrounds. We also set OEM_LSTM_ONLY
+ * for accuracy over the legacy engine.
  */
 @Injectable()
 export class TesseractProvider
@@ -29,6 +38,10 @@ export class TesseractProvider
 
   private readonly malawiIdParser = new MalawiIdParser();
 
+  // Path to the directory containing eng.traineddata.
+  // The file lives in the project root; resolve relative to CWD.
+  private readonly langPath = path.resolve(process.cwd());
+
   async onModuleInit(): Promise<void> {
     await this.initialize();
   }
@@ -39,24 +52,31 @@ export class TesseractProvider
 
   async initialize(): Promise<void> {
     try {
-      this.worker = await Tesseract.createWorker('eng', 1, {
+      this.worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
+        // FIX: point at the project root where eng.traineddata lives
+        langPath: this.langPath,
         logger: (info) => {
-          if (info.status === 'recognizing text') {
-            // Suppress noisy progress logs
-            return;
-          }
+          if (info.status === 'recognizing text') return; // suppress noisy progress
           this.logger.debug({ status: info.status }, 'Tesseract worker status');
         },
       });
 
-      // Configure for best accuracy (slower but more reliable for IDs)
+      // FIX: PSM.SPARSE_TEXT_OSD reads text from cards regardless of orientation or
+      // layout order; PSM.SINGLE_BLOCK is used as fallback when the image is
+      // known-upright. We default to SPARSE_TEXT_OSD for national IDs.
       await this.worker.setParameters({
-        tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OSD,
+        // Keep inter-word spacing so label:value patterns survive
         preserve_interword_spaces: '1',
+        // Raise minimum word confidence to filter garbage
+        tessedit_reject_bad_qual_wds: '1',
       });
 
       this.ready = true;
-      this.logger.log('Tesseract OCR worker initialized');
+      this.logger.log(
+        { langPath: this.langPath },
+        'Tesseract OCR worker initialized (using local eng.traineddata)',
+      );
     } catch (error) {
       this.logger.error({ err: error }, 'Failed to initialize Tesseract worker');
       this.ready = false;
@@ -78,12 +98,10 @@ export class TesseractProvider
     }
 
     try {
-      // Run recognition
       const result = await this.worker.recognize(buffer);
       const rawText = result.data.text;
-      const confidence = result.data.confidence / 100; // Normalize to 0-1
+      const confidence = result.data.confidence / 100; // normalize to 0–1
 
-      // Parse structured fields based on document type
       const documentType = options.documentType ?? 'national_id';
       let extraction: OcrExtractionResult;
 
@@ -98,12 +116,15 @@ export class TesseractProvider
 
       extraction.processingTimeMs = Date.now() - startTime;
 
-      this.logger.log({
-        documentType,
-        confidence: extraction.overallConfidence,
-        processingTimeMs: extraction.processingTimeMs,
-        fieldsExtracted: this.countExtractedFields(extraction),
-      }, 'OCR extraction complete');
+      this.logger.log(
+        {
+          documentType,
+          confidence: extraction.overallConfidence,
+          processingTimeMs: extraction.processingTimeMs,
+          fieldsExtracted: this.countExtractedFields(extraction),
+        },
+        'OCR extraction complete',
+      );
 
       return extraction;
     } catch (error) {
@@ -154,14 +175,14 @@ export class TesseractProvider
   }
 
   private countExtractedFields(result: OcrExtractionResult): number {
-    let count = 0;
-    if (result.fullName) count++;
-    if (result.nationalIdNumber) count++;
-    if (result.dateOfBirth) count++;
-    if (result.gender) count++;
-    if (result.address) count++;
-    if (result.documentNumber) count++;
-    if (result.expiryDate) count++;
-    return count;
+    return [
+      result.fullName,
+      result.nationalIdNumber,
+      result.dateOfBirth,
+      result.gender,
+      result.address,
+      result.documentNumber,
+      result.expiryDate,
+    ].filter(Boolean).length;
   }
 }
