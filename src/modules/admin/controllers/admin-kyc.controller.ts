@@ -21,10 +21,15 @@ import {
   type IKycRepository,
 } from '../../kyc/interfaces/kyc-repository.interface';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import { StorageService } from '../../../infrastructure/storage/storage.service';
 
 /**
  * Admin KYC Controller — wraps existing KycAdminController logic
  * with proper RBAC permissions and audit logging.
+ *
+ * Critical behaviour:
+ *   - approve() / reject() update BOTH kycApplication.status AND user.kycStatus
+ *   - getReviewData() returns signed document URLs for the broker to view images
  */
 @ApiTags('admin', 'kyc')
 @ApiBearerAuth()
@@ -35,6 +40,7 @@ export class AdminKycController {
     private readonly kycRepo: IKycRepository,
     private readonly auditLogService: AuditLogService,
     private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
   ) {}
 
   @Get('queue')
@@ -91,7 +97,7 @@ export class AdminKycController {
 
   @Get(':applicationId')
   @RequirePermissions(Permission.KYC_REVIEW)
-  @ApiOperation({ summary: 'Full KYC application review data' })
+  @ApiOperation({ summary: 'Full KYC application review data with document images' })
   @ApiResponse({ status: 200, description: 'Application review workspace' })
   async getReviewData(@Param('applicationId') applicationId: string) {
     const app = await this.kycRepo.getApplicationById(applicationId);
@@ -101,6 +107,31 @@ export class AdminKycController {
 
     const documents = await this.kycRepo.getDocumentsByApplicationId(applicationId);
     const auditHistory = await this.kycRepo.getAuditHistory(applicationId);
+
+    // Generate signed download URLs for each document so the broker
+    // can view actual ID photos and selfies in the Kusata dashboard.
+    const documentsWithUrls = await Promise.all(
+      documents.map(async (doc) => {
+        let imageUrl: string | null = null;
+        try {
+          imageUrl = await this.storageService.getSignedDownloadUrl(
+            'kyc' as any,
+            doc.storageKey,
+          );
+        } catch {
+          // If the storage backend is down or the key is missing, gracefully
+          // degrade — the dashboard will show a placeholder instead.
+        }
+        return {
+          id: doc.id,
+          type: doc.type,
+          mimeType: doc.mimeType,
+          sizeBytes: doc.sizeBytes,
+          imageUrl,
+          uploadedAt: doc.uploadedAt.toISOString(),
+        };
+      }),
+    );
 
     return {
       application: {
@@ -122,13 +153,7 @@ export class AdminKycController {
         submittedAt: app.submittedAt.toISOString(),
         reviewedAt: app.reviewedAt?.toISOString() ?? null,
       },
-      documents: documents.map((doc) => ({
-        id: doc.id,
-        type: doc.type,
-        mimeType: doc.mimeType,
-        sizeBytes: doc.sizeBytes,
-        uploadedAt: doc.uploadedAt.toISOString(),
-      })),
+      documents: documentsWithUrls,
       auditHistory: auditHistory.map((entry) => ({
         action: entry.action,
         actorId: entry.actorId,
@@ -148,6 +173,7 @@ export class AdminKycController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    // 1. Record the review decision
     await this.kycRepo.recordReview({
       applicationId,
       reviewerId: admin.id,
@@ -155,10 +181,21 @@ export class AdminKycController {
       notes: body.notes,
     });
 
+    // 2. Update the KYC application status
     await this.kycRepo.updateApplicationStatus(applicationId, 'APPROVED', {
       reviewerNotes: body.notes ?? null,
     });
 
+    // 3. CRITICAL: Also update the User record so the user can trade
+    const app = await this.kycRepo.getApplicationById(applicationId);
+    if (app) {
+      await this.prisma.user.update({
+        where: { id: app.userId },
+        data: { kycStatus: 'APPROVED' },
+      });
+    }
+
+    // 4. Record audit entries
     await this.kycRepo.recordAuditEntry({
       kycApplicationId: applicationId,
       action: 'ADMIN_APPROVED',
@@ -189,6 +226,7 @@ export class AdminKycController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    // 1. Record the review decision
     await this.kycRepo.recordReview({
       applicationId,
       reviewerId: admin.id,
@@ -197,11 +235,22 @@ export class AdminKycController {
       notes: body.notes,
     });
 
+    // 2. Update the KYC application status
     await this.kycRepo.updateApplicationStatus(applicationId, 'REJECTED', {
       rejectionReason: body.reason,
       reviewerNotes: body.notes ?? null,
     });
 
+    // 3. CRITICAL: Also update the User record
+    const app = await this.kycRepo.getApplicationById(applicationId);
+    if (app) {
+      await this.prisma.user.update({
+        where: { id: app.userId },
+        data: { kycStatus: 'REJECTED' },
+      });
+    }
+
+    // 4. Record audit entries
     await this.kycRepo.recordAuditEntry({
       kycApplicationId: applicationId,
       action: 'ADMIN_REJECTED',
