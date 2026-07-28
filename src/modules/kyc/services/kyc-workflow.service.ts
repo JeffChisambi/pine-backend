@@ -29,6 +29,7 @@ import { FaceMatchingService } from '../face/face-matching.service';
 import { FraudDetectionService } from '../fraud/fraud-detection.service';
 import { ConfidenceEngine } from '../fraud/confidence-engine';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { validateUploadedFile } from '../../../infrastructure/storage/file-validation.util';
 
 const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
@@ -62,6 +63,7 @@ export class KycWorkflowService {
     private readonly fraudDetection: FraudDetectionService,
     private readonly confidenceEngine: ConfidenceEngine,
     private readonly storageService: StorageService,
+    private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -194,6 +196,31 @@ export class KycWorkflowService {
       throw new Error('Both national ID and selfie must be uploaded before processing');
     }
 
+    // ── CRITICAL: Immediately mark as submitted/under review ──────
+    // This guarantees the application appears in the Kusata broker
+    // dashboard even if the AI pipeline below crashes.
+    await this.repository.updateApplicationStatus(applicationId, 'PENDING');
+    // Also update user.kycStatus so the mobile app shows "Under Review"
+    await this.updateUserKycStatus(userId, 'PENDING');
+
+    await this.repository.recordAuditEntry({
+      kycApplicationId: applicationId,
+      action: 'KYC_SUBMITTED_FOR_REVIEW',
+      actorId: userId,
+      details: {
+        hasIdDocument: true,
+        hasSelfie: true,
+      },
+    });
+
+    this.eventEmitter.emit('kyc.submitted', {
+      applicationId,
+      userId,
+    });
+
+    // ── AI verification pipeline (best-effort) ───────────────────
+    // If any AI step fails, the application remains PENDING for
+    // manual broker review in Kusata. Documents are already stored.
     try {
       // ── Stage: ENHANCING ──────────────────────────────────────
       await this.repository.updateApplicationStage(
@@ -205,7 +232,6 @@ export class KycWorkflowService {
       const selfieUrl = await this.storageService.getSignedDownloadUrl('kyc', selfieDoc.storageKey);
 
       // For processing we need the raw buffer — download from storage
-      // In a real deployment this would use a streaming approach
       const idBuffer = await this.downloadBuffer(idUrl);
       const selfieBuffer = await this.downloadBuffer(selfieUrl);
 
@@ -409,6 +435,11 @@ export class KycWorkflowService {
         fraudScore: fraudResult.riskScore,
       });
 
+      // Also update user.kycStatus if auto-approved or auto-rejected
+      if (finalStatus === 'APPROVED' || finalStatus === 'REJECTED') {
+        await this.updateUserKycStatus(userId, finalStatus);
+      }
+
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.COMPLETE,
@@ -471,6 +502,8 @@ export class KycWorkflowService {
 
       return result;
     } catch (error) {
+      // AI pipeline failed — but the application stays PENDING.
+      // The broker can manually review it in Kusata.
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.FAILED,
@@ -478,25 +511,60 @@ export class KycWorkflowService {
 
       await this.repository.recordAuditEntry({
         kycApplicationId: applicationId,
-        action: 'VERIFICATION_FAILED',
+        action: 'VERIFICATION_PIPELINE_FAILED',
         actorId: userId,
         details: {
           error: error instanceof Error ? error.message : String(error),
+          note: 'Application remains PENDING for manual broker review',
         },
       });
 
-      this.logger.error(
+      this.logger.warn(
         { err: error, applicationId },
-        'KYC verification pipeline failed',
+        'KYC AI pipeline failed — application stays PENDING for manual review',
       );
 
-      throw error;
+      // Return a MANUAL_REVIEW result instead of throwing
+      return {
+        applicationId,
+        ocrResult: null,
+        faceMatchResult: null as any,
+        idImageQuality: null as any,
+        selfieImageQuality: null as any,
+        fraudFlags: [],
+        confidenceScore: 0,
+        scores: {
+          ocr: 0,
+          faceMatch: 0,
+          imageQuality: 0,
+          documentQuality: 0,
+          fraudRisk: 0,
+        },
+        decision: 'MANUAL_REVIEW',
+        decisionReason: 'AI pipeline unavailable — queued for manual broker review',
+        totalProcessingTimeMs: Date.now() - startTime,
+      };
     }
   }
 
   // ──────────────────────────────────────────────────────────────
   // Helpers
   // ──────────────────────────────────────────────────────────────
+
+  /**
+   * Update user.kycStatus on the User record.
+   * This is what the mobile app and trading validation check.
+   */
+  private async updateUserKycStatus(
+    userId: string,
+    status: 'PENDING' | 'APPROVED' | 'REJECTED',
+  ): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { kycStatus: status },
+    });
+    this.logger.log({ userId, kycStatus: status }, 'User kycStatus updated');
+  }
 
   private async downloadBuffer(url: string): Promise<Buffer> {
     const response = await fetch(url);
