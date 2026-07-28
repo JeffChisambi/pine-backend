@@ -10,14 +10,18 @@ import { calculateTradingFees } from '../domain/trading-fee.calculator';
  * Sequential validation — fails fast at the first violation.
  * Every check returns void on success or throws BadRequestException.
  *
+ * NOTE: Market-hours check is intentionally NOT part of validation.
+ * Orders are always accepted and queued. When the market is closed
+ * the pipeline parks the order at SUBMITTED so the broker can
+ * execute it from the Kusata dashboard when the market opens.
+ *
  * Gate order:
- * 1. Market open?
- * 2. Stock active?
- * 3. User KYC approved?
- * 4. Account not frozen?
- * 5. Sufficient funds (BUY) or sufficient shares (SELL)?
- * 6. Minimum order size?
- * 7. Order price valid? (LIMIT orders)
+ * 1. Stock active?
+ * 2. User KYC approved?
+ * 3. Account not frozen?
+ * 4. Sufficient funds (BUY) or sufficient shares (SELL)?
+ * 5. Minimum order size?
+ * 6. Order price valid? (LIMIT orders)
  */
 @Injectable()
 export class ValidationService {
@@ -35,6 +39,14 @@ export class ValidationService {
    * Run all pre-trade validations. Throws BadRequestException with
    * a descriptive message on the first failed check.
    */
+  /**
+   * Returns whether the market is currently open.
+   * Callers use this to decide between immediate execution and queuing.
+   */
+  async checkIsMarketOpen(): Promise<boolean> {
+    return this.marketService.isMarketOpen();
+  }
+
   async validate(order: {
     userId: string;
     stockId: string;
@@ -44,31 +56,28 @@ export class ValidationService {
     limitPrice?: Decimal | null;
     userKycStatus: string;
   }): Promise<{ estimatedPrice: Decimal; fees: ReturnType<typeof calculateTradingFees> }> {
-    // 1. Market open?
-    await this.checkMarketOpen();
-
-    // 2. Stock active?
+    // 1. Stock active?
     const stock = await this.checkStockActive(order.stockId);
 
-    // 3. User KYC approved?
+    // 2. User KYC approved?
     this.checkKycStatus(order.userKycStatus);
 
-    // 4. Account not frozen?
+    // 3. Account not frozen?
     await this.checkAccountNotFrozen(order.userId);
 
-    // 5. Minimum order size
+    // 4. Minimum order size
     this.checkMinimumQuantity(order.quantity);
 
-    // 6. Get estimated price
+    // 5. Get estimated price
     const price = this.getOrderPrice(order.type, order.limitPrice, stock.latestPrice);
 
-    // 7. Calculate fees and total cost
+    // 6. Calculate fees and total cost
     const fees = calculateTradingFees(price, order.quantity, order.side);
 
-    // 8. Check max order value
+    // 7. Check max order value
     this.checkMaxOrderValue(fees.grossValue);
 
-    // 9. Sufficient funds (BUY) or sufficient shares (SELL)?
+    // 8. Sufficient funds (BUY) or sufficient shares (SELL)?
     if (order.side === 'BUY') {
       await this.checkSufficientFunds(order.userId, fees.totalCost);
     } else {
@@ -83,14 +92,7 @@ export class ValidationService {
     return { estimatedPrice: price, fees };
   }
 
-  private async checkMarketOpen(): Promise<void> {
-    const isOpen = await this.marketService.isMarketOpen();
-    if (!isOpen) {
-      throw new BadRequestException(
-        'Market is currently closed. MSE trading hours are 10:00 AM — 2:00 PM CAT, Monday — Friday.',
-      );
-    }
-  }
+
 
   private async checkStockActive(stockId: string): Promise<{ latestPrice: Decimal }> {
     const stock = await this.repo.findStockById(stockId);

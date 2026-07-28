@@ -160,6 +160,52 @@ export class TradingService {
         },
       });
 
+      // ── Market-hours check ──────────────────────────────────
+      // Unlike validation errors (wrong KYC, frozen wallet etc.), a closed
+      // market is NOT a reason to reject the order. We queue it at SUBMITTED
+      // so the broker can see and execute it from Kusata when the market opens.
+      const marketOpen = await this.validationService.checkIsMarketOpen();
+      if (!marketOpen) {
+        assertTransition(
+          OrderLifecycleStatus.VALIDATED,
+          OrderLifecycleStatus.SUBMITTED,
+        );
+        await this.repo.updateOrderStatus(order.id, OrderLifecycleStatus.SUBMITTED, {
+          submittedAt: new Date(),
+        });
+
+        await this.repo.createTradeAudit({
+          orderId: order.id,
+          userId,
+          action: 'ORDER_QUEUED_MARKET_CLOSED',
+          fromStatus: OrderLifecycleStatus.VALIDATED,
+          toStatus: OrderLifecycleStatus.SUBMITTED,
+          metadata: {
+            reason: 'Market closed — order queued for broker execution during next session',
+            estimatedPrice: estimatedPrice.toNumber(),
+          },
+        });
+
+        const durationMs = Date.now() - startTime;
+        this.logger.log(
+          { orderId: order.id, durationMs },
+          'Order queued — market is closed, pending broker execution',
+        );
+
+        return {
+          orderId: order.id,
+          status: OrderLifecycleStatus.SUBMITTED,
+          queued: true,
+          message: 'Your order has been queued and will be executed when the market opens (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).',
+          order: await this.repo.findOrderById(order.id).then((o) => this.formatOrderResponse(o)),
+          fees: {
+            totalFees: fees.totalFees.toNumber(),
+            totalCost: fees.totalCost.toNumber(),
+          },
+          pipelineDurationMs: durationMs,
+        };
+      }
+
       // ── Step 3: Risk checks ─────────────────────────────────
       await this.riskService.check({
         userId,
