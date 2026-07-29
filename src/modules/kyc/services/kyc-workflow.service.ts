@@ -101,7 +101,7 @@ export class KycWorkflowService {
   async uploadDocument(
     applicationId: string,
     userId: string,
-    documentType: 'NATIONAL_ID' | 'SELFIE' | 'PROOF_OF_RESIDENCE',
+    documentType: 'NATIONAL_ID' | 'NATIONAL_ID_BACK' | 'SELFIE' | 'PROOF_OF_RESIDENCE',
     fileName: string,
     mimeType: string,
     buffer: Buffer,
@@ -152,10 +152,12 @@ export class KycWorkflowService {
     // Update application stage
     const stageMap: Record<string, KycVerificationStage> = {
       NATIONAL_ID: KycVerificationStage.ID_UPLOADED,
+      NATIONAL_ID_BACK: KycVerificationStage.ID_UPLOADED,
       SELFIE: KycVerificationStage.SELFIE_UPLOADED,
-      PROOF_OF_RESIDENCE: KycVerificationStage.ID_UPLOADED, // Keep at ID_UPLOADED stage
+      PROOF_OF_RESIDENCE: KycVerificationStage.ID_UPLOADED,
     };
     const newStage = stageMap[documentType] ?? KycVerificationStage.ID_UPLOADED;
+
 
     await this.repository.updateApplicationStage(applicationId, newStage);
 
@@ -560,6 +562,17 @@ export class KycWorkflowService {
   // ──────────────────────────────────────────────────────────────
 
   /**
+   * Public entry point for the admin controller to sync user.kycStatus
+   * after a broker manually approves or rejects an application.
+   */
+  async setUserKycStatus(
+    userId: string,
+    status: 'PENDING' | 'APPROVED' | 'REJECTED',
+  ): Promise<void> {
+    return this.updateUserKycStatus(userId, status);
+  }
+
+  /**
    * Update user.kycStatus on the User record.
    * This is what the mobile app and trading validation check.
    */
@@ -573,6 +586,7 @@ export class KycWorkflowService {
     });
     this.logger.log({ userId, kycStatus: status }, 'User kycStatus updated');
   }
+
 
   private async downloadBuffer(url: string): Promise<Buffer> {
     const response = await fetch(url);

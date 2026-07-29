@@ -1,0 +1,2 @@
+-- Migration: Add NATIONAL_ID_BACK to KycDocumentType enum
+ALTER TYPE "KycDocumentType" ADD VALUE IF NOT EXISTS 'NATIONAL_ID_BACK' AFTER 'NATIONAL_ID';

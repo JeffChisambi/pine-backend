@@ -46,6 +46,7 @@ enum KycStatus {
 
 enum KycDocumentType {
   NATIONAL_ID
+  NATIONAL_ID_BACK
   PASSPORT
   DRIVERS_LICENSE
   PROOF_OF_RESIDENCE

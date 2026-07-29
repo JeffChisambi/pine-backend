@@ -7,6 +7,7 @@ import {
   Inject,
   Post,
   Query,
+  Param,
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AdminDecisionDto } from '../dto/admin-decision.dto';
@@ -14,12 +15,20 @@ import {
   KYC_REPOSITORY,
   type IKycRepository,
 } from '../interfaces/kyc-repository.interface';
-import { KycVerificationStage } from '../domain/kyc-stage.enum';
+import { StorageService } from '../../../infrastructure/storage/storage.service';
+import { KycWorkflowService } from '../services/kyc-workflow.service';
 
 /**
  * Admin-facing KYC endpoints for manual review workflows.
- * Protected by `@Roles(Role.COMPLIANCE_OFFICER, Role.SUPER_ADMIN)`
- * in Phase 2 (when AuthModule is implemented).
+ *
+ * Routes (all prefixed /admin/kyc via global v1 prefix → /v1/admin/kyc):
+ *   GET  /queue               — paginated application queue
+ *   GET  /counts              — counts per status
+ *   GET  /:id                 — full detail with signed image URLs + OCR data
+ *   POST /:id/approve         — approve (Kusata path-param style)
+ *   POST /:id/reject          — reject  (Kusata path-param style)
+ *   POST /approve             — [legacy] body-based approve
+ *   POST /reject              — [legacy] body-based reject
  */
 @ApiTags('admin', 'kyc')
 @Controller('admin/kyc')
@@ -27,50 +36,81 @@ export class KycAdminController {
   constructor(
     @Inject(KYC_REPOSITORY)
     private readonly repository: IKycRepository,
+    private readonly storageService: StorageService,
+    private readonly workflowService: KycWorkflowService,
   ) {}
 
-  @Get('pending')
-  @ApiOperation({
-    summary: 'List applications pending manual review',
-    description: 'Returns applications that scored MANUAL_REVIEW from the confidence engine.',
-  })
+  // ── Queue ─────────────────────────────────────────────────────────────────
+
+  @Get('queue')
+  @ApiOperation({ summary: 'Paginated KYC application queue' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'cursor', required: false, type: String })
-  @ApiResponse({ status: 200, description: 'Pending applications' })
-  async getPending(
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiResponse({ status: 200 })
+  async queue(
     @Query('limit') limit?: string,
-    @Query('cursor') cursor?: string,
+    @Query('page') page?: string,
+    @Query('status') status?: string,
   ) {
-    const parsedLimit = Math.min(parseInt(limit ?? '20', 10) || 20, 50);
-    const applications = await this.repository.getPendingApplications(
-      parsedLimit,
-      cursor,
-    );
+    const parsedLimit = Math.min(parseInt(limit ?? '50', 10) || 50, 100);
+    const parsedPage = Math.max(parseInt(page ?? '1', 10) || 1, 1);
+
+    const result = await this.repository.getQueuePage({
+      page: parsedPage,
+      limit: parsedLimit,
+      status,
+    });
 
     return {
-      applications: applications.map((app) => ({
+      applications: result.applications.map((app) => ({
         id: app.id,
         userId: app.userId,
+        userName: (app.firstName && app.lastName)
+          ? `${app.firstName} ${app.lastName}`
+          : 'Unknown',
+        userEmail: app.email ?? null,
+        userPhone: app.phone ?? '',
         status: app.status,
-        verificationStage: app.verificationStage,
-        confidenceScore: app.confidenceScore,
+        nationalIdNumber: app.nationalIdNumber,
+        city: app.city ?? null,
         facialMatchScore: app.facialMatchScore,
         ocrConfidence: app.ocrConfidence,
-        nationalIdNumber: app.nationalIdNumber,
+        livenessScore: app.livenessScore ?? null,
+        documentType: app.documentType ?? 'NATIONAL_ID',
+        tier: app.tier ?? null,
+        reviewDecision: app.reviewDecision ?? null,
+        reviewerName: app.reviewerName ?? null,
+        reviewNotes: app.reviewerNotes,
+        riskFlags: app.riskFlags ?? [],
+        emailVerified: app.emailVerified ?? null,
+        phoneVerified: app.phoneVerified ?? null,
         submittedAt: app.submittedAt.toISOString(),
+        reviewedAt: app.reviewedAt?.toISOString() ?? null,
+        confidenceScore: app.confidenceScore,
       })),
-      count: applications.length,
+      count: result.applications.length,
+      total: result.total,
+      page: result.page,
+      totalPages: result.totalPages,
     };
   }
 
-  @Get('review')
-  @ApiOperation({
-    summary: 'Get full application details for manual review',
-    description: 'Returns all verification data: images, OCR output, similarity score, fraud flags.',
-  })
-  @ApiQuery({ name: 'applicationId', required: true, type: String })
-  @ApiResponse({ status: 200, description: 'Application review data' })
-  async getReviewData(@Query('applicationId') applicationId: string) {
+  // ── Counts ────────────────────────────────────────────────────────────────
+
+  @Get('counts')
+  @ApiOperation({ summary: 'Aggregate KYC counts per status' })
+  @ApiResponse({ status: 200 })
+  async counts() {
+    return this.repository.getCountsByStatus();
+  }
+
+  // ── Single Application Detail ─────────────────────────────────────────────
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Full application detail with signed image URLs + OCR' })
+  @ApiResponse({ status: 200 })
+  async getDetail(@Param('id') applicationId: string) {
     const app = await this.repository.getApplicationById(applicationId);
     if (!app) {
       throw new Error('Application not found');
@@ -78,6 +118,45 @@ export class KycAdminController {
 
     const documents = await this.repository.getDocumentsByApplicationId(applicationId);
     const auditHistory = await this.repository.getAuditHistory(applicationId);
+
+    // Generate signed URLs for all documents
+    const docsWithUrls = await Promise.all(
+      documents.map(async (doc) => {
+        let imageUrl: string | null = null;
+        try {
+          imageUrl = await this.storageService.getSignedDownloadUrl(
+            doc.storageBucket as 'kyc',
+            doc.storageKey,
+          );
+        } catch {
+          imageUrl = null;
+        }
+        return {
+          id: doc.id,
+          type: doc.type,
+          imageUrl,
+          mimeType: doc.mimeType,
+          sizeBytes: doc.sizeBytes,
+          uploadedAt: doc.uploadedAt.toISOString(),
+        };
+      }),
+    );
+
+    // Normalise OCR extracted data — backend stores raw OCR objects
+    // with nested { value, confidence } shapes; Kusata expects flat strings
+    const raw = app.ocrExtractedData as Record<string, any> | null;
+    const ocrExtractedData = raw
+      ? {
+          fullName: raw.fullName?.value ?? raw.fullName ?? null,
+          dateOfBirth: raw.dateOfBirth?.value ?? raw.dateOfBirth ?? null,
+          nationalId: raw.nationalIdNumber?.value ?? raw.nationalIdNumber ?? app.nationalIdNumber ?? null,
+          documentNumber: raw.nationalIdNumber?.value ?? raw.nationalIdNumber ?? app.nationalIdNumber ?? null,
+          expiryDate: raw.expiryDate?.value ?? raw.expiryDate ?? null,
+          address: raw.address?.value ?? raw.address ?? null,
+          nationality: raw.nationality?.value ?? raw.nationality ?? null,
+          gender: raw.gender?.value ?? raw.gender ?? null,
+        }
+      : null;
 
     return {
       application: {
@@ -94,19 +173,12 @@ export class KycAdminController {
         imageQualityScore: app.imageQualityScore,
         documentQualityScore: app.documentQualityScore,
         fraudScore: app.fraudScore,
-        ocrExtractedData: app.ocrExtractedData,
+        ocrExtractedData,
         reviewerNotes: app.reviewerNotes,
         submittedAt: app.submittedAt.toISOString(),
         reviewedAt: app.reviewedAt?.toISOString() ?? null,
       },
-      documents: documents.map((doc) => ({
-        id: doc.id,
-        type: doc.type,
-        mimeType: doc.mimeType,
-        sizeBytes: doc.sizeBytes,
-        uploadedAt: doc.uploadedAt.toISOString(),
-        // NOTE: Storage keys are never exposed — admin uses signed URLs
-      })),
+      documents: docsWithUrls,
       auditHistory: auditHistory.map((entry) => ({
         action: entry.action,
         actorId: entry.actorId,
@@ -116,77 +188,101 @@ export class KycAdminController {
     };
   }
 
-  @Post('approve')
+  // ── Approve (path-param — matches Kusata hook) ────────────────────────────
+
+  @Post(':id/approve')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Approve a KYC application' })
-  @ApiResponse({ status: 200, description: 'Application approved' })
-  async approve(@Body() dto: AdminDecisionDto) {
-    if (dto.decision !== 'APPROVED') {
-      throw new Error('Use /admin/kyc/reject for rejections');
-    }
-
+  @ApiResponse({ status: 200 })
+  async approveById(
+    @Param('id') applicationId: string,
+    @Body() body: { notes?: string },
+  ) {
     await this.repository.recordReview({
-      applicationId: dto.applicationId,
-      reviewerId: 'admin', // TODO: extract from JWT in Phase 2
-      reviewerName: 'System', // TODO: populate from JWT in Phase 2
+      applicationId,
+      reviewerId: 'admin',
+      reviewerName: 'Compliance Officer',
       decision: 'APPROVED',
-      notes: dto.notes,
+      notes: body.notes,
     });
 
-    await this.repository.updateApplicationStatus(
-      dto.applicationId,
-      'APPROVED',
-      { reviewerNotes: dto.notes ?? null },
-    );
+    await this.repository.updateApplicationStatus(applicationId, 'APPROVED', {
+      reviewerNotes: body.notes ?? null,
+    });
 
     await this.repository.recordAuditEntry({
-      kycApplicationId: dto.applicationId,
+      kycApplicationId: applicationId,
       action: 'ADMIN_APPROVED',
       actorId: 'admin',
-      details: { notes: dto.notes },
+      details: { notes: body.notes },
     });
 
-    return { message: 'Application approved', applicationId: dto.applicationId };
+    // Sync user.kycStatus via the workflow service helper
+    const app = await this.repository.getApplicationById(applicationId);
+    if (app) {
+      await this.workflowService.setUserKycStatus(app.userId, 'APPROVED');
+    }
+
+    return { message: 'Application approved', applicationId };
+  }
+
+  // ── Reject (path-param — matches Kusata hook) ─────────────────────────────
+
+  @Post(':id/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reject a KYC application' })
+  @ApiResponse({ status: 200 })
+  async rejectById(
+    @Param('id') applicationId: string,
+    @Body() body: { reason: string; notes?: string },
+  ) {
+    if (!body.reason) throw new Error('Rejection reason is required');
+
+    await this.repository.recordReview({
+      applicationId,
+      reviewerId: 'admin',
+      reviewerName: 'Compliance Officer',
+      decision: 'REJECTED',
+      reason: body.reason,
+      notes: body.notes,
+    });
+
+    await this.repository.updateApplicationStatus(applicationId, 'REJECTED', {
+      rejectionReason: body.reason,
+      reviewerNotes: body.notes ?? null,
+    });
+
+    await this.repository.recordAuditEntry({
+      kycApplicationId: applicationId,
+      action: 'ADMIN_REJECTED',
+      actorId: 'admin',
+      details: { reason: body.reason, notes: body.notes },
+    });
+
+    const app = await this.repository.getApplicationById(applicationId);
+    if (app) {
+      await this.workflowService.setUserKycStatus(app.userId, 'REJECTED');
+    }
+
+    return { message: 'Application rejected', applicationId };
+  }
+
+  // ── Legacy body-based routes (backward compat) ────────────────────────────
+
+  @Post('approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: '[Legacy] Approve — prefer /:id/approve' })
+  async approve(@Body() dto: AdminDecisionDto) {
+    return this.approveById(dto.applicationId, { notes: dto.notes });
   }
 
   @Post('reject')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reject a KYC application' })
-  @ApiResponse({ status: 200, description: 'Application rejected' })
+  @ApiOperation({ summary: '[Legacy] Reject — prefer /:id/reject' })
   async reject(@Body() dto: AdminDecisionDto) {
-    if (dto.decision !== 'REJECTED') {
-      throw new Error('Use /admin/kyc/approve for approvals');
-    }
-
-    if (!dto.reason) {
-      throw new Error('Rejection reason is required');
-    }
-
-    await this.repository.recordReview({
-      applicationId: dto.applicationId,
-      reviewerId: 'admin',
-      reviewerName: 'System', // TODO: populate from JWT in Phase 2
-      decision: 'REJECTED',
-      reason: dto.reason,
+    return this.rejectById(dto.applicationId, {
+      reason: dto.reason ?? 'No reason provided',
       notes: dto.notes,
     });
-
-    await this.repository.updateApplicationStatus(
-      dto.applicationId,
-      'REJECTED',
-      {
-        rejectionReason: dto.reason,
-        reviewerNotes: dto.notes ?? null,
-      },
-    );
-
-    await this.repository.recordAuditEntry({
-      kycApplicationId: dto.applicationId,
-      action: 'ADMIN_REJECTED',
-      actorId: 'admin',
-      details: { reason: dto.reason, notes: dto.notes },
-    });
-
-    return { message: 'Application rejected', applicationId: dto.applicationId };
   }
 }

@@ -93,6 +93,27 @@ export class KycController {
     );
   }
 
+  @Post('upload-id-back')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload back side of national ID' })
+  @ApiResponse({ status: 200, description: 'ID back uploaded' })
+  async uploadIdBack(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('applicationId') applicationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ documentId: string }> {
+    return this.workflowService.uploadDocument(
+      applicationId,
+      user.id,
+      'NATIONAL_ID_BACK',
+      file.originalname,
+      file.mimetype,
+      file.buffer,
+    );
+  }
+
   @Post('upload-proof-of-residency')
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(FileInterceptor('file'))
@@ -113,6 +134,7 @@ export class KycController {
       file.buffer,
     );
   }
+
 
   @Post('process')
   @HttpCode(HttpStatus.ACCEPTED)
