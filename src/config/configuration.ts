@@ -81,6 +81,7 @@ export const rateLimitConfig = registerAs('rateLimit', () => ({
 export const storageConfig = registerAs('storage', () => ({
   provider: process.env.STORAGE_PROVIDER ?? 'minio',
   endpoint: process.env.STORAGE_ENDPOINT,
+  publicEndpoint: process.env.STORAGE_PUBLIC_ENDPOINT || process.env.STORAGE_ENDPOINT,
   region: process.env.STORAGE_REGION ?? 'auto',
   accessKeyId: process.env.STORAGE_ACCESS_KEY_ID,
   secretAccessKey: process.env.STORAGE_SECRET_ACCESS_KEY,

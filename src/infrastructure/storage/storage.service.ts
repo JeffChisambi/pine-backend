@@ -103,9 +103,19 @@ export class StorageService {
     const bucketName = this.resolveBucketName(bucket);
     const command = new GetObjectCommand({ Bucket: bucketName, Key: key });
 
-    return getSignedUrl(this.client, command, {
+    let url = await getSignedUrl(this.client, command, {
       expiresIn: this.config.storage.signedUrlTtlSeconds,
     });
+
+    // Rewrite internal Docker endpoint (e.g. http://minio:9000) to the
+    // public-facing endpoint so browsers can actually reach the URL.
+    const internalEndpoint = this.config.storage.endpoint;
+    const publicEndpoint = this.config.storage.publicEndpoint;
+    if (publicEndpoint && internalEndpoint && publicEndpoint !== internalEndpoint) {
+      url = url.replace(internalEndpoint, publicEndpoint);
+    }
+
+    return url;
   }
 
   async delete(bucket: StorageBucket, key: string): Promise<void> {

@@ -68,6 +68,8 @@ export interface RateLimitConfig {
 export interface StorageConfig {
   provider: 's3' | 'r2' | 'minio';
   endpoint: string;
+  /** Public-facing endpoint for signed download URLs (defaults to endpoint). */
+  publicEndpoint: string;
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
