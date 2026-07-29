@@ -117,13 +117,8 @@ export class StorageService {
     const bucketName = this.resolveBucketName(bucket);
     const command = new GetObjectCommand({ Bucket: bucketName, Key: key });
 
-<<<<<<< HEAD
     let url = await getSignedUrl(this.client, command, {
-      expiresIn: this.config.storage.signedUrlTtlSeconds,
-=======
-    return getSignedUrl(this.client, command, {
       expiresIn: expiresIn ?? this.config.storage.signedUrlTtlSeconds,
->>>>>>> b169cd47ef559c4e587cdf83fe3fba1ae65d6ff2
     });
 
     // Rewrite internal Docker endpoint (e.g. http://minio:9000) to the
