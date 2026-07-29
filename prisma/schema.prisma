@@ -40,6 +40,8 @@ enum KycStatus {
   PENDING
   APPROVED
   REJECTED
+  ADDITIONAL_DOCS
+  MANUAL_REVIEW
 }
 
 enum KycDocumentType {
@@ -394,6 +396,22 @@ model KycApplication {
   facialMatchScore  Decimal?          @db.Decimal(5, 4)
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
+
+  // ── New fields required by the Kusata broker dashboard API contract ──
+  /// KYC tier requested: TIER_1 or TIER_2
+  tier              String?
+  /// Anti-spoofing / liveness score (0–1). Stored here after face pipeline.
+  livenessScore     Decimal?          @db.Decimal(5, 4)
+  /// Machine-readable risk flag codes raised by automated checks (string[]).
+  riskFlags         Json?
+  /// Display name of the admin who last reviewed the application (denormalised).
+  reviewerName      String?
+  /// Internal reviewer notes not shown to the applicant.
+  reviewNotes       String?
+  /// Document slot codes the applicant must resubmit (string[]).
+  requiredDocuments Json?
+  /// Optional message shown to the applicant when docs are requested.
+  requestDocsMessage String?
 
   documents         KycDocument[]
 

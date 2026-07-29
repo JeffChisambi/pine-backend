@@ -128,6 +128,7 @@ export class KycAdminController {
     await this.repository.recordReview({
       applicationId: dto.applicationId,
       reviewerId: 'admin', // TODO: extract from JWT in Phase 2
+      reviewerName: 'System', // TODO: populate from JWT in Phase 2
       decision: 'APPROVED',
       notes: dto.notes,
     });
@@ -164,6 +165,7 @@ export class KycAdminController {
     await this.repository.recordReview({
       applicationId: dto.applicationId,
       reviewerId: 'admin',
+      reviewerName: 'System', // TODO: populate from JWT in Phase 2
       decision: 'REJECTED',
       reason: dto.reason,
       notes: dto.notes,

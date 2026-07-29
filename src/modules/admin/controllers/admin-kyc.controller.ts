@@ -9,8 +9,17 @@ import {
   Post,
   Query,
   Req,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
 import { Permission } from '../../auth/constants/permissions.constant';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
@@ -22,18 +31,157 @@ import {
 } from '../../kyc/interfaces/kyc-repository.interface';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
+import { ApproveKycDto } from '../../kyc/dto/approve-kyc.dto';
+import { RejectKycDto } from '../../kyc/dto/reject-kyc.dto';
+import { RequestDocsDto } from '../../kyc/dto/request-docs.dto';
+import {
+  ConflictException,
+  ResourceNotFoundException,
+  ValidationException,
+} from '../../../core/exceptions/app.exception';
+import { ErrorCode } from '../../../core/constants/error-codes.constant';
+
+// ── Signed URL TTL for KYC document review ───────────────────────────────────
+// Per the Kusata API contract §7: image URLs must be valid for ≥ 1 hour so the
+// admin can open images after the detail page has already loaded.
+const KYC_SIGNED_URL_TTL_SECONDS = 3600; // 1 hour
+
+// ── Terminal statuses that cannot be mutated ─────────────────────────────────
+const TERMINAL_STATUSES = new Set(['APPROVED', 'REJECTED']);
+
+// ── Statuses from which request-docs is allowed ──────────────────────────────
+const REQUEST_DOCS_ALLOWED = new Set(['PENDING', 'MANUAL_REVIEW', 'ADDITIONAL_DOCS']);
+
+// ── Helper: scale 0-1 score to 0-100 for the frontend ────────────────────────
+function toPercent(v: number | null | undefined): number | null {
+  return v != null ? Math.round(v * 100 * 100) / 100 : null;
+}
+
+// ── Helper: extract flat KycOcrData from the AI pipeline's OcrExtractionResult
+// The OCR pipeline stores fields as { value, confidence } objects.
+// The frontend expects flat string values.
+function extractOcrData(ocrJson: unknown): Record<string, string | null> | null {
+  if (!ocrJson || typeof ocrJson !== 'object') return null;
+  const data = ocrJson as Record<string, unknown>;
+
+  function fieldValue(f: unknown): string | null {
+    if (!f) return null;
+    if (typeof f === 'string') return f || null;
+    if (typeof f === 'object' && f !== null && 'value' in f) {
+      const v = (f as Record<string, unknown>).value;
+      return typeof v === 'string' ? v || null : null;
+    }
+    return null;
+  }
+
+  const fullName = fieldValue(data.fullName);
+  const dateOfBirth = fieldValue(data.dateOfBirth);
+  const nationalId = fieldValue(data.nationalIdNumber);
+  const documentNumber = fieldValue(data.documentNumber);
+  const expiryDate = fieldValue(data.expiryDate);
+  const address = fieldValue(data.address);
+  const nationality = fieldValue(data.nationality);
+
+  // Only return an object if at least one meaningful field has a value.
+  if (!fullName && !dateOfBirth && !nationalId && !documentNumber) return null;
+
+  return { fullName, dateOfBirth, nationalId, documentNumber, expiryDate, address, nationality };
+}
+
+// ── Helper: build a KycApplicationRow from a Prisma + user record ─────────────
+function buildApplicationRow(app: any, user: any): Record<string, unknown> {
+  const extraData = (app.ocrExtractedData as Record<string, unknown>) ?? {};
+
+  // ocrConfidence: real value from the AI pipeline (_ocrConfidence in JSON, 0-1)
+  const ocrConfidenceRaw = (extraData._ocrConfidence as number) ?? null;
+  // facialMatchScore: stored as DECIMAL(5,4) on the model (0-1), multiply to %
+  const facialMatchRaw = app.facialMatchScore ? Number(app.facialMatchScore) : null;
+  // livenessScore: dedicated column OR JSON fallback (0-1 → %)
+  const livenessRaw =
+    app.livenessScore != null
+      ? Number(app.livenessScore)
+      : ((extraData._livenessScore as number) ?? null);
+
+  // riskFlags: dedicated column OR derive from _fraudFlags in OCR JSON
+  let riskFlags: string[] | null = null;
+  if (Array.isArray(app.riskFlags) && app.riskFlags.length > 0) {
+    riskFlags = app.riskFlags as string[];
+  } else {
+    const jsonFlags = extraData._fraudFlags as Array<{ type?: string }> | undefined;
+    if (Array.isArray(jsonFlags) && jsonFlags.length > 0) {
+      riskFlags = jsonFlags.map((f) => f.type ?? '').filter(Boolean);
+    }
+  }
+
+  const reviewNotes =
+    app.reviewNotes ?? ((extraData._reviewerNotes as string) ?? null);
+
+  return {
+    id: app.id,
+    userId: app.userId,
+
+    // User identity
+    userName:
+      user
+        ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || 'Unknown'
+        : 'Unknown',
+    userEmail: user?.email ?? null,
+    userPhone: user?.phone ?? '',
+    city: app.city ?? null,
+    emailVerified: user ? user.emailVerifiedAt != null : null,
+    phoneVerified: user ? user.phoneVerifiedAt != null : null,
+
+    // Document
+    documentType: Array.isArray(app.documents)
+      ? (app.documents[0]?.type ?? null)
+      : null,
+    nationalIdNumber: app.nationalIdNumber ?? null,
+
+    // Tier
+    tier: app.tier ?? null,
+
+    // Verification scores (0–100 for the frontend)
+    ocrConfidence: toPercent(ocrConfidenceRaw),
+    facialMatchScore: toPercent(facialMatchRaw),
+    livenessScore: toPercent(livenessRaw),
+
+    // Risk
+    riskFlags: riskFlags ?? [],
+
+    // Status
+    status: app.status,
+
+    // Review
+    reviewDecision: app.reviewDecision ?? null,
+    reviewerName: app.reviewerName ?? null,
+    reviewNotes,
+    reviewedAt: app.reviewedAt?.toISOString() ?? null,
+
+    submittedAt: app.submittedAt.toISOString(),
+  };
+}
 
 /**
- * Admin KYC Controller — wraps existing KycAdminController logic
- * with proper RBAC permissions and audit logging.
+ * Admin KYC Controller — implements the Kusata Broker Dashboard API contract v1.0.
  *
- * Critical behaviour:
- *   - approve() / reject() update BOTH kycApplication.status AND user.kycStatus
- *   - getReviewData() returns signed document URLs for the broker to view images
+ * Endpoints:
+ *   GET  /admin/kyc/queue                       — paginated queue
+ *   GET  /admin/kyc/counts                      — counts per status
+ *   GET  /admin/kyc/:applicationId              — full detail
+ *   POST /admin/kyc/:applicationId/approve      — approve application
+ *   POST /admin/kyc/:applicationId/reject       — reject application
+ *   POST /admin/kyc/:applicationId/request-docs — request additional documents
+ *
+ * Auth / RBAC:
+ *   - All routes: requires valid admin JWT and KYC_REVIEW permission.
+ *   - Mutation routes (approve, reject, request-docs): additionally require
+ *     KYC_APPROVE. BROKER role does NOT have KYC_APPROVE, so mutations return
+ *     403 automatically for brokers (see permissions.constant.ts).
  */
 @ApiTags('admin', 'kyc')
 @ApiBearerAuth()
 @Controller('admin/kyc')
+@UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 export class AdminKycController {
   constructor(
     @Inject(KYC_REPOSITORY)
@@ -43,164 +191,236 @@ export class AdminKycController {
     private readonly storageService: StorageService,
   ) {}
 
+  // ── GET /admin/kyc/queue ───────────────────────────────────────────────────
+
   @Get('queue')
   @RequirePermissions(Permission.KYC_REVIEW)
-  @ApiOperation({ summary: 'KYC applications queue with optional status filter' })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'cursor', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, description: 'Filter by status: PENDING, APPROVED, REJECTED, or omit for all' })
-  @ApiResponse({ status: 200, description: 'KYC applications' })
+  @ApiOperation({
+    summary: 'Paginated KYC application queue',
+    description:
+      'Returns a page of KYC applications. The frontend polls this every 30 s.',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: '1-based page number. Default: 1.' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Page size. Default: 50. Max: 200.' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    description:
+      'Filter by status: PENDING, APPROVED, REJECTED, ADDITIONAL_DOCS, MANUAL_REVIEW, NOT_SUBMITTED.',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated list of KycApplicationRow objects.' })
   async getQueue(
-    @Query('limit') limit?: string,
-    @Query('cursor') cursor?: string,
+    @Query('page') pageStr?: string,
+    @Query('limit') limitStr?: string,
     @Query('status') status?: string,
   ) {
-    const parsedLimit = Math.min(parseInt(limit ?? '50', 10) || 50, 100);
-    const validStatuses = ['PENDING', 'APPROVED', 'REJECTED', 'NOT_SUBMITTED'];
-    const where = status && validStatuses.includes(status.toUpperCase())
-      ? { status: status.toUpperCase() as any }
-      : {};
+    const page = Math.max(1, parseInt(pageStr ?? '1', 10) || 1);
+    const limit = Math.min(Math.max(1, parseInt(limitStr ?? '50', 10) || 50), 200);
 
-    const applications = await this.prisma.kycApplication.findMany({
-      where,
-      orderBy: { submittedAt: 'desc' },
-      take: parsedLimit,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      include: {
-        user: { select: { firstName: true, lastName: true, email: true, phone: true } },
-        documents: { select: { type: true } },
-      },
+    const { applications, total, totalPages } = await this.kycRepo.getQueuePage({
+      page,
+      limit,
+      status: status?.toUpperCase(),
     });
 
-    const totalCount = await this.prisma.kycApplication.count({ where });
+    // getQueuePage returns KycApplicationRecord objects — re-map to KycApplicationRow
+    // using the full application record (user fields already joined).
+    const rows = applications.map((rec) => {
+      // KycApplicationRecord has firstName/lastName/email etc. from the join.
+      const syntheticUser = {
+        firstName: rec.firstName,
+        lastName: rec.lastName,
+        email: rec.email,
+        emailVerifiedAt: rec.emailVerified ? {} : null, // truthy/falsy
+        phone: rec.phone,
+        phoneVerifiedAt: rec.phoneVerified ? {} : null,
+      };
+      const syntheticApp = {
+        ...rec,
+        facialMatchScore: rec.facialMatchScore,
+        livenessScore: rec.livenessScore,
+        riskFlags: rec.riskFlags,
+        documents: rec.documentType ? [{ type: rec.documentType }] : [],
+      };
+      return buildApplicationRow(syntheticApp, syntheticUser);
+    });
 
     return {
-      applications: applications.map((app: any) => ({
-        id: app.id,
-        userId: app.userId,
-        userName: `${app.user.firstName} ${app.user.lastName}`,
-        userEmail: app.user.email,
-        userPhone: app.user.phone,
-        status: app.status,
-        nationalIdNumber: app.nationalIdNumber,
-        city: app.city,
-        facialMatchScore: app.facialMatchScore ? Number(app.facialMatchScore) * 100 : null,
-        ocrConfidence: app.ocrExtractedData ? 85 : null,
-        documentType: app.documents?.[0]?.type ?? null,
-        reviewDecision: app.reviewDecision,
-        submittedAt: app.submittedAt.toISOString(),
-        reviewedAt: app.reviewedAt?.toISOString() ?? null,
-      })),
-      count: totalCount,
+      applications: rows,
+      count: rows.length,
+      total,
+      page,
+      totalPages,
     };
   }
 
-  @Get(':applicationId')
+  // ── GET /admin/kyc/counts ──────────────────────────────────────────────────
+
+  @Get('counts')
   @RequirePermissions(Permission.KYC_REVIEW)
-  @ApiOperation({ summary: 'Full KYC application review data with document images' })
-  @ApiResponse({ status: 200, description: 'Application review workspace' })
-  async getReviewData(@Param('applicationId') applicationId: string) {
-    const app = await this.kycRepo.getApplicationById(applicationId);
-    if (!app) {
-      return { error: 'Application not found' };
+  @ApiOperation({
+    summary: 'KYC application counts per status',
+    description:
+      'Returns aggregate counts for every KYC status. Drives tab badges and stats cards. Polled every 60 s by the frontend.',
+  })
+  @ApiResponse({ status: 200, description: 'KycCountsByStatus object.' })
+  async getCounts() {
+    // Application-level counts from kyc_applications
+    const appGroups = await this.prisma.kycApplication.groupBy({
+      by: ['status'],
+      _count: { id: true },
+    });
+
+    // NOT_SUBMITTED is best represented by users who have never started KYC
+    const notSubmittedCount = await this.prisma.user.count({
+      where: { kycStatus: 'NOT_SUBMITTED' },
+    });
+
+    const counts: Record<string, number> = {
+      NOT_SUBMITTED: notSubmittedCount,
+      PENDING: 0,
+      APPROVED: 0,
+      REJECTED: 0,
+      ADDITIONAL_DOCS: 0,
+      MANUAL_REVIEW: 0,
+    };
+
+    for (const g of appGroups) {
+      counts[g.status] = (counts[g.status] ?? 0) + g._count.id;
     }
 
-    const documents = await this.kycRepo.getDocumentsByApplicationId(applicationId);
-    const auditHistory = await this.kycRepo.getAuditHistory(applicationId);
+    return counts;
+  }
 
-    // Generate signed download URLs for each document so the broker
-    // can view actual ID photos and selfies in the Kusata dashboard.
-    const documentsWithUrls = await Promise.all(
-      documents.map(async (doc) => {
+  // ── GET /admin/kyc/:applicationId ─────────────────────────────────────────
+
+  @Get(':applicationId')
+  @RequirePermissions(Permission.KYC_REVIEW)
+  @ApiOperation({
+    summary: 'Full KYC application review data',
+    description:
+      'Returns the application detail, OCR data, and document images (presigned URLs, valid for 1 hour).',
+  })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  @ApiResponse({ status: 200, description: 'KycApplicationDetail object.' })
+  @ApiResponse({ status: 404, description: 'Application not found.' })
+  async getDetail(@Param('applicationId') applicationId: string) {
+    // Fetch application with user and documents joined
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            emailVerifiedAt: true,
+            phone: true,
+            phoneVerifiedAt: true,
+          },
+        },
+        documents: true,
+      },
+    });
+
+    if (!app) {
+      throw new ResourceNotFoundException('KYC application', applicationId);
+    }
+
+    // Generate presigned download URLs (TTL = 1 hour per §7 of the API contract)
+    const documents = await Promise.all(
+      app.documents.map(async (doc) => {
         let imageUrl: string | null = null;
         try {
           imageUrl = await this.storageService.getSignedDownloadUrl(
-            'kyc' as any,
+            'kyc',
             doc.storageKey,
+            KYC_SIGNED_URL_TTL_SECONDS,
           );
         } catch {
-          // If the storage backend is down or the key is missing, gracefully
-          // degrade — the dashboard will show a placeholder instead.
+          // If storage is unavailable, degrade gracefully — the frontend shows
+          // a "Document not uploaded" placeholder for null imageUrl values.
         }
         return {
           id: doc.id,
           type: doc.type,
-          mimeType: doc.mimeType,
-          sizeBytes: doc.sizeBytes,
           imageUrl,
+          mimeType: doc.mimeType,
           uploadedAt: doc.uploadedAt.toISOString(),
         };
       }),
     );
 
+    const applicationRow = buildApplicationRow(
+      { ...app, documents: app.documents },
+      app.user,
+    );
+
+    // Extract OCR data from the AI pipeline's JSON blob into the flat KycOcrData shape
+    const ocrExtractedData = extractOcrData(app.ocrExtractedData);
+
     return {
       application: {
-        id: app.id,
-        userId: app.userId,
-        status: app.status,
-        verificationStage: app.verificationStage,
-        nationalIdNumber: app.nationalIdNumber,
-        dateOfBirth: app.dateOfBirth?.toISOString() ?? null,
-        confidenceScore: app.confidenceScore,
-        facialMatchScore: app.facialMatchScore,
-        ocrConfidence: app.ocrConfidence,
-        faceMatchConfidence: app.faceMatchConfidence,
-        imageQualityScore: app.imageQualityScore,
-        documentQualityScore: app.documentQualityScore,
-        fraudScore: app.fraudScore,
-        ocrExtractedData: app.ocrExtractedData,
-        reviewerNotes: app.reviewerNotes,
-        submittedAt: app.submittedAt.toISOString(),
-        reviewedAt: app.reviewedAt?.toISOString() ?? null,
+        ...applicationRow,
+        ocrExtractedData,
       },
-      documents: documentsWithUrls,
-      auditHistory: auditHistory.map((entry) => ({
-        action: entry.action,
-        actorId: entry.actorId,
-        details: entry.details,
-        createdAt: entry.createdAt.toISOString(),
-      })),
+      documents,
     };
   }
+
+  // ── POST /admin/kyc/:applicationId/approve ────────────────────────────────
 
   @Post(':applicationId/approve')
   @RequirePermissions(Permission.KYC_APPROVE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Approve KYC application' })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  @ApiResponse({ status: 200, description: 'Application approved.' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions (BROKER role).' })
+  @ApiResponse({ status: 404, description: 'Application not found.' })
+  @ApiResponse({ status: 409, description: 'Application already reviewed (terminal state).' })
   async approve(
     @Param('applicationId') applicationId: string,
-    @Body() body: { notes?: string },
+    @Body() body: ApproveKycDto,
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    // 1. Record the review decision
-    await this.kycRepo.recordReview({
-      applicationId,
-      reviewerId: admin.id,
-      decision: 'APPROVED',
-      notes: body.notes,
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { id: true, userId: true, status: true },
     });
+    if (!app) {
+      throw new ResourceNotFoundException('KYC application', applicationId);
+    }
+    if (TERMINAL_STATUSES.has(app.status)) {
+      throw new ConflictException(
+        'This application has already been reviewed and cannot be changed.',
+        ErrorCode.KYC_ALREADY_REVIEWED,
+      );
+    }
 
-    // 2. Update the KYC application status
-    await this.kycRepo.updateApplicationStatus(applicationId, 'APPROVED', {
-      reviewerNotes: body.notes ?? null,
-    });
+    const reviewerName = await this.getReviewerName(admin);
+    const reviewedAt = new Date();
 
-    // 3. CRITICAL: Also update the User record so the user can trade
-    const app = await this.kycRepo.getApplicationById(applicationId);
-    if (app) {
-      await this.prisma.user.update({
+    // Single atomic update — sets status, review fields, and user.kycStatus
+    await this.prisma.$transaction(async (tx) => {
+      await tx.kycApplication.update({
+        where: { id: applicationId },
+        data: {
+          status: 'APPROVED' as any,
+          reviewDecision: 'APPROVED',
+          reviewedAt,
+          reviewedById: admin.id,
+          reviewerName,
+          reviewNotes: body.notes ?? null,
+        },
+      });
+      await tx.user.update({
         where: { id: app.userId },
         data: { kycStatus: 'APPROVED' },
       });
-    }
-
-    // 4. Record audit entries
-    await this.kycRepo.recordAuditEntry({
-      kycApplicationId: applicationId,
-      action: 'ADMIN_APPROVED',
-      actorId: admin.id,
-      details: { notes: body.notes },
     });
 
     await this.auditLogService.log({
@@ -211,51 +431,79 @@ export class AdminKycController {
       resourceId: applicationId,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
+      metadata: { notes: body.notes },
     });
 
-    return { message: 'Application approved', applicationId };
+    return {
+      applicationId,
+      userId: app.userId,
+      newStatus: 'APPROVED',
+      reviewedAt: reviewedAt.toISOString(),
+      reviewerName,
+    };
   }
+
+  // ── POST /admin/kyc/:applicationId/reject ─────────────────────────────────
 
   @Post(':applicationId/reject')
   @RequirePermissions(Permission.KYC_APPROVE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reject KYC application' })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  @ApiResponse({ status: 200, description: 'Application rejected.' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions (BROKER role).' })
+  @ApiResponse({ status: 404, description: 'Application not found.' })
+  @ApiResponse({ status: 409, description: 'Application already reviewed (terminal state).' })
+  @ApiResponse({ status: 422, description: 'reason is required.' })
   async reject(
     @Param('applicationId') applicationId: string,
-    @Body() body: { reason: string; notes?: string },
+    @Body() body: RejectKycDto,
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    // 1. Record the review decision
-    await this.kycRepo.recordReview({
-      applicationId,
-      reviewerId: admin.id,
-      decision: 'REJECTED',
-      reason: body.reason,
-      notes: body.notes,
-    });
-
-    // 2. Update the KYC application status
-    await this.kycRepo.updateApplicationStatus(applicationId, 'REJECTED', {
-      rejectionReason: body.reason,
-      reviewerNotes: body.notes ?? null,
-    });
-
-    // 3. CRITICAL: Also update the User record
-    const app = await this.kycRepo.getApplicationById(applicationId);
-    if (app) {
-      await this.prisma.user.update({
-        where: { id: app.userId },
-        data: { kycStatus: 'REJECTED' },
+    // Explicit business-level reason check — produces the documented REASON_REQUIRED
+    // code even if class-validator somehow passes (e.g. the field is whitespace only).
+    if (!body.reason || !body.reason.trim()) {
+      throw new ValidationException('Reason is required.', {
+        code: ErrorCode.KYC_REASON_REQUIRED,
+        errors: [{ field: 'reason', message: 'Reason is required' }],
       });
     }
 
-    // 4. Record audit entries
-    await this.kycRepo.recordAuditEntry({
-      kycApplicationId: applicationId,
-      action: 'ADMIN_REJECTED',
-      actorId: admin.id,
-      details: { reason: body.reason, notes: body.notes },
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { id: true, userId: true, status: true },
+    });
+    if (!app) {
+      throw new ResourceNotFoundException('KYC application', applicationId);
+    }
+    if (TERMINAL_STATUSES.has(app.status)) {
+      throw new ConflictException(
+        'This application has already been reviewed and cannot be changed.',
+        ErrorCode.KYC_ALREADY_REVIEWED,
+      );
+    }
+
+    const reviewerName = await this.getReviewerName(admin);
+    const reviewedAt = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.kycApplication.update({
+        where: { id: applicationId },
+        data: {
+          status: 'REJECTED' as any,
+          reviewDecision: 'REJECTED',
+          reviewedAt,
+          reviewedById: admin.id,
+          reviewerName,
+          reviewNotes: body.notes ?? null,
+          rejectionReason: body.reason,
+        },
+      });
+      await tx.user.update({
+        where: { id: app.userId },
+        data: { kycStatus: 'REJECTED' },
+      });
     });
 
     await this.auditLogService.log({
@@ -266,9 +514,110 @@ export class AdminKycController {
       resourceId: applicationId,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
-      metadata: { reason: body.reason },
+      metadata: { reason: body.reason, notes: body.notes },
     });
 
-    return { message: 'Application rejected', applicationId };
+    return {
+      applicationId,
+      userId: app.userId,
+      newStatus: 'REJECTED',
+      reviewedAt: reviewedAt.toISOString(),
+      reviewerName,
+    };
+  }
+
+  // ── POST /admin/kyc/:applicationId/request-docs ───────────────────────────
+
+  @Post(':applicationId/request-docs')
+  @RequirePermissions(Permission.KYC_APPROVE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Request the applicant resubmit one or more documents',
+    description:
+      'Sets the application status to ADDITIONAL_DOCS and stores the required document slot list. Upon resubmission the mobile app resets the status to PENDING.',
+  })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  @ApiResponse({ status: 200, description: 'Document request sent.' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions (BROKER role).' })
+  @ApiResponse({ status: 404, description: 'Application not found.' })
+  @ApiResponse({ status: 409, description: 'Application is in a terminal state.' })
+  @ApiResponse({ status: 422, description: 'requiredDocuments missing or contains invalid slot codes.' })
+  async requestDocs(
+    @Param('applicationId') applicationId: string,
+    @Body() body: RequestDocsDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { id: true, userId: true, status: true },
+    });
+    if (!app) {
+      throw new ResourceNotFoundException('KYC application', applicationId);
+    }
+    if (TERMINAL_STATUSES.has(app.status)) {
+      throw new ConflictException(
+        'Cannot request documents for an application that has already been approved or rejected.',
+        ErrorCode.KYC_INVALID_STATUS_TRANSITION,
+      );
+    }
+    if (!REQUEST_DOCS_ALLOWED.has(app.status)) {
+      throw new ConflictException(
+        `Cannot request documents when application status is ${app.status}.`,
+        ErrorCode.KYC_INVALID_STATUS_TRANSITION,
+      );
+    }
+
+    const reviewerName = await this.getReviewerName(admin);
+
+    await this.kycRepo.requestAdditionalDocuments({
+      applicationId,
+      reviewerId: admin.id,
+      reviewerName,
+      requiredDocuments: body.requiredDocuments,
+      message: body.message,
+    });
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'KYC_DOCS_REQUESTED',
+      resourceType: 'KYC_APPLICATION',
+      resourceId: applicationId,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: {
+        requiredDocuments: body.requiredDocuments,
+        message: body.message,
+      },
+    });
+
+    return {
+      applicationId,
+      newStatus: 'ADDITIONAL_DOCS',
+      requiredDocuments: body.requiredDocuments,
+      reviewerName,
+    };
+  }
+
+  // ── Private helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Look up the admin's display name from the User record.
+   * Falls back gracefully to email → id so this never throws.
+   */
+  private async getReviewerName(admin: AuthenticatedUser): Promise<string> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: admin.id },
+        select: { firstName: true, lastName: true },
+      });
+      if (user?.firstName || user?.lastName) {
+        return `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+      }
+    } catch {
+      // Non-critical — fall through to email fallback
+    }
+    return admin.email ?? admin.id;
   }
 }

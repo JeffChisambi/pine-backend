@@ -377,10 +377,16 @@ export class KycRepository implements IKycRepository {
   ): Promise<void> {
     const existing = await this.readExistingJson(applicationId);
 
+    // Persist full flag objects in the JSON column (for pipeline introspection)
+    // AND store the machine-readable type codes in the dedicated riskFlags column
+    // so the broker dashboard can query / display them without parsing JSON.
+    const riskFlagCodes = flags.map((f) => f.type as string);
+
     await this.prisma.kycApplication.update({
       where: { id: applicationId },
       data: {
         ocrExtractedData: { ...existing, _fraudFlags: flags } as any,
+        riskFlags: riskFlagCodes as any,
       },
     });
   }
@@ -450,20 +456,135 @@ export class KycRepository implements IKycRepository {
     return apps.map((a) => this.mapApplication(a));
   }
 
+  async getQueuePage(options: {
+    page: number;
+    limit: number;
+    status?: string;
+  }): Promise<{
+    applications: KycApplicationRecord[];
+    total: number;
+    page: number;
+    totalPages: number;
+  }> {
+    const page = Math.max(1, options.page);
+    const limit = Math.min(Math.max(1, options.limit), 200);
+    const skip = (page - 1) * limit;
+
+    // The frontend may send status=ADDITIONAL_DOCS which maps directly to
+    // the enum value. We also support legacy aliases via the OR clause.
+    const validStatuses = [
+      'NOT_SUBMITTED',
+      'PENDING',
+      'APPROVED',
+      'REJECTED',
+      'ADDITIONAL_DOCS',
+      'MANUAL_REVIEW',
+    ];
+
+    const where: Record<string, unknown> = {};
+    if (options.status) {
+      const s = options.status.toUpperCase();
+      if (validStatuses.includes(s)) {
+        where.status = s;
+      }
+    }
+
+    const [apps, total] = await Promise.all([
+      this.prisma.kycApplication.findMany({
+        where,
+        orderBy: { submittedAt: 'desc' },
+        take: limit,
+        skip,
+        include: {
+          user: {
+            select: {
+              firstName: true,
+              lastName: true,
+              email: true,
+              emailVerifiedAt: true,
+              phone: true,
+              phoneVerifiedAt: true,
+            },
+          },
+          documents: { select: { type: true } },
+        },
+      }),
+      this.prisma.kycApplication.count({ where }),
+    ]);
+
+    return {
+      applications: apps.map((a) => this.mapApplication(a)),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async getCountsByStatus(): Promise<Record<string, number>> {
+    const groups = await this.prisma.kycApplication.groupBy({
+      by: ['status'],
+      _count: { id: true },
+    });
+
+    // Start with zero counts for all known statuses so the response is always complete.
+    const counts: Record<string, number> = {
+      NOT_SUBMITTED: 0,
+      PENDING: 0,
+      APPROVED: 0,
+      REJECTED: 0,
+      ADDITIONAL_DOCS: 0,
+      MANUAL_REVIEW: 0,
+    };
+
+    for (const g of groups) {
+      counts[g.status] = g._count.id;
+    }
+
+    return counts;
+  }
+
   async recordReview(data: {
     applicationId: string;
     reviewerId: string;
+    reviewerName: string;
     decision: 'APPROVED' | 'REJECTED';
     reason?: string;
     notes?: string;
   }): Promise<void> {
+    // Persist reviewer notes to the dedicated column AND keep the JSON copy
+    // for backwards compatibility with the existing pipeline reader.
+    const existing = await this.readExistingJson(data.applicationId);
+    const merged = { ...existing, _reviewerNotes: data.notes ?? null };
+
     await this.prisma.kycApplication.update({
       where: { id: data.applicationId },
       data: {
         reviewedAt: new Date(),
         reviewedById: data.reviewerId,
         reviewDecision: data.decision,
-        rejectionReason: data.reason,
+        rejectionReason: data.reason ?? null,
+        reviewerName: data.reviewerName,
+        reviewNotes: data.notes ?? null,
+        ocrExtractedData: merged as any,
+      },
+    });
+  }
+
+  async requestAdditionalDocuments(data: {
+    applicationId: string;
+    reviewerId: string;
+    reviewerName: string;
+    requiredDocuments: string[];
+    message?: string;
+  }): Promise<void> {
+    await this.prisma.kycApplication.update({
+      where: { id: data.applicationId },
+      data: {
+        status: 'ADDITIONAL_DOCS' as any,
+        reviewedById: data.reviewerId,
+        reviewerName: data.reviewerName,
+        requiredDocuments: data.requiredDocuments as any,
+        requestDocsMessage: data.message ?? null,
       },
     });
   }
@@ -538,6 +659,24 @@ export class KycRepository implements IKycRepository {
   private mapApplication(app: any): KycApplicationRecord {
     const extraData = (app.ocrExtractedData as Record<string, unknown>) ?? {};
 
+    // Risk flags: prefer the dedicated column, fall back to extracting
+    // type codes from the _fraudFlags JSON array written by the AI pipeline.
+    let riskFlags: string[] | null = null;
+    if (Array.isArray(app.riskFlags) && app.riskFlags.length > 0) {
+      riskFlags = app.riskFlags as string[];
+    } else {
+      const jsonFlags = extraData._fraudFlags as Array<{ type?: string }> | undefined;
+      if (Array.isArray(jsonFlags) && jsonFlags.length > 0) {
+        riskFlags = jsonFlags.map((f) => f.type ?? '').filter(Boolean);
+      }
+    }
+
+    // Liveness score: prefer dedicated column, fall back to JSON.
+    const livenessScore =
+      app.livenessScore != null
+        ? Number(app.livenessScore)
+        : ((extraData._livenessScore as number) ?? null);
+
     return {
       id: app.id,
       userId: app.userId,
@@ -545,6 +684,7 @@ export class KycRepository implements IKycRepository {
       verificationStage: (extraData._stage as string) ?? 'CREATED',
       nationalIdNumber: app.nationalIdNumber,
       dateOfBirth: app.dateOfBirth,
+      city: app.city ?? null,
       ocrExtractedData: app.ocrExtractedData,
       facialMatchScore: app.facialMatchScore ? Number(app.facialMatchScore) : null,
       confidenceScore: (extraData._confidenceScore as number) ?? null,
@@ -556,11 +696,29 @@ export class KycRepository implements IKycRepository {
       reviewedById: app.reviewedById,
       reviewDecision: app.reviewDecision,
       rejectionReason: app.rejectionReason,
-      reviewerNotes: (extraData._reviewerNotes as string) ?? null,
+      // reviewNotes: prefer dedicated column, fall back to JSON for legacy rows
+      reviewerNotes: app.reviewNotes ?? (extraData._reviewerNotes as string) ?? null,
       submittedAt: app.submittedAt,
       reviewedAt: app.reviewedAt,
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,
+
+      // New dashboard fields from dedicated columns
+      tier: app.tier ?? null,
+      livenessScore,
+      riskFlags,
+      reviewerName: app.reviewerName ?? null,
+      requiredDocuments: Array.isArray(app.requiredDocuments) ? app.requiredDocuments : null,
+      requestDocsMessage: app.requestDocsMessage ?? null,
+
+      // User join fields (populated by getQueuePage)
+      firstName: app.user?.firstName ?? null,
+      lastName: app.user?.lastName ?? null,
+      email: app.user?.email ?? null,
+      emailVerified: app.user != null ? app.user.emailVerifiedAt != null : null,
+      phone: app.user?.phone ?? null,
+      phoneVerified: app.user != null ? app.user.phoneVerifiedAt != null : null,
+      documentType: Array.isArray(app.documents) ? (app.documents[0]?.type ?? null) : null,
     };
   }
 
