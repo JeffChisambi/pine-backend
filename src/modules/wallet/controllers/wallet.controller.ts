@@ -93,14 +93,28 @@ export class WalletController {
 
   @Get('history')
   @ApiOperation({
-    summary: 'Get detailed ledger history',
-    description:
-      'Returns detailed double-entry ledger view with balance-after ' +
-      'for each entry. Useful for audit and reconciliation.',
+    summary: 'Get transaction history',
+    description: 'Returns paginated transaction history in the standard contract format.',
   })
-  @ApiResponse({ status: 200, description: 'Ledger history' })
-  async getHistory(@CurrentUser() user: AuthenticatedUser) {
-    return this.walletService.getHistory(user.id);
+  @ApiResponse({ status: 200, description: 'Transaction history' })
+  async getHistory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('limit') limitStr?: string,
+  ) {
+    const limit = Math.min(parseInt(limitStr ?? '20', 10) || 20, 100);
+    const result = await this.walletService.getStatement(user.id, limit, 0);
+    return {
+      transactions: result.entries.map((e) => ({
+        id: e.id,
+        type: e.type,
+        amount: (e.amount as number).toFixed(2),
+        currency: e.currency,
+        status: 'COMPLETED',
+        description: e.description ?? '',
+        createdAt: e.createdAt,
+      })),
+      count: result.total,
+    };
   }
 
   @Get('snapshots')

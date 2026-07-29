@@ -122,7 +122,7 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,
-      kycStatus: user.kycStatus,
+      kycStatus: this.normalizeKycStatus(user.kycStatus),
       hasPinSet: false,
       avatarUrl: null,
       createdAt: new Date().toISOString(),
@@ -195,7 +195,7 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,
-      kycStatus: user.kycStatus,
+      kycStatus: this.normalizeKycStatus(user.kycStatus),
       hasPinSet: !!user.pinHash,
       avatarUrl: null,
       createdAt: new Date().toISOString(),
@@ -233,7 +233,7 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,
-      kycStatus: user.kycStatus,
+      kycStatus: this.normalizeKycStatus(user.kycStatus),
       hasPinSet: !!user.pinHash,
       avatarUrl: null,
       createdAt: user.createdAt.toISOString(),
@@ -430,9 +430,10 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,
-      kycStatus: user.kycStatus,
+      kycStatus: this.normalizeKycStatus(user.kycStatus),
       hasPinSet: !!user.pinHash,
       avatarUrl: null,
+      isActive: user.isActive,
       createdAt: user.createdAt.toISOString(),
     };
   }
@@ -440,6 +441,21 @@ export class AuthService {
   // ──────────────────────────────────────────────────────────────
   // Helpers
   // ──────────────────────────────────────────────────────────────
+
+  /**
+   * Normalize Prisma KycStatus enum to lowercase API contract values.
+   * Contract: "not_started" | "pending" | "approved" | "rejected" | "manual_review"
+   */
+  private normalizeKycStatus(status: string): string {
+    const map: Record<string, string> = {
+      NOT_SUBMITTED: 'not_started',
+      PENDING: 'pending',
+      APPROVED: 'approved',
+      REJECTED: 'rejected',
+      MANUAL_REVIEW: 'manual_review',
+    };
+    return map[status] ?? status.toLowerCase();
+  }
 
   private buildAuthResponse(
     accessToken: string,

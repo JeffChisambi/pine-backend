@@ -93,6 +93,27 @@ export class KycController {
     );
   }
 
+  @Post('upload-proof-of-residency')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload proof of residency document' })
+  @ApiResponse({ status: 200, description: 'Proof of residency uploaded' })
+  async uploadProofOfResidency(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('applicationId') applicationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ documentId: string }> {
+    return this.workflowService.uploadDocument(
+      applicationId,
+      user.id,
+      'PROOF_OF_RESIDENCE',
+      file.originalname,
+      file.mimetype,
+      file.buffer,
+    );
+  }
+
   @Post('process')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({

@@ -10,6 +10,7 @@ export class AuthUserDto {
   @ApiProperty() kycStatus: string;
   @ApiProperty() hasPinSet: boolean;
   @ApiPropertyOptional() avatarUrl: string | null;
+  @ApiPropertyOptional() isActive?: boolean;
   @ApiProperty() createdAt: string;
 }
 

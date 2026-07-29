@@ -248,7 +248,8 @@ model User {
   auditLogsAsActor  AuditLog[]        @relation("AuditActor")
   kycReviewsAsAdmin KycApplication[]  @relation("KycReviewer")
   mfaConfig         MfaConfig?
-  watchlistEntries  WatchlistEntry[]
+  watchlistEntries      WatchlistEntry[]
+  treasuryInvestments   TreasuryInvestment[]
 
   @@index([role])
   @@index([kycStatus])
@@ -1127,6 +1128,56 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ============================================================
+// Treasury
+// ============================================================
+
+enum TreasuryInvestmentStatus {
+  PENDING
+  ACTIVE
+  MATURED
+  CANCELLED
+}
+
+/// A T-bill (or similar government security) product available for investment.
+model TreasuryProduct {
+  id           String   @id @default(uuid()) @db.Uuid
+  label        String
+  tenorDays    Int
+  yieldPercent Decimal  @db.Decimal(8, 4)
+  minAmount    Decimal  @db.Decimal(18, 4)
+  maxAmount    Decimal? @db.Decimal(18, 4)
+  currency     String   @default("MWK")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  investments  TreasuryInvestment[]
+
+  @@map("treasury_products")
+}
+
+/// A user's investment in a treasury product.
+model TreasuryInvestment {
+  id            String                   @id @default(uuid()) @db.Uuid
+  userId        String                   @db.Uuid
+  user          User                     @relation(fields: [userId], references: [id])
+  productId     String                   @db.Uuid
+  product       TreasuryProduct          @relation(fields: [productId], references: [id])
+  status        TreasuryInvestmentStatus @default(PENDING)
+  amount        Decimal                  @db.Decimal(18, 4)
+  yieldPercent  Decimal                  @db.Decimal(8, 4)
+  earnings      Decimal                  @db.Decimal(18, 4)
+  maturityValue Decimal                  @db.Decimal(18, 4)
+  maturityDate  DateTime                 @db.Date
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@map("treasury_investments")
 }
 
 // ============================================================

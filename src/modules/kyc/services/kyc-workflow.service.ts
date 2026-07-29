@@ -101,7 +101,7 @@ export class KycWorkflowService {
   async uploadDocument(
     applicationId: string,
     userId: string,
-    documentType: 'NATIONAL_ID' | 'SELFIE',
+    documentType: 'NATIONAL_ID' | 'SELFIE' | 'PROOF_OF_RESIDENCE',
     fileName: string,
     mimeType: string,
     buffer: Buffer,
@@ -112,9 +112,14 @@ export class KycWorkflowService {
       throw new Error('Application not found or unauthorized');
     }
 
+    // Proof of residency accepts images and PDF; other types accept images only
+    const allowedMimeTypes = documentType === 'PROOF_OF_RESIDENCE'
+      ? [...ALLOWED_IMAGE_TYPES, 'application/pdf']
+      : ALLOWED_IMAGE_TYPES;
+
     // Validate the file (MIME, magic bytes, size)
     validateUploadedFile(fileName, mimeType, buffer, {
-      allowedMimeTypes: ALLOWED_IMAGE_TYPES,
+      allowedMimeTypes,
       maxSizeBytes: MAX_UPLOAD_SIZE,
     });
 
@@ -145,9 +150,12 @@ export class KycWorkflowService {
     });
 
     // Update application stage
-    const newStage = documentType === 'NATIONAL_ID'
-      ? KycVerificationStage.ID_UPLOADED
-      : KycVerificationStage.SELFIE_UPLOADED;
+    const stageMap: Record<string, KycVerificationStage> = {
+      NATIONAL_ID: KycVerificationStage.ID_UPLOADED,
+      SELFIE: KycVerificationStage.SELFIE_UPLOADED,
+      PROOF_OF_RESIDENCE: KycVerificationStage.ID_UPLOADED, // Keep at ID_UPLOADED stage
+    };
+    const newStage = stageMap[documentType] ?? KycVerificationStage.ID_UPLOADED;
 
     await this.repository.updateApplicationStage(applicationId, newStage);
 

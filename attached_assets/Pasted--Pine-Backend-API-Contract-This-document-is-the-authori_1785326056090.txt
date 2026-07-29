@@ -1,0 +1,1289 @@
+# Pine — Backend API Contract
+
+This document is the authoritative specification for every API endpoint the Pine mobile app calls. It is derived directly from `services/api.ts` and the consuming screens.
+
+Backend engineers should treat this as the contract: implement every endpoint listed, honour the exact field names, and wrap every response in the standard envelope described below.
+
+---
+
+## Table of Contents
+
+1. [Conventions](#conventions)
+2. [Auth API](#auth-api)
+3. [Wallet API](#wallet-api)
+4. [Portfolio API](#portfolio-api)
+5. [Trading API](#trading-api)
+6. [KYC API](#kyc-api)
+7. [Stocks API](#stocks-api)
+8. [Notifications API](#notifications-api)
+9. [Payments API — PayChangu](#payments-api--paychangu)
+10. [Payments API — Bank Card](#payments-api--bank-card)
+11. [Watchlist API](#watchlist-api)
+12. [Missing / Not Yet Implemented](#missing--not-yet-implemented)
+13. [Treasury API (Fully Missing)](#treasury-api-fully-missing)
+
+---
+
+## Conventions
+
+### Base URL
+
+All paths below are relative to the API base URL (e.g. `https://api.pine.mw/v1`).  
+The mobile app sets this via the `EXPO_PUBLIC_API_URL` environment variable. In production builds, the URL **must** be `https://`.
+
+### Response envelope
+
+Every response **must** be wrapped in the following envelope:
+
+```json
+{
+  "success": true,
+  "data": { ... }
+}
+```
+
+On error:
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": "Human-readable description" 
+  }
+}
+```
+
+The client also accepts `{ "message": "..." }` at the top level for backwards compat, but `error.message` is preferred. `message` may be a `string` or `string[]`; the client joins arrays with `". "`.
+
+### Authentication
+
+Protected endpoints require:
+
+```
+Authorization: Bearer <accessToken>
+```
+
+The client auto-refreshes on `401` using the refresh token flow (see [`POST /auth/refresh`](#post-authrefresh)). If refresh fails, the user is logged out.
+
+### Phone numbers
+
+All phone numbers sent to the backend are pre-normalised by the client to the international format `+265XXXXXXXX` (Malawi). The backend should store and compare in this format.
+
+---
+
+## Auth API
+
+### `POST /auth/register`
+
+Create a new user account.
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{
+  "phone": "+265XXXXXXXXX",
+  "firstName": "string",
+  "lastName": "string",
+  "password": "string",
+  "email": "string | undefined",
+  "platform": "mobile"
+}
+```
+
+**Response `data`:**
+
+```json
+{
+  "accessToken": "string",
+  "refreshToken": "string",
+  "expiresIn": 3600,
+  "user": {
+    "id": "string",
+    "phone": "string",
+    "email": "string | null",
+    "firstName": "string",
+    "lastName": "string",
+    "role": "string",
+    "kycStatus": "string",
+    "hasPinSet": false,
+    "avatarUrl": "string | null"
+  }
+}
+```
+
+---
+
+### `POST /auth/login`
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{
+  "phone": "+265XXXXXXXXX",
+  "password": "string",
+  "platform": "mobile"
+}
+```
+
+> `phone` or `email` must be provided (at least one).
+
+**Response `data`:** Same as `/auth/register`.
+
+---
+
+### `POST /auth/logout`
+
+**Auth required:** Yes
+
+**Request body:** Empty
+
+**Response `data`:**
+
+```json
+{ "message": "string" }
+```
+
+---
+
+### `POST /auth/refresh`
+
+Exchange a refresh token for new tokens. Called automatically by the client on `401`.
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{ "refreshToken": "string" }
+```
+
+**Response `data`:**
+
+```json
+{
+  "accessToken": "string",
+  "refreshToken": "string"
+}
+```
+
+> If the refresh token is invalid or expired, return `401`. The client will log the user out.
+
+---
+
+### `POST /auth/forgot-password`
+
+Trigger password reset OTP.
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{ "phone": "+265XXXXXXXXX" }
+```
+
+**Response `data`:**
+
+```json
+{ "message": "string" }
+```
+
+---
+
+### `POST /auth/reset-password`
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{
+  "phone": "+265XXXXXXXXX",
+  "otp": "string",
+  "newPassword": "string"
+}
+```
+
+**Response `data`:**
+
+```json
+{ "message": "string" }
+```
+
+---
+
+### `POST /auth/otp/send`
+
+Send an OTP to a phone number for a specific purpose.
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{
+  "destination": "+265XXXXXXXXX",
+  "purpose": "string"
+}
+```
+
+> `purpose` values used by the app: `"phone_verification"`, `"password_reset"`.
+
+**Response `data`:**
+
+```json
+{
+  "message": "string",
+  "expiresInSeconds": 300
+}
+```
+
+---
+
+### `POST /auth/otp/verify`
+
+**Auth required:** No
+
+**Request body:**
+
+```json
+{
+  "destination": "+265XXXXXXXXX",
+  "purpose": "string",
+  "code": "string"
+}
+```
+
+**Response `data`:**
+
+```json
+{ "verified": true }
+```
+
+---
+
+### `POST /auth/pin/create`
+
+Set or update the user's transaction PIN.
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{ "pin": "string" }
+```
+
+**Response `data`:**
+
+```json
+{ "message": "string" }
+```
+
+After this call succeeds, `GET /auth/me` must return `hasPinSet: true`.
+
+---
+
+### `POST /auth/pin/verify`
+
+Verify the PIN and receive a short-lived token used to authorise transactions.
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{ "pin": "string" }
+```
+
+**Response `data`:**
+
+```json
+{ "pinToken": "string" }
+```
+
+> The `pinToken` is passed in the `x-pin-token` header on withdrawal requests. It should be a signed, short-lived JWT (recommended TTL: 5 minutes) scoped to the authenticated user.
+
+---
+
+### `GET /auth/me`
+
+Fetch the authenticated user's profile.
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "id": "string",
+  "phone": "string",
+  "email": "string | null",
+  "firstName": "string",
+  "lastName": "string",
+  "role": "string",
+  "kycStatus": "string",
+  "hasPinSet": true,
+  "avatarUrl": "string | null",
+  "isActive": true,
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+> `kycStatus` values the app branches on: `"pending"`, `"approved"`, `"rejected"`, `"not_started"`. The exact set should be agreed and documented.
+
+---
+
+## Wallet API
+
+### `GET /wallet/balance`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "balance": "50000.00",
+  "availableBalance": "48000.00",
+  "reservedBalance": "2000.00",
+  "currency": "MWK"
+}
+```
+
+> All monetary values are **decimal strings**, not numbers. The app displays them directly. The app uses `availableBalance` for available-to-spend checks; falls back to `balance` if `availableBalance` is absent.
+
+---
+
+### `GET /wallet`
+
+**Auth required:** Yes
+
+**Response `data`:** Full wallet object (shape TBD — not currently rendered in UI beyond balance).
+
+---
+
+### `GET /wallet/history?limit=20`
+
+**Auth required:** Yes
+
+**Query params:**
+
+| Param | Type | Default |
+|---|---|---|
+| `limit` | integer | 20 |
+
+**Response `data`:**
+
+```json
+{
+  "transactions": [
+    {
+      "id": "string",
+      "type": "string",
+      "amount": "1000.00",
+      "currency": "MWK",
+      "status": "string",
+      "description": "string",
+      "createdAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+---
+
+### `POST /wallet/deposit`
+
+**Auth required:** Yes
+
+> Used internally for reconciliation. In practice deposits flow through `/payments/initiate`. This endpoint may be used to credit a wallet after a verified payment.
+
+**Request body:**
+
+```json
+{
+  "amount": 5000,
+  "method": "string",
+  "reference": "string | undefined"
+}
+```
+
+---
+
+### `POST /wallet/withdraw`
+
+**Auth required:** Yes  
+**Additional header:** `x-pin-token: <pinToken>`
+
+**Request body:**
+
+```json
+{
+  "amount": 5000,
+  "method": "string",
+  "destination": "string",
+  "pinToken": "string"
+}
+```
+
+> The server must validate the `x-pin-token` header independently of the body field — the body value is provided for logging only. Reject with `403` if the token is expired, invalid, or not issued for the authenticated user.
+
+---
+
+## Portfolio API
+
+### `GET /portfolio/summary`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "totalValue": "125000.00",
+  "totalCost": "100000.00",
+  "totalGain": "25000.00",
+  "totalGainPercent": "25.00",
+  "holdingsCount": 3
+}
+```
+
+---
+
+### `GET /portfolio/holdings`
+
+**Auth required:** Yes
+
+**Response `data`:** Array of holding objects.
+
+```json
+[
+  {
+    "stockId": "string",
+    "symbol": "TNM",
+    "name": "Telekom Networks Malawi",
+    "quantity": "100",
+    "avgCost": "850.00",
+    "currentPrice": "920.00",
+    "marketValue": "92000.00",
+    "gain": "7000.00",
+    "gainPercent": "8.24"
+  }
+]
+```
+
+> All monetary and quantity values are decimal strings.
+
+---
+
+### `GET /portfolio/performance?period=1M`
+
+**Auth required:** Yes
+
+**Query params:**
+
+| Param | Values |
+|---|---|
+| `period` | `1D`, `1W`, `1M`, `3M`, `1Y`, `ALL` |
+
+**Response `data`:** Time-series performance data (shape TBD — not yet rendered in a fixed UI).
+
+---
+
+### `GET /portfolio/allocation`
+
+**Auth required:** Yes
+
+**Response `data`:** Sector/stock allocation breakdown (shape TBD).
+
+---
+
+## Trading API
+
+### `POST /trading/buy`
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{
+  "stockSymbol": "TNM",
+  "quantity": 10,
+  "orderType": "MARKET",
+  "limitPrice": null,
+  "idempotencyKey": "uuid-string"
+}
+```
+
+> `orderType` values: `"MARKET"` | `"LIMIT"`. `limitPrice` is only required when `orderType` is `"LIMIT"`. `idempotencyKey` is a UUID generated by the client per order attempt — use it to deduplicate retried requests.
+
+**Response `data`:**
+
+```json
+{
+  "id": "string",
+  "stockId": "string",
+  "symbol": "TNM",
+  "side": "BUY",
+  "type": "MARKET",
+  "quantity": "10",
+  "price": "920.00",
+  "totalAmount": "9200.00",
+  "status": "QUEUED",
+  "queued": true,
+  "message": "Your order has been queued.",
+  "fees": {
+    "totalCost": "9384.00"
+  },
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "executedAt": null
+}
+```
+
+> **Critical:** The confirm screen reads `response.queued` (boolean) and `response.fees.totalCost` (string) to build the success summary shown to the user. These fields **must** be present. The TypeScript interface in `api.ts` does not yet declare them — that is a known gap on the frontend.
+
+---
+
+### `POST /trading/sell`
+
+**Auth required:** Yes
+
+**Request body:** Same shape as `/trading/buy` with `side: "SELL"` implied.
+
+**Response `data`:** Same shape as `/trading/buy`.
+
+---
+
+### `GET /trading/orders?status=PENDING`
+
+**Auth required:** Yes
+
+**Query params:**
+
+| Param | Description |
+|---|---|
+| `status` | Optional filter: `PENDING`, `EXECUTED`, `CANCELLED` |
+
+**Response `data`:**
+
+```json
+{
+  "orders": [ { /* TradeOrder */ } ],
+  "count": 1
+}
+```
+
+---
+
+### `GET /trading/orders/:id`
+
+**Auth required:** Yes
+
+**Response `data`:** Single `TradeOrder` object.
+
+---
+
+### `GET /trading/history?limit=20`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "orders": [ { /* TradeOrder */ } ],
+  "count": 5
+}
+```
+
+> The trade history screen currently uses mock data — the API integration is wired but pending real data. Ensure this endpoint returns executed/settled orders only.
+
+---
+
+### `POST /trading/cancel/:id`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{ "message": "Order cancelled." }
+```
+
+---
+
+## KYC API
+
+The KYC flow is a multi-step document verification process. All file uploads use `multipart/form-data` — **do not** set `Content-Type` manually; the client omits it so the browser/fetch sets the boundary automatically.
+
+### KYC Status values
+
+| `status` | Meaning |
+|---|---|
+| `not_started` | No application exists |
+| `pending` | Application started, documents uploading |
+| `submitted` | Documents uploaded, awaiting processing |
+| `approved` | KYC passed |
+| `rejected` | KYC failed |
+
+### `POST /kyc/start`
+
+Create a new KYC application for the authenticated user. Must be idempotent if a `pending` application already exists (return the existing one).
+
+**Auth required:** Yes
+
+**Request body:** Empty `{}`
+
+**Response `data`:**
+
+```json
+{ "applicationId": "string" }
+```
+
+---
+
+### `GET /kyc/status`
+
+Fetch the current KYC application state. Used on entry to the upload-id screen to resume an in-progress session.
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "applicationId": "string",
+  "status": "pending",
+  "verificationStage": "string",
+  "confidenceScore": null,
+  "hasIdDocument": false,
+  "hasSelfie": false,
+  "canProcess": false,
+  "submittedAt": null
+}
+```
+
+> `canProcess` must be `true` only when all required documents are uploaded and the application is ready for OCR processing. The client uses `canProcess === false` to determine it should resume uploading rather than creating a new application.
+
+---
+
+### `POST /kyc/upload-id`
+
+Upload the front or back image of a government-issued ID document. This endpoint is called twice for National ID (front then back), once for Passport (photo page only).
+
+**Auth required:** Yes  
+**Content-Type:** `multipart/form-data`
+
+**Form fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `applicationId` | string | From `/kyc/start` or `/kyc/status` |
+| `file` | file | JPEG image (`image/jpeg`). Filename: `id_front.jpg` or `id_back.jpg` |
+
+**Response `data`:**
+
+```json
+{ "documentId": "string" }
+```
+
+---
+
+### `POST /kyc/upload-selfie`
+
+Upload the user's selfie for liveness/face-match check.
+
+**Auth required:** Yes  
+**Content-Type:** `multipart/form-data`
+
+**Form fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `applicationId` | string | Active application ID |
+| `file` | file | JPEG image (`image/jpeg`). Filename: `selfie.jpg` |
+
+**Response `data`:**
+
+```json
+{ "documentId": "string" }
+```
+
+---
+
+### `POST /kyc/process`
+
+Trigger OCR processing and identity verification for the completed application. This is the final step before the decision.
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{ "applicationId": "string" }
+```
+
+**Response `data`:**
+
+```json
+{
+  "decision": "approved | rejected | manual_review",
+  "confidenceScore": 0.97
+}
+```
+
+> After this call, `GET /auth/me` must return the updated `kycStatus`. The client navigates to a result screen and calls `refreshProfile()` on user confirmation — so `GET /auth/me` must reflect the new status immediately.
+
+---
+
+## Stocks API
+
+### `GET /stocks`
+
+**Auth required:** Yes
+
+**Query params:**
+
+| Param | Description |
+|---|---|
+| `sector` | Optional sector filter |
+
+**Response `data`:** Array of stock objects.
+
+```json
+[
+  {
+    "id": "string",
+    "symbol": "TNM",
+    "name": "Telekom Networks Malawi",
+    "sector": "Telecoms",
+    "price": "920.00",
+    "priceRaw": 920.0,
+    "change": "+12.00",
+    "changePct": 1.32,
+    "positive": true,
+    "volume": "1,200,000",
+    "lastUpdated": "2024-01-01T09:00:00.000Z"
+  }
+]
+```
+
+---
+
+### `GET /stocks/search?q=TNM`
+
+**Auth required:** Yes
+
+**Response `data`:** Array of matching stock objects (same shape as `/stocks`).
+
+---
+
+### `GET /stocks/sectors`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+["Banking", "Telecoms", "Consumer Goods", "Manufacturing", "Insurance"]
+```
+
+---
+
+### `GET /stocks/:symbol?period=1M`
+
+**Auth required:** Yes
+
+**Query params:**
+
+| Param | Values |
+|---|---|
+| `period` | `1D`, `1W`, `1M`, `3M`, `1Y` |
+
+**Response `data`:**
+
+```json
+{
+  "id": "string",
+  "symbol": "TNM",
+  "name": "Telekom Networks Malawi",
+  "sector": "Telecoms",
+  "price": "920.00",
+  "priceRaw": 920.0,
+  "change": "+12.00",
+  "changePct": 1.32,
+  "positive": true,
+  "volume": "1,200,000",
+  "lastUpdated": "2024-01-01T09:00:00.000Z",
+  "description": "string | null",
+  "openPrice": "908.00",
+  "highPrice": "925.00",
+  "lowPrice": "905.00",
+  "listedShares": "2,500,000,000",
+  "period": "1M",
+  "priceHistory": [
+    {
+      "date": "2024-01-01",
+      "close": 920.0,
+      "open": 908.0,
+      "high": 925.0,
+      "low": 905.0,
+      "volume": 1200000,
+      "changePct": 1.32
+    }
+  ]
+}
+```
+
+---
+
+## Notifications API
+
+### `GET /notifications?limit=30`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "notifications": [
+    {
+      "id": "string",
+      "type": "string",
+      "category": "string",
+      "priority": 1,
+      "title": "Order Executed",
+      "body": "Your buy order for TNM was executed.",
+      "data": {},
+      "isRead": false,
+      "readAt": null,
+      "createdAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "total": 10,
+  "unreadCount": 3
+}
+```
+
+---
+
+### `GET /notifications/unread`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "notifications": [ { /* Notification */ } ],
+  "count": 3
+}
+```
+
+---
+
+### `POST /notifications/read`
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{ "notificationId": "string" }
+```
+
+**Response `data`:**
+
+```json
+{ "success": true }
+```
+
+---
+
+### `POST /notifications/read-all`
+
+**Auth required:** Yes
+
+**Request body:** Empty
+
+**Response `data`:**
+
+```json
+{ "success": true, "count": 3 }
+```
+
+---
+
+### `DELETE /notifications/:id`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{ "success": true }
+```
+
+---
+
+### `GET /notifications/preferences`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "trades": { "push": true, "email": true, "sms": false, "inApp": true },
+  "deposits": { "push": true, "email": true, "sms": false, "inApp": true },
+  "kyc": { "push": true, "email": true, "sms": false, "inApp": true },
+  "news": { "push": false, "email": false, "sms": false, "inApp": true }
+}
+```
+
+> Keys are notification categories. The exact category set should be aligned with what the app renders in the push notification preferences screen.
+
+---
+
+### `PUT /notifications/preferences`
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{
+  "category": "trades",
+  "push": true,
+  "email": false,
+  "sms": false
+}
+```
+
+**Response `data`:**
+
+```json
+{ "success": true }
+```
+
+---
+
+## Payments API — PayChangu
+
+Used for mobile money deposits.
+
+### `POST /payments/initiate`
+
+Create a PayChangu checkout session. The mobile app opens the returned `checkoutUrl` in a WebView.
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{
+  "amount": 10000,
+  "currency": "MWK",
+  "purpose": "wallet_deposit",
+  "stockSymbol": "TNM",
+  "quantity": 10
+}
+```
+
+> `stockSymbol` and `quantity` are optional — only sent when the payment is for a direct stock purchase rather than a wallet top-up.
+
+**Response `data`:**
+
+```json
+{
+  "checkoutUrl": "https://paychangu.com/checkout/...",
+  "txRef": "pine_abc123",
+  "transactionId": "string",
+  "status": "pending"
+}
+```
+
+---
+
+### `GET /payments/verify/:txRef`
+
+Poll for the result of a PayChangu payment. The app polls this after the WebView closes.
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "txRef": "pine_abc123",
+  "status": "success | failed | pending",
+  "amount": 10000,
+  "currency": "MWK",
+  "channel": "mobile_money",
+  "completedAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+---
+
+## Payments API — Bank Card
+
+Direct bank card payments. **Currently a skeleton on the backend (returns 501).**
+
+### `POST /payments/card/initiate`
+
+**Auth required:** Yes
+
+**Request body:**
+
+```json
+{
+  "amount": 10000,
+  "currency": "MWK",
+  "cardholderName": "John Doe",
+  "cardNumber": "4111111111111111",
+  "expiryMonth": "12",
+  "expiryYear": "2027",
+  "cvv": "123",
+  "purpose": "wallet_deposit",
+  "stockSymbol": null,
+  "quantity": null
+}
+```
+
+> **Security note:** Raw card numbers must never be stored. The backend must tokenise the card via the card processor and discard the raw PAN before persisting anything.
+
+**Response `data`:**
+
+```json
+{
+  "txRef": "string",
+  "transactionId": "string",
+  "status": "pending | success | failed",
+  "amount": 10000,
+  "currency": "MWK",
+  "message": "string",
+  "processorReference": "string | undefined",
+  "last4": "1111",
+  "cardBrand": "Visa"
+}
+```
+
+---
+
+### `GET /payments/card/verify/:txRef`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "txRef": "string",
+  "status": "pending | success | failed",
+  "amount": 10000,
+  "currency": "MWK",
+  "processorReference": "string | undefined",
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "failureReason": "string | undefined"
+}
+```
+
+---
+
+## Watchlist API
+
+### `GET /watchlist`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "stocks": [ { /* ApiStock */ } ],
+  "count": 2
+}
+```
+
+---
+
+### `GET /watchlist/symbols`
+
+Lightweight endpoint — returns only the set of watched symbols. Used to determine watch-icon state without fetching full stock data.
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{ "symbols": ["TNM", "NBM"] }
+```
+
+---
+
+### `GET /watchlist/:symbol`
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{ "watched": true }
+```
+
+---
+
+### `POST /watchlist/:symbol`
+
+Add a stock to the watchlist. Must be idempotent (adding an already-watched stock is not an error).
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "message": "Added to watchlist.",
+  "symbol": "TNM",
+  "addedAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+---
+
+### `DELETE /watchlist/:symbol`
+
+Remove a stock from the watchlist. Must be idempotent.
+
+**Auth required:** Yes
+
+**Response `data`:**
+
+```json
+{
+  "message": "Removed from watchlist.",
+  "symbol": "TNM"
+}
+```
+
+---
+
+## Missing / Not Yet Implemented
+
+These endpoints are called or expected by the mobile app but do not yet exist on the backend.
+
+---
+
+### ❌ `POST /kyc/upload-proof-of-residency`
+
+**Priority: High.** The upload-proof-of-residency KYC screen is complete on the frontend — the image picker, loading state, and error handling are all wired up. It is currently blocked by this missing endpoint.
+
+**Auth required:** Yes  
+**Content-Type:** `multipart/form-data`
+
+**Form fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `applicationId` | string | Active KYC application ID |
+| `file` | file | JPEG or PDF of the proof-of-residency document |
+
+**Expected response `data`:**
+
+```json
+{ "documentId": "string" }
+```
+
+Once this endpoint is live, remove the `TODO` comment and simulated delay from `app/kyc/upload-proof-of-residency.tsx` and call `kycApi.uploadProofOfResidency(applicationId, uri, fileName)` (method to be added to `services/api.ts`).
+
+---
+
+### ⚠️ `POST /trading/buy` and `POST /trading/sell` — missing response fields
+
+The trade confirm screen reads two fields that are not in the current `TradeOrder` TypeScript interface:
+
+- `queued: boolean` — displayed as "Order Queued" vs "Order Placed"
+- `fees.totalCost: string` — displayed as the total cost including fees
+
+Ensure these fields are returned in the trade response. The frontend `TradeOrder` type in `services/api.ts` will be updated to match once confirmed.
+
+---
+
+### ⚠️ `POST /payments/card/initiate` — returns 501
+
+The bank card payment endpoint is a declared skeleton. It must be implemented before the card deposit flow is usable.
+
+---
+
+## Treasury API (Fully Missing)
+
+The Treasury feature (T-bill investments) is entirely mock on the frontend — all data comes from `data/treasury.ts` hardcoded fixtures, and the processing screen uses a frontend animation timer rather than real API calls.
+
+The following endpoints need to be designed and built. The mobile app will need to be updated to call them once they exist.
+
+### Required endpoints (proposed)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/treasury/products` | List available T-bill products (tenor, yield rate, min amount) |
+| `GET` | `/treasury/investments` | List the authenticated user's active T-bill investments |
+| `POST` | `/treasury/invest` | Submit a new T-bill investment order |
+| `GET` | `/treasury/investments/:id` | Fetch status and details of a specific investment |
+
+### Proposed request/response shapes
+
+**`GET /treasury/products` response:**
+
+```json
+[
+  {
+    "id": "string",
+    "label": "91-Day T-Bill",
+    "tenorDays": 91,
+    "yieldPercent": 26.5,
+    "minAmount": 50000,
+    "maxAmount": null,
+    "currency": "MWK",
+    "isActive": true
+  }
+]
+```
+
+**`POST /treasury/invest` request:**
+
+```json
+{
+  "productId": "string",
+  "amount": 100000
+}
+```
+
+**`POST /treasury/invest` response:**
+
+```json
+{
+  "investmentId": "string",
+  "status": "pending | active | matured | cancelled",
+  "amount": "100000.00",
+  "yieldPercent": 26.5,
+  "earnings": "6082.19",
+  "maturityValue": "106082.19",
+  "maturityDate": "2024-04-01",
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+> The frontend calculates `earnings` and `maturityValue` locally using `calculateReturns(amount, yieldPct, tenorDays)`. Once the API exists, these values should come from the backend to ensure accuracy with actual settlement calculations.
+
+---
+
+*Last updated: 2026-07-29. Derived from `services/api.ts` v1 and all consuming screens.*

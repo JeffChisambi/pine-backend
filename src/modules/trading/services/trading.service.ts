@@ -192,18 +192,9 @@ export class TradingService {
           'Order queued — market is closed, pending broker execution',
         );
 
-        return {
-          orderId: order.id,
-          status: OrderLifecycleStatus.SUBMITTED,
-          queued: true,
-          message: 'Your order has been queued and will be executed when the market opens (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).',
-          order: await this.repo.findOrderById(order.id).then((o) => this.formatOrderResponse(o)),
-          fees: {
-            totalFees: fees.totalFees.toNumber(),
-            totalCost: fees.totalCost.toNumber(),
-          },
-          pipelineDurationMs: durationMs,
-        };
+        const queuedOrder = await this.repo.findOrderById(order.id);
+        const queuedMessage = 'Your order has been queued and will be executed when the market opens (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).';
+        return this.buildContractResponse(queuedOrder, fees.totalCost, true, queuedMessage, estimatedPrice);
       }
 
       // ── Step 3: Risk checks ─────────────────────────────────
@@ -235,13 +226,13 @@ export class TradingService {
         'Trading pipeline completed',
       );
 
-      return {
-        orderId: order.id,
-        status: result.status,
-        order: this.formatOrderResponse(result.order),
-        fees: result.fees,
-        pipelineDurationMs: durationMs,
-      };
+      const execTotalCost = result.fees?.totalCost != null
+        ? new Decimal(result.fees.totalCost)
+        : null;
+      const execMessage = result.status === 'FILLED'
+        ? 'Your order has been placed.'
+        : 'Your order has been submitted.';
+      return this.buildContractResponse(result.order, execTotalCost, false, execMessage, estimatedPrice);
     } catch (error) {
       // If any step fails, reject the order
       this.logger.error(
@@ -286,7 +277,7 @@ export class TradingService {
       new OrderCancelledEvent(orderId, userId, 'User requested cancellation'),
     );
 
-    return { orderId, status: 'CANCELLED' };
+    return { message: 'Order cancelled.' };
   }
 
   /**
@@ -299,6 +290,7 @@ export class TradingService {
     const { orders, total } = await this.orderService.getOrderHistory(userId, filters);
     return {
       orders: orders.map((o) => this.formatOrderResponse(o)),
+      count: total,
       total,
       limit: filters.limit ?? 20,
       offset: filters.offset ?? 0,
@@ -316,23 +308,70 @@ export class TradingService {
 
 
   /**
-   * Get trade history.
+   * Get trade history — returns executed/settled orders only.
    */
   async getTradeHistory(userId: string, limit = 20, offset = 0) {
     const trades = await this.repo.findUserTrades(userId, limit, offset);
-    return trades.map((t) => ({
-      tradeId: t.id,
-      orderId: t.orderId,
-      stockSymbol: t.order.stock.symbol,
-      stockName: t.order.stock.name,
-      side: t.order.side,
-      quantity: t.quantity.toNumber(),
-      price: t.price.toNumber(),
-      fee: t.fee.toNumber(),
-      total: t.quantity.mul(t.price).toNumber(),
-      settledAt: t.settledAt,
-      createdAt: t.createdAt,
-    }));
+    const orders = trades.map((t) => {
+      const grossValue = t.quantity.mul(t.price);
+      const totalCost = grossValue.add(t.fee);
+      return {
+        id: t.orderId,
+        stockId: t.order.stockId,
+        symbol: t.order.stock.symbol,
+        side: t.order.side,
+        type: t.order.type,
+        quantity: t.quantity.toFixed(0),
+        price: t.price.toFixed(2),
+        totalAmount: grossValue.toFixed(2),
+        status: t.order.status,
+        queued: false,
+        fees: { totalCost: totalCost.toFixed(2) },
+        createdAt: t.createdAt,
+        executedAt: t.settledAt ?? t.createdAt,
+      };
+    });
+    return { orders, count: orders.length };
+  }
+
+  /**
+   * Build the flat API contract response for buy/sell operations.
+   * The mobile app reads: response.queued, response.fees.totalCost (string).
+   */
+  private buildContractResponse(
+    order: any,
+    totalCost: Decimal | null,
+    queued: boolean,
+    message: string,
+    estimatedPrice?: Decimal,
+  ) {
+    const qty = order?.quantity instanceof Decimal
+      ? order.quantity
+      : new Decimal(order?.quantity ?? 0);
+    const fillPrice = order?.averageFillPrice instanceof Decimal
+      ? order.averageFillPrice
+      : (order?.averageFillPrice != null ? new Decimal(order.averageFillPrice) : estimatedPrice ?? new Decimal(0));
+    const grossValue = qty.mul(fillPrice);
+    const totalCostStr = totalCost instanceof Decimal
+      ? totalCost.toFixed(2)
+      : (typeof totalCost === 'number' ? (totalCost as number).toFixed(2) : grossValue.toFixed(2));
+
+    return {
+      id: order?.id,
+      stockId: order?.stockId,
+      symbol: order?.stock?.symbol,
+      side: order?.side,
+      type: order?.type,
+      quantity: qty.toFixed(0),
+      price: fillPrice.toFixed(2),
+      totalAmount: grossValue.toFixed(2),
+      status: queued ? 'QUEUED' : order?.status,
+      queued,
+      message,
+      fees: { totalCost: totalCostStr },
+      createdAt: order?.createdAt,
+      executedAt: order?.filledAt ?? null,
+    };
   }
 
   /**
