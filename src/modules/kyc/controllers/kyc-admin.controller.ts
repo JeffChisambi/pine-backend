@@ -297,14 +297,4 @@ export class KycAdminController {
 
     return { message: 'Application rejected', applicationId };
   }
-
-  @Post('reject')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: '[Legacy] Reject — prefer /:id/reject' })
-  async reject(@Body() dto: AdminDecisionDto) {
-    return this.rejectById(dto.applicationId, {
-      reason: dto.reason ?? 'No reason provided',
-      notes: dto.notes,
-    });
-  }
 }
