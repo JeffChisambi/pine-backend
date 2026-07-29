@@ -188,6 +188,27 @@ export class KycAdminController {
     };
   }
 
+  // ── Legacy body-based routes (backward compat) ─────────────────────────────
+  // IMPORTANT: These MUST be declared before the /:id/* dynamic routes so that
+  // NestJS (Express) resolves the static paths first.
+
+  @Post('approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: '[Legacy] Approve — prefer /:id/approve' })
+  async approve(@Body() dto: AdminDecisionDto) {
+    return this.approveById(dto.applicationId, { notes: dto.notes });
+  }
+
+  @Post('reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: '[Legacy] Reject — prefer /:id/reject' })
+  async reject(@Body() dto: AdminDecisionDto) {
+    return this.rejectById(dto.applicationId, {
+      reason: dto.reason ?? 'No reason provided',
+      notes: dto.notes,
+    });
+  }
+
   // ── Approve (path-param — matches Kusata hook) ────────────────────────────
 
   @Post(':id/approve')
@@ -217,10 +238,15 @@ export class KycAdminController {
       details: { notes: body.notes },
     });
 
-    // Sync user.kycStatus via the workflow service helper
-    const app = await this.repository.getApplicationById(applicationId);
-    if (app) {
-      await this.workflowService.setUserKycStatus(app.userId, 'APPROVED');
+    // Best-effort: sync user.kycStatus. Never let this fail the whole request.
+    try {
+      const app = await this.repository.getApplicationById(applicationId);
+      if (app) {
+        await this.workflowService.setUserKycStatus(app.userId, 'APPROVED');
+      }
+    } catch (syncErr) {
+      // Log but do not rethrow — the application is already approved in the DB.
+      console.warn('[KycAdmin] setUserKycStatus(APPROVED) failed:', syncErr);
     }
 
     return { message: 'Application approved', applicationId };
@@ -259,21 +285,18 @@ export class KycAdminController {
       details: { reason: body.reason, notes: body.notes },
     });
 
-    const app = await this.repository.getApplicationById(applicationId);
-    if (app) {
-      await this.workflowService.setUserKycStatus(app.userId, 'REJECTED');
+    // Best-effort: sync user.kycStatus. Never let this fail the whole request.
+    try {
+      const app = await this.repository.getApplicationById(applicationId);
+      if (app) {
+        await this.workflowService.setUserKycStatus(app.userId, 'REJECTED');
+      }
+    } catch (syncErr) {
+      console.warn('[KycAdmin] setUserKycStatus(REJECTED) failed:', syncErr);
     }
 
     return { message: 'Application rejected', applicationId };
   }
-
-  // ── Legacy body-based routes (backward compat) ────────────────────────────
-
-  @Post('approve')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: '[Legacy] Approve — prefer /:id/approve' })
-  async approve(@Body() dto: AdminDecisionDto) {
-    return this.approveById(dto.applicationId, { notes: dto.notes });
   }
 
   @Post('reject')
