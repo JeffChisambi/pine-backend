@@ -297,7 +297,6 @@ export class KycAdminController {
 
     return { message: 'Application rejected', applicationId };
   }
-  }
 
   @Post('reject')
   @HttpCode(HttpStatus.OK)
