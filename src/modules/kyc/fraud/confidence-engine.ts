@@ -205,6 +205,16 @@ export class ConfidenceEngine {
       };
     }
 
+    // AI providers unavailable (all scores zero) → manual review
+    // This happens when Tesseract / InsightFace are not installed on the server.
+    // Never auto-reject a user just because our AI stack isn't fully deployed.
+    if (compositeScore === 0) {
+      return {
+        decision: 'MANUAL_REVIEW',
+        decisionReason: 'AI providers unavailable — queued for manual broker review',
+      };
+    }
+
     // Very low composite → auto-reject
     if (compositeScore < this.thresholds.autoReject) {
       return {

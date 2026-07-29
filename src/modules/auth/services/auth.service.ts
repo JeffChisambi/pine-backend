@@ -443,18 +443,12 @@ export class AuthService {
   // ──────────────────────────────────────────────────────────────
 
   /**
-   * Normalize Prisma KycStatus enum to lowercase API contract values.
-   * Contract: "not_started" | "pending" | "approved" | "rejected" | "manual_review"
+   * KycStatus is passed through as-is (uppercase DB enum).
+   * NOT_SUBMITTED | PENDING | APPROVED | REJECTED
+   * @deprecated kept for safety — use kycStatus directly
    */
   private normalizeKycStatus(status: string): string {
-    const map: Record<string, string> = {
-      NOT_SUBMITTED: 'not_started',
-      PENDING: 'pending',
-      APPROVED: 'approved',
-      REJECTED: 'rejected',
-      MANUAL_REVIEW: 'manual_review',
-    };
-    return map[status] ?? status.toLowerCase();
+    return status; // Return as-is — mobile expects uppercase DB values
   }
 
   private buildAuthResponse(

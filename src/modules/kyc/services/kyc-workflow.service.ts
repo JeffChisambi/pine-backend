@@ -427,27 +427,25 @@ export class KycWorkflowService {
         KycVerificationStage.DECIDING,
       );
 
-      // Map decision to KYC status.
-      // MANUAL_REVIEW maps to the MANUAL_REVIEW status so the broker dashboard
-      // shows it in the dedicated Manual Review queue (§9, Kusata API contract).
-      const statusMap = {
-        APPROVED: 'APPROVED',
-        MANUAL_REVIEW: 'MANUAL_REVIEW',
-        REJECTED: 'REJECTED',
-      } as const;
+      // Map scoring decision to a valid KycApplication DB status.
+      // MANUAL_REVIEW is NOT a DB enum value — keep application PENDING
+      // so it appears in the Kusata queue for human broker review.
+      const applicationStatus =
+        scoring.decision === 'APPROVED' ? 'APPROVED' :
+        scoring.decision === 'REJECTED' ? 'REJECTED' :
+        'PENDING'; // MANUAL_REVIEW stays PENDING
 
-      const finalStatus = statusMap[scoring.decision];
-
-      await this.repository.updateApplicationStatus(applicationId, finalStatus, {
+      await this.repository.updateApplicationStatus(applicationId, applicationStatus, {
         confidenceScore: scoring.compositeScore,
         imageQualityScore: scoring.scores.imageQuality,
         documentQualityScore: scoring.scores.documentQuality,
         fraudScore: fraudResult.riskScore,
       });
 
-      // Also update user.kycStatus if auto-approved or auto-rejected
-      if (finalStatus === 'APPROVED' || finalStatus === 'REJECTED') {
-        await this.updateUserKycStatus(userId, finalStatus);
+      // Update user.kycStatus only for terminal states (APPROVED / REJECTED).
+      // MANUAL_REVIEW leaves user at PENDING → mobile shows "Under Review".
+      if (applicationStatus === 'APPROVED' || applicationStatus === 'REJECTED') {
+        await this.updateUserKycStatus(userId, applicationStatus);
       }
 
       await this.repository.updateApplicationStage(
