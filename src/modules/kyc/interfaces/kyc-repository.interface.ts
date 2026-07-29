@@ -18,6 +18,7 @@ export interface KycApplicationRecord {
   verificationStage: string;
   nationalIdNumber: string | null;
   dateOfBirth: Date | null;
+  city: string | null;
   ocrExtractedData: unknown;
   facialMatchScore: number | null;
   confidenceScore: number | null;
@@ -29,11 +30,42 @@ export interface KycApplicationRecord {
   reviewedById: string | null;
   reviewDecision: string | null;
   rejectionReason: string | null;
+  /** Internal reviewer notes stored on the dedicated column (not JSON). */
   reviewerNotes: string | null;
   submittedAt: Date;
   reviewedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+
+  // ── New fields required by the Kusata broker dashboard API contract ──
+  /** KYC tier: TIER_1 or TIER_2 */
+  tier: string | null;
+  /** Anti-spoofing / liveness score (0–1) */
+  livenessScore: number | null;
+  /** Machine-readable risk flag codes (string[]) */
+  riskFlags: string[] | null;
+  /** Display name of the reviewer (denormalised) */
+  reviewerName: string | null;
+  /** Required document slot codes when status = ADDITIONAL_DOCS */
+  requiredDocuments: string[] | null;
+  /** Message to the applicant when requesting docs */
+  requestDocsMessage: string | null;
+
+  // ── Fields joined from the User record (populated by getQueuePage) ──
+  /** User's first name */
+  firstName?: string | null;
+  /** User's last name */
+  lastName?: string | null;
+  /** User's email */
+  email?: string | null;
+  /** Whether the user's email has been verified */
+  emailVerified?: boolean | null;
+  /** User's phone */
+  phone?: string | null;
+  /** Whether the user's phone has been verified */
+  phoneVerified?: boolean | null;
+  /** First document type from the application documents array */
+  documentType?: string | null;
 }
 
 export interface KycDocumentRecord {
@@ -147,12 +179,43 @@ export interface IKycRepository {
   // ── Admin ─────────────────────────────────────────────────────
   getPendingApplications(limit: number, cursor?: string): Promise<KycApplicationRecord[]>;
 
+  /**
+   * Paginated queue of KYC applications for the broker dashboard.
+   * Returns page-based metadata matching the Kusata API contract.
+   */
+  getQueuePage(options: {
+    page: number;
+    limit: number;
+    status?: string;
+  }): Promise<{
+    applications: KycApplicationRecord[];
+    total: number;
+    page: number;
+    totalPages: number;
+  }>;
+
+  /** Aggregate counts per KycStatus for the dashboard stats cards. */
+  getCountsByStatus(): Promise<Record<string, number>>;
+
   recordReview(data: {
     applicationId: string;
     reviewerId: string;
+    reviewerName: string;
     decision: 'APPROVED' | 'REJECTED';
     reason?: string;
     notes?: string;
+  }): Promise<void>;
+
+  /**
+   * Set status to ADDITIONAL_DOCS and store the required document list
+   * and optional message so the applicant's mobile app knows what to resubmit.
+   */
+  requestAdditionalDocuments(data: {
+    applicationId: string;
+    reviewerId: string;
+    reviewerName: string;
+    requiredDocuments: string[];
+    message?: string;
   }): Promise<void>;
 
   // ── Audit ─────────────────────────────────────────────────────

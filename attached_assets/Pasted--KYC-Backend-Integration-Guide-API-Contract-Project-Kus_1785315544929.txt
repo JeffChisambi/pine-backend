@@ -1,0 +1,880 @@
+# KYC Backend Integration Guide & API Contract
+
+**Project:** Kusata Broker Dashboard — Pine Broker Admin  
+**Version:** 1.0  
+**Audience:** Backend / API team  
+**Base URL:** `https://api.kapwanje.com`
+
+---
+
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Authentication](#2-authentication)
+3. [Common Conventions](#3-common-conventions)
+4. [Status & Enum Reference](#4-status--enum-reference)
+5. [Endpoint Reference](#5-endpoint-reference)
+   - [GET /v1/admin/kyc/queue](#51-get-v1adminkycqueue)
+   - [GET /v1/admin/kyc/counts](#52-get-v1adminkycounts)
+   - [GET /v1/admin/kyc/:applicationId](#53-get-v1adminkycapplicationid)
+   - [POST /v1/admin/kyc/:applicationId/approve](#54-post-v1adminkycapplicationidapprove)
+   - [POST /v1/admin/kyc/:applicationId/reject](#55-post-v1adminkycapplicationidreject)
+   - [POST /v1/admin/kyc/:applicationId/request-docs](#56-post-v1adminkycapplicationidrequest-docs)
+6. [Data Schemas](#6-data-schemas)
+   - [KycApplicationRow](#61-kycapplicationrow)
+   - [KycApplicationDetail](#62-kycapplicationdetail)
+   - [KycDocument](#63-kycdocument)
+   - [KycOcrData](#64-kycocrdata)
+   - [KycCountsByStatus](#65-kyccountsbystatus)
+7. [Document Images & Storage](#7-document-images--storage)
+8. [OCR Payload Structure](#8-ocr-payload-structure)
+9. [Risk Flags](#9-risk-flags)
+10. [Status Transition Rules](#10-status-transition-rules)
+11. [Validation Rules](#11-validation-rules)
+12. [Error Codes](#12-error-codes)
+13. [Cache Invalidation Contract](#13-cache-invalidation-contract)
+14. [Webhooks / Real-Time Events](#14-webhooks--real-time-events)
+15. [Data Mapping: Frontend ↔ Backend](#15-data-mapping-frontend--backend)
+16. [New Fields Required](#16-new-fields-required)
+17. [Checklist](#17-checklist)
+
+---
+
+## 1. Overview
+
+The KYC module allows admin and broker users to review identity verification submissions, approve or reject applicants, request additional documents, and track verification status in real time.
+
+The frontend polls the queue every **30 seconds** (`refetchInterval: 30_000`) and fetches per-status counts every **60 seconds**. Mutation responses must reflect the updated application state immediately so the cache can be invalidated accurately on the client.
+
+---
+
+## 2. Authentication
+
+All KYC endpoints require a valid admin JWT access token.
+
+**Header:**
+```
+Authorization: Bearer <access_token>
+```
+
+Tokens are issued by the auth flow (`POST /v1/admin/auth/mfa/verify`, `/mfa/confirm-setup`, `/mfa/recovery`) and refreshed via `POST /v1/admin/auth/refresh`.
+
+**Roles with KYC access:**
+| Role       | Allowed actions                                           |
+|------------|-----------------------------------------------------------|
+| `ADMIN`    | View queue, view detail, approve, reject, request-docs    |
+| `SUPER_ADMIN` | All of the above                                       |
+| `BROKER`   | View queue, view detail only (no mutations)               |
+
+Return `403 Forbidden` if a broker attempts a mutation.
+
+---
+
+## 3. Common Conventions
+
+### Response envelope
+
+All successful responses are wrapped:
+
+```jsonc
+{
+  "success": true,
+  "data": { /* payload */ },
+  "meta": { /* optional pagination or context */ }
+}
+```
+
+The frontend API client unwraps `data` automatically. Return the payload directly inside `data`.
+
+### Pagination
+
+```jsonc
+{
+  "applications": [...],
+  "count": 25,        // items in this page
+  "total": 142,       // total matching records
+  "page": 1,
+  "totalPages": 6
+}
+```
+
+### Error envelope
+
+```jsonc
+{
+  "success": false,
+  "message": "Human-readable description",
+  "code": "MACHINE_READABLE_CODE",
+  "errors": [         // optional field-level validation errors
+    { "field": "reason", "message": "Reason is required" }
+  ]
+}
+```
+
+### Timestamps
+
+All timestamps must be **ISO 8601 UTC**, e.g. `"2025-07-29T10:30:00.000Z"`.
+
+---
+
+## 4. Status & Enum Reference
+
+### KYC Application Status
+
+| API value          | Frontend display    | Description                                              |
+|--------------------|---------------------|----------------------------------------------------------|
+| `PENDING`          | Pending             | Submitted, awaiting admin review                         |
+| `APPROVED`         | Approved            | Identity verified; user may trade                        |
+| `REJECTED`         | Rejected            | Application denied                                       |
+| `ADDITIONAL_DOCS`  | Awaiting Docs       | Admin requested resubmission of one or more documents    |
+| `MANUAL_REVIEW`    | Manual Review       | Flagged by automated checks for human review             |
+| `NOT_SUBMITTED`    | Pending             | User has not yet completed submission (treated as pending on frontend) |
+
+> **Important:** The frontend maps both `PENDING` and `NOT_SUBMITTED` to the "Pending" display state. Do not add new status values without updating the frontend `STATUS_MAP` in `src/routes/kyc.tsx`.
+
+### Document Type
+
+| API value          | Frontend display      |
+|--------------------|-----------------------|
+| `NATIONAL_ID`      | National ID           |
+| `PASSPORT`         | Passport              |
+| `DRIVERS_LICENSE`  | Driver's License      |
+
+### Document Slot (for document uploads)
+
+| API value                  | Description                           |
+|----------------------------|---------------------------------------|
+| `ID_FRONT`                 | Front of national ID or passport      |
+| `ID_BACK`                  | Back of national ID                   |
+| `NATIONAL_ID`              | Alternative alias for `ID_FRONT`      |
+| `NATIONAL_ID_BACK`         | Alternative alias for `ID_BACK`       |
+| `PASSPORT_FRONT`           | Passport data page                    |
+| `PASSPORT_BACK`            | Passport back page                    |
+| `DRIVERS_LICENSE_FRONT`    | Driver's license front                |
+| `DRIVERS_LICENSE_BACK`     | Driver's license back                 |
+| `SELFIE`                   | Live selfie or liveness capture       |
+| `LIVENESS`                 | Alternative alias for `SELFIE`        |
+| `PROOF_OF_ADDRESS`         | Utility bill / bank statement         |
+
+The frontend document viewer groups these into three tabs:
+- **ID Front** — `ID_FRONT`, `NATIONAL_ID`, `PASSPORT`, `PASSPORT_FRONT`, `DRIVERS_LICENSE_FRONT`
+- **ID Back** — `ID_BACK`, `NATIONAL_ID_BACK`, `PASSPORT_BACK`, `DRIVERS_LICENSE_BACK`
+- **Selfie** — `SELFIE`, `LIVENESS`
+
+The "ID Back" tab only appears when a back-side document is present.
+
+### Tier
+
+| API value   | Frontend display |
+|-------------|-----------------|
+| `TIER_1`    | Tier 1          |
+| `TIER_2`    | Tier 2          |
+| `TIER1`     | Tier 1 (alias)  |
+| `TIER2`     | Tier 2 (alias)  |
+| `1`         | Tier 1 (alias)  |
+| `2`         | Tier 2 (alias)  |
+
+---
+
+## 5. Endpoint Reference
+
+### 5.1 `GET /v1/admin/kyc/queue`
+
+Returns a paginated list of KYC applications for the queue view.
+
+#### Query parameters
+
+| Parameter | Type    | Required | Description                                            |
+|-----------|---------|----------|--------------------------------------------------------|
+| `limit`   | integer | No       | Page size. Default: `50`. Max: `200`.                  |
+| `page`    | integer | No       | 1-based page number. Default: `1`.                     |
+| `status`  | string  | No       | Filter by status enum (e.g. `PENDING`). Omit for all. |
+
+#### Response `200`
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "applications": [ /* KycApplicationRow[] */ ],
+    "count": 25,
+    "total": 142,
+    "page": 1,
+    "totalPages": 6
+  }
+}
+```
+
+Each element is a [`KycApplicationRow`](#61-kycapplicationrow).
+
+#### Notes
+
+- Sort order: descending by `submittedAt` is preferred (the frontend re-sorts client-side, but a server-side default is good practice).
+- The frontend passes `status` as a single uppercase string. Multiple statuses in one call are not currently required.
+- When `status` is `ADDITIONAL_DOCS`, also include any applications with status `AWAITING_DOCS` or `DOCS_REQUESTED` if those aliases exist in the data store.
+
+---
+
+### 5.2 `GET /v1/admin/kyc/counts`
+
+Returns aggregate counts per KYC status. Drives the tab badge numbers and stats cards.
+
+> **This is a new endpoint** required by the frontend redesign. It was not present in the original API.
+
+#### Response `200`
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "PENDING":         34,
+    "APPROVED":        287,
+    "REJECTED":        41,
+    "ADDITIONAL_DOCS": 12,
+    "MANUAL_REVIEW":   8,
+    "NOT_SUBMITTED":   60
+  }
+}
+```
+
+#### Notes
+
+- Include all statuses the data store can produce.
+- Called every 60 seconds in the background by the frontend.
+- If this endpoint is not available yet, the frontend degrades gracefully (stat cards show `0`, tab badges show `—`).
+
+---
+
+### 5.3 `GET /v1/admin/kyc/:applicationId`
+
+Returns the full detail of a single KYC application, including documents and OCR data. Opened when an admin clicks any row to review.
+
+#### Path parameters
+
+| Parameter       | Type   | Required | Description          |
+|-----------------|--------|----------|----------------------|
+| `applicationId` | string | Yes      | KYC application UUID |
+
+#### Response `200`
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "application": { /* KycApplicationRow + ocrExtractedData */ },
+    "documents": [ /* KycDocument[] */ ]
+  }
+}
+```
+
+See [`KycApplicationDetail`](#62-kycapplicationdetail) for the full schema.
+
+#### Notes
+
+- `documents` must include an `imageUrl` for each document that has been uploaded. The URL may be a presigned S3 URL (see [Section 7](#7-document-images--storage)).
+- The frontend caches this response for 60 seconds (`staleTime: 60_000`). Approving, rejecting, or requesting docs invalidates the cache for this application.
+- Return `404` if the application does not exist or is not accessible to the authenticated role.
+
+---
+
+### 5.4 `POST /v1/admin/kyc/:applicationId/approve`
+
+Approves a KYC application.
+
+#### Path parameters
+
+| Parameter       | Type   | Required |
+|-----------------|--------|----------|
+| `applicationId` | string | Yes      |
+
+#### Request body
+
+```jsonc
+{
+  "notes": "All documents verified. Face match 94%."  // optional
+}
+```
+
+| Field   | Type   | Required | Description                                 |
+|---------|--------|----------|---------------------------------------------|
+| `notes` | string | No       | Internal reviewer notes, max 2000 chars     |
+
+#### Response `200`
+
+Return the updated `KycApplicationRow` (status will be `APPROVED`):
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "applicationId": "abc123",
+    "userId": "usr456",
+    "newStatus": "APPROVED",
+    "reviewedAt": "2025-07-29T14:22:00.000Z",
+    "reviewerName": "Alice Admin"
+  }
+}
+```
+
+#### Side effects
+
+- Set application `status = APPROVED`.
+- Set `reviewedAt = now()`, `reviewerName = <calling admin's display name>`.
+- Synchronously update the user's `kycStatus` on the user record so the Users page reflects the change.
+- Trigger any downstream notifications to the user (e.g. "Your identity has been verified").
+
+#### Validation
+
+- Return `409 Conflict` with code `ALREADY_REVIEWED` if the application is already `APPROVED` or `REJECTED`.
+- Return `403 Forbidden` if the caller's role is `BROKER`.
+
+---
+
+### 5.5 `POST /v1/admin/kyc/:applicationId/reject`
+
+Rejects a KYC application.
+
+#### Path parameters
+
+| Parameter       | Type   | Required |
+|-----------------|--------|----------|
+| `applicationId` | string | Yes      |
+
+#### Request body
+
+```jsonc
+{
+  "reason": "Document photo is blurry and unreadable.",
+  "notes":  "OCR confidence 34%. Face match 52%. Manual inspection failed."
+}
+```
+
+| Field    | Type   | Required | Description                                              |
+|----------|--------|----------|----------------------------------------------------------|
+| `reason` | string | **Yes**  | Human-readable rejection reason shown to the applicant. Min 10 chars, max 1000 chars. |
+| `notes`  | string | No       | Internal reviewer notes, not shown to applicant. Max 2000 chars. |
+
+#### Response `200`
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "applicationId": "abc123",
+    "userId": "usr456",
+    "newStatus": "REJECTED",
+    "reviewedAt": "2025-07-29T14:25:00.000Z",
+    "reviewerName": "Alice Admin"
+  }
+}
+```
+
+#### Side effects
+
+- Set application `status = REJECTED`.
+- Set `reviewedAt`, `reviewerName`, `reviewDecision = "REJECTED"`.
+- Synchronously update user's `kycStatus`.
+- Notify the applicant with the rejection `reason`.
+
+#### Validation
+
+- `reason` is required and must be non-empty. Return `422` with field error `{ "field": "reason", "message": "Reason is required" }` if missing.
+- Return `409 Conflict` with code `ALREADY_REVIEWED` if already `APPROVED` or `REJECTED`.
+- Return `403 Forbidden` if caller's role is `BROKER`.
+
+---
+
+### 5.6 `POST /v1/admin/kyc/:applicationId/request-docs`
+
+Requests that the applicant resubmit one or more documents. Sets status to `ADDITIONAL_DOCS`.
+
+> **This is a new endpoint** required by the frontend.
+
+#### Path parameters
+
+| Parameter       | Type   | Required |
+|-----------------|--------|----------|
+| `applicationId` | string | Yes      |
+
+#### Request body
+
+```jsonc
+{
+  "requiredDocuments": ["ID_FRONT", "SELFIE"],
+  "message": "Your ID photo is unclear. Please retake under better lighting."
+}
+```
+
+| Field                | Type       | Required | Description                                                                 |
+|----------------------|------------|----------|-----------------------------------------------------------------------------|
+| `requiredDocuments`  | string[]   | **Yes**  | Array of document slot codes the applicant must resubmit. Min 1 item.       |
+| `message`            | string     | No       | Optional plain-text message shown to the applicant. Max 1000 chars.         |
+
+Valid `requiredDocuments` values: any document slot code from the [Document Slot table](#document-slot-for-document-uploads).
+
+#### Response `200`
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "applicationId": "abc123",
+    "newStatus": "ADDITIONAL_DOCS",
+    "requiredDocuments": ["ID_FRONT", "SELFIE"],
+    "reviewerName": "Alice Admin"
+  }
+}
+```
+
+#### Side effects
+
+- Set application `status = ADDITIONAL_DOCS`.
+- Store `requiredDocuments` list so the applicant's mobile app knows which documents to request.
+- Notify the applicant with the optional `message`.
+- Allow the application to be resubmitted; upon resubmission reset to `PENDING`.
+
+#### Validation
+
+- `requiredDocuments` must be non-empty and each value must be a recognised slot code. Return `422` if invalid.
+- May be called on an application with status `PENDING`, `MANUAL_REVIEW`, or `ADDITIONAL_DOCS`. Return `409` if the application is `APPROVED` or `REJECTED`.
+- Return `403` if caller's role is `BROKER`.
+
+---
+
+## 6. Data Schemas
+
+### 6.1 `KycApplicationRow`
+
+Returned in the queue list and inside the detail response.
+
+```typescript
+type KycApplicationRow = {
+  id:               string;         // UUID
+  userId:           string;         // UUID of the user account
+
+  // User identity
+  userName:         string;         // Full display name, e.g. "Jane Smith"
+  userEmail:        string | null;  // Registered email
+  userPhone:        string;         // Registered phone, e.g. "+265991234567"
+  city:             string | null;  // City from the application form
+  emailVerified:    boolean | null; // Whether email address is verified (NEW)
+  phoneVerified:    boolean | null; // Whether phone number is verified (NEW)
+
+  // Document
+  documentType:     string | null;  // NATIONAL_ID | PASSPORT | DRIVERS_LICENSE
+  nationalIdNumber: string | null;  // The document number from the form
+
+  // Tier
+  tier:             string | null;  // TIER_1 | TIER_2 (NEW)
+
+  // Verification scores (0–100)
+  ocrConfidence:    number | null;  // OCR text extraction confidence
+  facialMatchScore: number | null;  // Face match between selfie and ID
+  livenessScore:    number | null;  // Anti-spoofing / liveness score (NEW)
+
+  // Risk
+  riskFlags:        string[] | null; // Risk flag codes (NEW) — see Section 9
+
+  // Status
+  status:           string;          // See Section 4 for enum values
+
+  // Review
+  reviewDecision:   string | null;   // APPROVED | REJECTED
+  reviewerName:     string | null;   // Admin display name (NEW)
+  reviewNotes:      string | null;   // Internal notes (NEW)
+  reviewedAt:       string | null;   // ISO 8601 UTC
+
+  submittedAt:      string;          // ISO 8601 UTC
+};
+```
+
+Fields marked **NEW** are currently missing from the API response and are required for full frontend functionality. Without them:
+
+| Missing field      | Impact                                                                |
+|--------------------|-----------------------------------------------------------------------|
+| `tier`             | Tier badge always shows "Tier 1" regardless of actual tier            |
+| `livenessScore`    | Liveness signal strip and checklist item are always hidden / 0%       |
+| `riskFlags`        | No risk flag badges shown; flag count always 0                        |
+| `emailVerified`    | "Email verified" checklist item always shows as failed                |
+| `phoneVerified`    | "Phone verified" checklist item always shows as failed                |
+| `reviewerName`     | Reviewer attribution not shown on reviewed applications               |
+| `reviewNotes`      | Notes tab shows no previous notes                                     |
+
+---
+
+### 6.2 `KycApplicationDetail`
+
+Returned by `GET /v1/admin/kyc/:applicationId`.
+
+```typescript
+type KycApplicationDetail = {
+  application: KycApplicationRow & {
+    ocrExtractedData: KycOcrData | null;
+  };
+  documents: KycDocument[];
+};
+```
+
+---
+
+### 6.3 `KycDocument`
+
+```typescript
+type KycDocument = {
+  id:          string;         // UUID
+  type:        string;         // Document slot — see Section 4
+  imageUrl:    string | null;  // URL to the document image (see Section 7)
+  mimeType:    string;         // e.g. "image/jpeg", "image/png", "application/pdf"
+  uploadedAt:  string;         // ISO 8601 UTC
+};
+```
+
+---
+
+### 6.4 `KycOcrData`
+
+Nested inside `application.ocrExtractedData` on the detail response.
+
+```typescript
+type KycOcrData = {
+  fullName:        string | null;  // Name as read from the document
+  dateOfBirth:     string | null;  // ISO 8601 date, e.g. "1990-05-15"
+  nationalId:      string | null;  // National ID number extracted by OCR
+  documentNumber:  string | null;  // Document number (if different from nationalId)
+  expiryDate:      string | null;  // ISO 8601 date
+  address:         string | null;  // Address extracted from document (if present)
+  nationality:     string | null;  // Nationality code or name
+  // Any additional fields the OCR provider returns may be included
+};
+```
+
+The frontend compares `ocrData.fullName` against `userName` (case-insensitive) and flags a mismatch visually with an ⚠ icon. If `ocrExtractedData` is `null` or empty, the OCR tab shows "No OCR data available."
+
+---
+
+### 6.5 `KycCountsByStatus`
+
+Returned by `GET /v1/admin/kyc/counts`.
+
+```typescript
+type KycCountsByStatus = {
+  PENDING:         number;
+  APPROVED:        number;
+  REJECTED:        number;
+  ADDITIONAL_DOCS: number;
+  MANUAL_REVIEW:   number;
+  NOT_SUBMITTED:   number;
+  // Any additional statuses in the data store
+  [status: string]: number;
+};
+```
+
+---
+
+## 7. Document Images & Storage
+
+### URL format
+
+Document `imageUrl` values should be directly accessible by the browser. The frontend renders them in an `<img>` tag. There is no additional auth header on image requests.
+
+**Recommended approach:** Presigned URLs (S3 or equivalent).
+
+```
+https://storage.kapwanje.com/kyc/docs/<document_id>/<slot>?X-Amz-Expires=3600&...
+```
+
+### Requirements
+
+| Requirement           | Detail                                                                                        |
+|-----------------------|-----------------------------------------------------------------------------------------------|
+| **Validity window**   | Must be valid for at least **5 minutes** — the admin will open the review panel and inspect documents after they are fetched. Recommend 60 minutes. |
+| **Regeneration**      | If URLs expire, the frontend has no mechanism to refresh them without re-fetching the detail endpoint. Keep TTL ≥ 1 hour or generate fresh URLs on every detail request. |
+| **CORS**              | The `imageUrl` host must send `Access-Control-Allow-Origin: *` (or the Replit dev domain) so the browser can load the image. |
+| **HTTPS**             | Required. HTTP URLs are blocked by browser mixed-content policy.                              |
+| **Format**            | JPEG or PNG preferred. PDF documents: either render a JPEG preview server-side, or return the PDF URL (the `<img>` tag will not display PDFs — the admin uses "Open full size" to view them). |
+| **Auth on image URLs**| Do not require `Authorization` headers on image requests — browser `<img>` tags cannot set custom headers. Use URL-signed tokens instead. |
+
+### Null image URLs
+
+If a document record exists but no file has been uploaded yet, return `imageUrl: null`. The frontend shows a placeholder state ("Document not uploaded") rather than a broken image.
+
+---
+
+## 8. OCR Payload Structure
+
+The OCR data returned in `application.ocrExtractedData` is consumed by the frontend's OCR Data tab. The frontend renders any non-null fields dynamically, so additional fields beyond the documented schema are welcome — the frontend will display them if they match known labels:
+
+| `ocrExtractedData` field | Frontend label   | Compared against        |
+|--------------------------|------------------|-------------------------|
+| `fullName`               | Full name        | `userName` (mismatch flagged) |
+| `dateOfBirth`            | Date of birth    | Not compared            |
+| `nationalId`             | National ID      | Not compared            |
+| `documentNumber`         | Document no.     | Not compared            |
+| `expiryDate`             | Expiry date      | Not compared (could flag expired documents — future work) |
+| `address`                | Address          | Not compared            |
+| `nationality`            | Nationality      | Not compared            |
+
+**Name mismatch detection:** If `fullName` is present and does not match `userName` (case-insensitive, trimmed), the frontend shows an ⚠ warning icon next to the Full name row in the OCR tab. This is a visual signal for the reviewer — it does not block approval.
+
+---
+
+## 9. Risk Flags
+
+The `riskFlags` array (on `KycApplicationRow`) contains machine-readable codes from automated checks. The frontend displays them as amber badge chips in the review panel's signals strip.
+
+### Recommended flag codes
+
+| Code                      | Meaning                                                        |
+|---------------------------|----------------------------------------------------------------|
+| `LIVENESS_FAIL`           | Anti-spoofing / liveness check failed                          |
+| `FACE_MISMATCH`           | Facial similarity between selfie and ID below threshold        |
+| `OCR_LOW_CONFIDENCE`      | OCR confidence below acceptable threshold                      |
+| `DOCUMENT_EXPIRED`        | Document expiry date is in the past                            |
+| `DUPLICATE_DETECTED`      | Same document or face found on another account                 |
+| `NAME_MISMATCH`           | OCR name does not match registered name                        |
+| `ADDRESS_MISMATCH`        | Document address does not match registered address             |
+| `SUSPICIOUS_ACTIVITY`     | Flagged by fraud detection rules                               |
+| `UNDERAGED`               | Applicant appears to be under minimum age                      |
+| `DOCUMENT_QUALITY_LOW`    | Image resolution or lighting is insufficient                   |
+
+The frontend renders flag codes as-is, replacing underscores with spaces. Applications with any flags automatically appear in the **Manual Review** queue.
+
+---
+
+## 10. Status Transition Rules
+
+```
+                         resubmit
+NOT_SUBMITTED ──────────────────────────────────────────────────────────── PENDING
+                                                                              │
+      ┌─────────────────────────────────────────────────────────────────────┤
+      │                                                                       │
+      ▼                                                                       ▼
+  APPROVED                                    admin approve            MANUAL_REVIEW
+                                               ┌─────────────────────────────┤
+                                               │         admin flag           │
+  REJECTED  ◄──────────────────────────────────┤                             │
+            admin reject                        └────────────► ADDITIONAL_DOCS
+                                                                    │
+                                               admin request-docs   │
+                                                                    │ resubmit
+                                                                    ▼
+                                                                 PENDING
+```
+
+### Allowed transitions
+
+| From               | To                | Endpoint / trigger                |
+|--------------------|-------------------|-----------------------------------|
+| `PENDING`          | `APPROVED`        | `POST .../approve`                |
+| `PENDING`          | `REJECTED`        | `POST .../reject`                 |
+| `PENDING`          | `ADDITIONAL_DOCS` | `POST .../request-docs`           |
+| `PENDING`          | `MANUAL_REVIEW`   | Automated flag (backend-triggered)|
+| `MANUAL_REVIEW`    | `APPROVED`        | `POST .../approve`                |
+| `MANUAL_REVIEW`    | `REJECTED`        | `POST .../reject`                 |
+| `MANUAL_REVIEW`    | `ADDITIONAL_DOCS` | `POST .../request-docs`           |
+| `ADDITIONAL_DOCS`  | `PENDING`         | User resubmits documents (app)    |
+| `ADDITIONAL_DOCS`  | `ADDITIONAL_DOCS` | `POST .../request-docs` (repeat)  |
+| `NOT_SUBMITTED`    | `PENDING`         | User completes submission (app)   |
+
+**Terminal states:** `APPROVED` and `REJECTED` cannot be transitioned. Attempting to approve/reject an already-reviewed application must return `409 ALREADY_REVIEWED`.
+
+---
+
+## 11. Validation Rules
+
+### `POST .../approve`
+
+| Field   | Rule                                        | Error code           |
+|---------|---------------------------------------------|----------------------|
+| `notes` | Optional. Max 2000 characters if provided.  | `NOTES_TOO_LONG`     |
+| status  | Must not already be APPROVED or REJECTED    | `ALREADY_REVIEWED`   |
+
+### `POST .../reject`
+
+| Field    | Rule                                               | Error code           |
+|----------|----------------------------------------------------|----------------------|
+| `reason` | Required. Non-empty. Min 10 chars. Max 1000 chars. | `REASON_REQUIRED`    |
+| `notes`  | Optional. Max 2000 characters.                     | `NOTES_TOO_LONG`     |
+| status   | Must not be APPROVED or REJECTED                   | `ALREADY_REVIEWED`   |
+
+### `POST .../request-docs`
+
+| Field               | Rule                                                     | Error code               |
+|---------------------|----------------------------------------------------------|--------------------------|
+| `requiredDocuments` | Required. Non-empty array. Min 1, max 5 items.           | `DOCUMENTS_REQUIRED`     |
+| `requiredDocuments` | Each item must be a valid document slot code.            | `INVALID_DOCUMENT_SLOT`  |
+| `message`           | Optional. Max 1000 characters.                           | `MESSAGE_TOO_LONG`       |
+| status              | Must be PENDING, MANUAL_REVIEW, or ADDITIONAL_DOCS       | `INVALID_STATUS_TRANSITION` |
+
+---
+
+## 12. Error Codes
+
+### HTTP status codes used
+
+| HTTP | Meaning                                                                 |
+|------|-------------------------------------------------------------------------|
+| 200  | Success                                                                 |
+| 400  | Bad request — malformed JSON or missing required fields                 |
+| 401  | Unauthenticated — token missing, expired, or invalid                   |
+| 403  | Forbidden — authenticated but insufficient role                         |
+| 404  | Application not found or not accessible to this admin                  |
+| 409  | Conflict — invalid state transition (e.g. already reviewed)            |
+| 422  | Unprocessable entity — valid JSON but failed business validation        |
+| 429  | Rate limited                                                            |
+| 500  | Internal server error                                                   |
+
+### Machine-readable `code` values
+
+| `code`                     | HTTP | Description                                              |
+|----------------------------|------|----------------------------------------------------------|
+| `ALREADY_REVIEWED`         | 409  | Application is in a terminal state (APPROVED/REJECTED)  |
+| `REASON_REQUIRED`          | 422  | `reason` field is missing or empty on reject            |
+| `NOTES_TOO_LONG`           | 422  | `notes` exceeds max length                              |
+| `DOCUMENTS_REQUIRED`       | 422  | `requiredDocuments` is empty                            |
+| `INVALID_DOCUMENT_SLOT`    | 422  | Unknown document slot code in `requiredDocuments`       |
+| `INVALID_STATUS_TRANSITION`| 409  | Cannot perform this action from the current status      |
+| `APPLICATION_NOT_FOUND`    | 404  | No application with this ID                             |
+| `INSUFFICIENT_PERMISSIONS` | 403  | Role cannot perform this action                         |
+| `TOKEN_EXPIRED`            | 401  | Access token has expired — client will auto-refresh     |
+
+The frontend displays `error.message` verbatim in the rejection/approval error banner. Write human-readable messages.
+
+---
+
+## 13. Cache Invalidation Contract
+
+The frontend uses TanStack Query with the following cache keys:
+
+| Cache key                            | Invalidated by                              |
+|--------------------------------------|---------------------------------------------|
+| `['kyc']` (all KYC)                  | Any successful mutation                     |
+| `['kyc', 'queue', { filters }]`      | Part of the above broad invalidation        |
+| `['kyc', 'application', id]`         | Part of the above broad invalidation        |
+| `['kyc', 'counts']`                  | Any successful mutation                     |
+| `['dashboard', 'stats']`             | Approve, reject, request-docs               |
+| `['users', 'list', ...]`             | Approve, reject (KYC status changes)        |
+
+**Implication:** Mutation responses do not need to return the full updated application — the client re-fetches after invalidation. However, returning the updated `applicationId`, `newStatus`, and `reviewerName` is useful for optimistic updates in future iterations.
+
+---
+
+## 14. Webhooks / Real-Time Events
+
+Currently the frontend polls for updates (30s interval for the queue, 60s for counts). Real-time push is not yet implemented but would eliminate polling latency.
+
+### Recommended event schema (for future WebSocket / SSE implementation)
+
+```jsonc
+{
+  "event":     "kyc.status_changed",
+  "timestamp": "2025-07-29T14:22:00.000Z",
+  "data": {
+    "applicationId": "abc123",
+    "userId":        "usr456",
+    "previousStatus":"PENDING",
+    "newStatus":     "APPROVED",
+    "reviewerName":  "Alice Admin"
+  }
+}
+```
+
+### Event types
+
+| Event                      | Trigger                                      |
+|----------------------------|----------------------------------------------|
+| `kyc.submitted`            | User completes a new submission              |
+| `kyc.status_changed`       | Any admin action changes the status          |
+| `kyc.flags_added`          | Automated check flags an application         |
+| `kyc.document_uploaded`    | User uploads a requested document            |
+
+If a WebSocket / SSE connection is established, the frontend can call `queryClient.invalidateQueries({ queryKey: ['kyc'] })` on receipt of any KYC event to give near-real-time updates without the 30s poll lag.
+
+---
+
+## 15. Data Mapping: Frontend ↔ Backend
+
+### Queue list mapping (`KycApplicationRow` → `KycApplication`)
+
+| Backend field       | Frontend field        | Transformation                                                         |
+|---------------------|-----------------------|------------------------------------------------------------------------|
+| `id`                | `id`                  | Direct                                                                 |
+| `userId`            | `userId`              | Direct                                                                 |
+| `userName`          | `name`                | Fallback to `"Unknown"` if null                                        |
+| `userEmail`         | `email`               | Direct (nullable)                                                      |
+| `userPhone`         | `phone`               | Fallback to `""` if null                                               |
+| `city`              | `city`                | Fallback to `""` if null                                               |
+| `documentType`      | `docType`             | `NATIONAL_ID→national_id`, `PASSPORT→passport`, `DRIVERS_LICENSE→drivers_license` |
+| `tier`              | `tierRequested`       | `TIER_1/TIER1/1→tier1`, `TIER_2/TIER2/2→tier2`, default `tier1`      |
+| `status`            | `status`              | See STATUS_MAP in `src/routes/kyc.tsx`                                 |
+| `facialMatchScore`  | `faceMatchScore`      | Fallback to `0` if null                                                |
+| `ocrConfidence`     | `ocrConfidence`       | Fallback to `0` if null                                                |
+| `livenessScore`     | `livenessScore`       | Fallback to `0` if null (NEW field)                                    |
+| `riskFlags`         | `flags`               | Fallback to `[]` if null (NEW field)                                   |
+| `reviewNotes`       | `notes`               | Direct (NEW field)                                                     |
+| `reviewerName`      | `reviewer`            | Direct (NEW field)                                                     |
+| `emailVerified`     | `emailVerified`       | Direct boolean|null (NEW field)                                        |
+| `phoneVerified`     | `phoneVerified`       | Direct boolean|null (NEW field)                                        |
+| `submittedAt`       | `submittedAt`         | Direct ISO 8601                                                        |
+| `reviewedAt`        | `reviewedAt`          | Direct ISO 8601 or undefined                                           |
+
+### Mutation request mapping
+
+**Approve:**
+```json
+POST /v1/admin/kyc/{id}/approve
+{ "notes": "<string|undefined>" }
+```
+
+**Reject:**
+```json
+POST /v1/admin/kyc/{id}/reject
+{ "reason": "<string required>", "notes": "<string|undefined>" }
+```
+
+**Request docs:**
+```json
+POST /v1/admin/kyc/{id}/request-docs
+{ "requiredDocuments": ["ID_FRONT", "SELFIE"], "message": "<string|undefined>" }
+```
+
+---
+
+## 16. New Fields Required
+
+The following fields are **not currently returned by the API** and must be added for the frontend to be fully functional. Priority order:
+
+| Priority | Field(s)                                  | Impact if missing                                        | Endpoint(s) to update                     |
+|----------|-------------------------------------------|----------------------------------------------------------|-------------------------------------------|
+| P0       | `tier`                                    | Tier badge always shows Tier 1                          | Queue, Detail                             |
+| P0       | `emailVerified`, `phoneVerified`          | Checklist email/phone checks always fail                | Queue, Detail                             |
+| P0       | `GET /v1/admin/kyc/counts`                | Stats cards show 0; tab badges show —                   | New endpoint                              |
+| P0       | `POST /v1/admin/kyc/:id/request-docs`     | "Request Docs" button has no backend                    | New endpoint                              |
+| P1       | `riskFlags`                               | No flags shown; manual review queue appears empty       | Queue, Detail                             |
+| P1       | `livenessScore`                           | Liveness strip hidden; liveness checklist always fails  | Queue, Detail                             |
+| P1       | `reviewerName`                            | Reviewer attribution missing on reviewed applications   | Queue, Detail, mutation responses         |
+| P2       | `reviewNotes`                             | Notes tab never pre-populates previous reviewer notes   | Queue, Detail                             |
+
+---
+
+## 17. Checklist
+
+Use this to verify integration completeness:
+
+- [ ] `GET /v1/admin/kyc/queue` returns all `KycApplicationRow` fields including new fields (`tier`, `livenessScore`, `riskFlags`, `emailVerified`, `phoneVerified`, `reviewerName`, `reviewNotes`)
+- [ ] `GET /v1/admin/kyc/queue` supports `?status=` filter and returns correct `total` / `totalPages` pagination metadata
+- [ ] `GET /v1/admin/kyc/counts` endpoint exists and returns counts per status
+- [ ] `GET /v1/admin/kyc/:id` returns `KycApplicationDetail` with `documents[].imageUrl` populated as presigned or public URLs
+- [ ] Document image URLs are accessible from the browser without `Authorization` header
+- [ ] Document image URLs remain valid for ≥ 1 hour
+- [ ] `ocrExtractedData` is populated with at least `fullName` for all reviewed applications
+- [ ] `POST .../approve` validates role, prevents double-review, sets `reviewerName` + `reviewedAt`
+- [ ] `POST .../reject` validates `reason` (required, min 10 chars), role, and terminal state
+- [ ] `POST .../request-docs` endpoint exists, validates `requiredDocuments`, sets `ADDITIONAL_DOCS` status
+- [ ] All mutation responses include `applicationId`, `newStatus`, `reviewerName`, `reviewedAt`
+- [ ] `APPROVED`/`REJECTED` applications cannot be mutated (return `409 ALREADY_REVIEWED`)
+- [ ] `BROKER` role returns `403` on all mutation endpoints
+- [ ] User's `kycStatus` is updated synchronously when an application is approved/rejected
+- [ ] All error responses include both `message` (human-readable) and `code` (machine-readable)
+- [ ] All timestamps are ISO 8601 UTC

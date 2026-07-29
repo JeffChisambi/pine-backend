@@ -99,12 +99,31 @@ export class StorageService {
     }
   }
 
-  async getSignedDownloadUrl(bucket: StorageBucket, key: string): Promise<string> {
+  /**
+   * Generate a presigned GET URL for a stored object.
+   *
+   * @param bucket        Logical bucket name
+   * @param key           Object key within the bucket
+   * @param expiresIn     TTL in seconds. Defaults to `STORAGE_SIGNED_URL_TTL_SECONDS`
+   *                      from config. KYC document review requests pass 3 600 (1 h)
+   *                      so the admin can open images after the detail endpoint
+   *                      has already been fetched.
+   */
+  async getSignedDownloadUrl(
+    bucket: StorageBucket,
+    key: string,
+    expiresIn?: number,
+  ): Promise<string> {
     const bucketName = this.resolveBucketName(bucket);
     const command = new GetObjectCommand({ Bucket: bucketName, Key: key });
 
+<<<<<<< HEAD
     let url = await getSignedUrl(this.client, command, {
       expiresIn: this.config.storage.signedUrlTtlSeconds,
+=======
+    return getSignedUrl(this.client, command, {
+      expiresIn: expiresIn ?? this.config.storage.signedUrlTtlSeconds,
+>>>>>>> b169cd47ef559c4e587cdf83fe3fba1ae65d6ff2
     });
 
     // Rewrite internal Docker endpoint (e.g. http://minio:9000) to the

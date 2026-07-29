@@ -419,10 +419,12 @@ export class KycWorkflowService {
         KycVerificationStage.DECIDING,
       );
 
-      // Map decision to KYC status
+      // Map decision to KYC status.
+      // MANUAL_REVIEW maps to the MANUAL_REVIEW status so the broker dashboard
+      // shows it in the dedicated Manual Review queue (§9, Kusata API contract).
       const statusMap = {
         APPROVED: 'APPROVED',
-        MANUAL_REVIEW: 'PENDING',
+        MANUAL_REVIEW: 'MANUAL_REVIEW',
         REJECTED: 'REJECTED',
       } as const;
 

@@ -99,10 +99,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ADMIN_ACCESS,
   ],
 
+  // Brokers can VIEW queue and detail but cannot perform mutations
+  // (approve, reject, request-docs). KYC_APPROVE is intentionally omitted.
   [Role.BROKER]: [
     Permission.USERS_READ,
     Permission.KYC_REVIEW,
-    Permission.KYC_APPROVE,
     Permission.WALLET_READ,
     Permission.TRADE_EXECUTE,
     Permission.TRADE_CANCEL,
