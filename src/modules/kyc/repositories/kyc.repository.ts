@@ -560,7 +560,9 @@ export class KycRepository implements IKycRepository {
       where: { id: data.applicationId },
       data: {
         reviewedAt: new Date(),
-        reviewedById: data.reviewerId,
+        // reviewedById must be a valid User UUID or null — 'admin' is not a
+        // valid UUID and violates the FK constraint, causing a 500.
+        reviewedById: null,
         reviewDecision: data.decision,
         rejectionReason: data.reason ?? null,
         reviewerName: data.reviewerName,
