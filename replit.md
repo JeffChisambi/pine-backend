@@ -1,81 +1,60 @@
 # Pine Backend
 
-Enterprise backend for **Pine** — a stock investment platform for the Malawi Stock Exchange (MSE).
-
-## Project overview
-
-NestJS 11 / TypeScript backend in Phase 1 of 7. The app boots and serves:
-- `GET /v1/health` — health check
-- `GET /docs` — Swagger/OpenAPI UI (non-prod only)
-
-No business-logic endpoints exist yet. See the [Roadmap](#roadmap) in `README.md`.
+Enterprise backend for the **Pine** stock investment platform (Malawi Stock Exchange).
 
 ## Stack
+- **Runtime**: Node.js 24, TypeScript, NestJS 11
+- **Database**: PostgreSQL 16 + Prisma ORM
+- **Cache/Queues**: Redis + BullMQ
+- **Storage**: S3-compatible (AWS S3 / Cloudflare R2 / MinIO)
+- **Auth**: JWT access + rotating refresh tokens, Argon2id
+- **Docs**: Swagger at `/docs` (non-prod only)
 
-| Concern | Choice |
-|---|---|
-| Runtime | Node.js 24 LTS, TypeScript, NestJS 11 |
-| Database | PostgreSQL 16, Prisma ORM |
-| Cache | Redis (OTP, sessions, rate limiting, market cache) |
-| Object storage | S3-compatible (AWS S3 / Cloudflare R2 / MinIO) |
-| Queues | BullMQ on Redis |
-| Auth | JWT access + rotating refresh tokens, Argon2id |
-| Testing | Vitest (unit / integration / e2e) |
+## Status
+Phase 1 of 7 complete — project setup, architecture, DB schema, infrastructure wiring. The app boots and serves `/v1/health` and `/docs`.
 
-## How to run (locally with Docker)
+## How to run (development)
 
-```bash
-cp .env.example .env   # fill in secrets
+1. Copy `.env.example` → `.env` and fill in all required values (see below).
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Run migrations + seed:
+   ```bash
+   npm run prisma:migrate:dev
+   npm run db:apply-triggers
+   ```
+4. Start the dev server:
+   ```bash
+   npm run start:dev
+   ```
 
-# Start Postgres, Redis, MinIO, Mailhog
-docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
-  up postgres redis minio minio-init mailhog -d
+Swagger UI: http://localhost:3000/docs  
+Health: http://localhost:3000/v1/health
 
-npm install
-npm run prisma:migrate:dev   # creates schema + seeds
-npm run db:apply-triggers    # ledger/audit immutability triggers
-npm run start:dev
-```
+## Required external services
 
-## How to run on Replit
+The app validates all env vars at boot (via Zod) and **refuses to start** if any are missing:
 
-Docker is not available on Replit. To run here you need:
+| Service | Variables |
+|---------|-----------|
+| PostgreSQL | `DATABASE_URL` |
+| Redis | `REDIS_HOST`, `REDIS_PORT` |
+| S3-compatible storage | `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY` |
+| JWT secrets | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` |
+| PIN encryption | `PIN_ENCRYPTION_KEY` |
+| Cookie secret | `COOKIE_SECRET` |
 
-1. **PostgreSQL** — use Replit's built-in PostgreSQL integration (`DATABASE_URL`)
-2. **Redis** — use an external hosted Redis (e.g. Upstash) and set `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`
-3. **Object storage** — use Cloudflare R2 or AWS S3 (MinIO won't run on Replit)
-4. **Environment variables** — copy `.env.example`, fill in real values, and add them as Replit Secrets
+See `.env.example` for the full list.
 
-Run command: `npm run start:dev`
-
-## Key environment variables
-
-See `.env.example` for the full list. Required to boot:
-
-- `DATABASE_URL` — PostgreSQL connection string
-- `REDIS_HOST`, `REDIS_PORT` — Redis connection
-- `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` — min 32 chars each
-- `PIN_ENCRYPTION_KEY` — 32-byte hex key
-- `COOKIE_SECRET` — min 32 chars
-- Storage: `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY`
-
-## Useful scripts
+## Tests
 
 ```bash
-npm run start:dev           # dev server with watch
-npm run build               # compile to dist/
-npm run test                # unit tests (no external deps)
-npm run test:integration    # needs Postgres + Redis
-npm run prisma:migrate:dev  # run migrations + seed
-npm run typecheck           # TypeScript type check only
+npm test                  # unit tests (no external deps)
+npm run test:integration  # requires Postgres + Redis
+npm run test:e2e          # requires Postgres + Redis
+npm run test:cov          # unit tests with coverage
 ```
-
-## Architecture
-
-Clean Architecture + DDD. Modules: `auth`, `users`, `kyc`, `wallet`, `payments`, `stocks`, `market-sync`, `trading`, `portfolio`, `dividends`, `notifications`, `admin`, `audit`, `analytics`.
-
-See `README.md` for the full architecture notes.
 
 ## User preferences
-
-<!-- Add remembered preferences here -->
