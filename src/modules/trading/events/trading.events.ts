@@ -69,6 +69,9 @@ export class TradeSettledEvent {
     public readonly orderId: string,
     public readonly userId: string,
     public readonly stockId: string,
+    /** Human-readable ticker symbol (e.g. "NITL") — added so notification
+     *  handlers don't have to do a DB round-trip just to display the ticker. */
+    public readonly stockSymbol: string,
     public readonly side: 'BUY' | 'SELL',
     public readonly quantity: number,
     public readonly price: number,

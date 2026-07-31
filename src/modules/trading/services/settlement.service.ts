@@ -81,6 +81,7 @@ export class SettlementService {
           event.orderId,
           event.userId,
           event.stockId,
+          event.stockSymbol, // pass through so listeners don't need an extra DB lookup
           event.side,
           event.quantity,
           event.price,

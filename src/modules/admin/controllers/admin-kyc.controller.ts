@@ -232,9 +232,13 @@ export class AdminKycController {
         firstName: rec.firstName,
         lastName: rec.lastName,
         email: rec.email,
-        emailVerifiedAt: rec.emailVerified ? {} : null, // truthy/falsy
+        // Use epoch Date(0) as a sentinel for "verified at some past point" —
+        // the KycApplicationRecord only carries the boolean flag, not the timestamp.
+        // Previously this passed {} (empty object), which is truthy but not a Date;
+        // any downstream .toISOString() call would throw a TypeError.
+        emailVerifiedAt: rec.emailVerified ? new Date(0) : null,
         phone: rec.phone,
-        phoneVerifiedAt: rec.phoneVerified ? {} : null,
+        phoneVerifiedAt: rec.phoneVerified ? new Date(0) : null,
       };
       const syntheticApp = {
         ...rec,

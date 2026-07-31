@@ -228,6 +228,9 @@ export class AdminAuthController {
       where: { id: userId },
       select: { email: true },
     });
-    return user!;
+    if (!user) {
+      throw new Error(`User ${userId} not found when resolving email for audit log`);
+    }
+    return user;
   }
 }

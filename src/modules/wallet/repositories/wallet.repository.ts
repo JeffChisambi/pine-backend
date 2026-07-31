@@ -146,6 +146,30 @@ export class WalletRepository {
     });
   }
 
+  /**
+   * Sum PENDING and PROCESSING deposit and withdrawal transactions for a wallet.
+   * Used by BalanceService to populate the pendingDeposits / pendingWithdrawals
+   * fields in the wallet summary (previously these were always zero because
+   * findUserTransactions only returns COMPLETED transactions).
+   */
+  async sumPendingTransactions(walletId: string): Promise<{ deposits: Decimal; withdrawals: Decimal }> {
+    const pendingStatuses = ['PENDING', 'PROCESSING'];
+    const [depositsAgg, withdrawalsAgg] = await Promise.all([
+      this.prisma.transaction.aggregate({
+        where: { walletId, type: 'DEPOSIT', status: { in: pendingStatuses } },
+        _sum: { amount: true },
+      }),
+      this.prisma.transaction.aggregate({
+        where: { walletId, type: 'WITHDRAWAL', status: { in: pendingStatuses } },
+        _sum: { amount: true },
+      }),
+    ]);
+    return {
+      deposits: depositsAgg._sum.amount ?? new Decimal(0),
+      withdrawals: withdrawalsAgg._sum.amount ?? new Decimal(0),
+    };
+  }
+
   async sumLedgerBalance(walletId: string): Promise<Decimal> {
     const credits = await this.prisma.ledgerEntry.aggregate({
       where: { walletId, accountType: 'USER_WALLET', direction: 'CREDIT' },

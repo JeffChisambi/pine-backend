@@ -57,9 +57,21 @@ export function validateUploadedFile(
   }
 
   const extension = extractExtension(fileName);
-  const candidates = ALLOWED_SIGNATURES.filter(
-    (sig) => sig.extensions.includes(extension) || sig.mimeType === declaredMimeType,
-  );
+
+  // Security fix: require the declared MIME type to match a known signature entry.
+  // If a file extension is also present, it must agree with the declared MIME type.
+  // The previous OR logic created candidates for *both* the extension's type and
+  // the MIME type's type simultaneously — a file sent with extension=.jpg but
+  // mimeType=application/pdf would add both JPEG and PDF as candidates, and pass
+  // the magic-byte check if the content had *either* signature. With AND (or the
+  // MIME-primary approach below), extension and MIME must agree on a single type.
+  const candidates = ALLOWED_SIGNATURES.filter((sig) => {
+    const mimeMatch = sig.mimeType === declaredMimeType;
+    if (!mimeMatch) return false;
+    // If a file extension is present, it must agree with the declared MIME type.
+    // Filenames without extensions (empty string) skip the extension consistency check.
+    return !extension || sig.extensions.includes(extension);
+  });
 
   if (candidates.length === 0) {
     throw new ValidationException(

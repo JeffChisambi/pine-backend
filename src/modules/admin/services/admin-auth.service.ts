@@ -334,7 +334,10 @@ export class AdminAuthService {
   // ── Admin Device ──────────────────────────────────────────────
 
   private async getOrCreateAdminDevice(userId: string, ipAddress?: string) {
-    const fingerprint = 'admin-web-dashboard';
+    // Per-user fingerprint so each admin's session is tracked independently.
+    // A shared 'admin-web-dashboard' fingerprint meant every admin appeared
+    // as the same "device", making anomalous-login detection useless.
+    const fingerprint = `admin-dashboard-${userId}`;
     const existing = await this.prisma.device.findUnique({
       where: { userId_fingerprint: { userId, fingerprint } },
     });

@@ -63,9 +63,11 @@ export class PreferenceService {
     userId: string,
     category: string,
   ): Promise<string[]> {
-    // Security notifications ALWAYS deliver on all channels
+    // Security notifications ALWAYS deliver on all channels, including SMS.
+    // Previously SMS was omitted — critical security alerts must reach the user
+    // even if they miss the push notification (e.g. phone offline, app closed).
     if (MANDATORY_CATEGORIES.has(category)) {
-      return ['PUSH', 'IN_APP', 'EMAIL'];
+      return ['PUSH', 'IN_APP', 'EMAIL', 'SMS'];
     }
 
     const pref = await this.repo.findUserPreference(userId, category);

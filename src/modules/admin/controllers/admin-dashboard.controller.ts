@@ -67,7 +67,11 @@ export class AdminDashboardController {
       });
       checks['notificationQueue'] = {
         status: failedNotifications > 50 ? 'degraded' : 'healthy',
-        latencyMs: pendingNotifications, // Reuse field to show queue depth
+        // queueDepth/failedCount are the meaningful metrics here.
+        // Previously this incorrectly stuffed the queue count into latencyMs,
+        // which is a timing field — monitoring tools would misinterpret it.
+        queueDepth: pendingNotifications,
+        failedCount: failedNotifications,
       };
     } catch {
       checks['notificationQueue'] = { status: 'unknown' };

@@ -338,8 +338,8 @@ export class AuthService {
     const result = await this.pins.verifyPin(
       pin,
       user.pinHash,
-      0, // TODO: read pinFailedAttempts from user
-      null, // TODO: read pinLockedUntil from user
+      user.pinFailedAttempts,
+      user.pinLockedUntil,
     );
 
     if (!result.valid) {

@@ -4,6 +4,7 @@ import { NotificationRepository } from '../repositories/notification.repository'
 import { TemplateService } from './template.service';
 import { PreferenceService } from './preference.service';
 import { DeliveryService } from './delivery.service';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
 
 /**
  * Notification Service — the orchestrator of the Communications Platform.
@@ -40,6 +41,7 @@ export class NotificationService implements OnModuleInit {
     private readonly templateService: TemplateService,
     private readonly preferenceService: PreferenceService,
     private readonly deliveryService: DeliveryService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async onModuleInit() {
@@ -166,14 +168,23 @@ export class NotificationService implements OnModuleInit {
     userId: string;
     reason: string;
   }) {
+    // Look up the order to get side/quantity/symbol — the event only carries
+    // orderId/userId/reason, so hardcoded BUY/0/'' produced broken notifications.
+    const order = await this.prisma.order
+      .findUnique({
+        where: { id: event.orderId },
+        select: { side: true, quantity: true, stock: { select: { symbol: true } } },
+      })
+      .catch(() => null);
+
     await this.notify({
       userId: event.userId,
       templateKey: 'trade.order.rejected',
       variables: {
         reason: event.reason,
-        side: 'BUY',
-        quantity: 0,
-        symbol: '',
+        side: order?.side?.toLowerCase() ?? 'buy',
+        quantity: order?.quantity?.toNumber() ?? 0,
+        symbol: order?.stock?.symbol ?? '',
       },
       category: 'TRADING',
       priority: PRIORITY.IMPORTANT,
@@ -188,13 +199,22 @@ export class NotificationService implements OnModuleInit {
     userId: string;
     reason: string;
   }) {
+    // Same as onOrderRejected — look up order details the event doesn't carry.
+    const order = await this.prisma.order
+      .findUnique({
+        where: { id: event.orderId },
+        select: { side: true, quantity: true, stock: { select: { symbol: true } } },
+      })
+      .catch(() => null);
+
     await this.notify({
       userId: event.userId,
       templateKey: 'trade.order.cancelled',
       variables: {
-        side: '',
-        quantity: 0,
-        symbol: '',
+        reason: event.reason,
+        side: order?.side?.toLowerCase() ?? '',
+        quantity: order?.quantity?.toNumber() ?? 0,
+        symbol: order?.stock?.symbol ?? '',
       },
       category: 'TRADING',
       priority: PRIORITY.INFORMATIONAL,
@@ -209,6 +229,7 @@ export class NotificationService implements OnModuleInit {
     orderId: string;
     userId: string;
     stockId: string;
+    stockSymbol: string;  // now carried by TradeSettledEvent
     side: 'BUY' | 'SELL';
     quantity: number;
     price: number;
@@ -219,7 +240,7 @@ export class NotificationService implements OnModuleInit {
       variables: {
         side: event.side.toLowerCase(),
         quantity: event.quantity,
-        symbol: event.stockId, // Will be resolved from stock data in template
+        symbol: event.stockSymbol, // was event.stockId (UUID) — now the human-readable ticker
       },
       category: 'TRADING',
       priority: PRIORITY.INFORMATIONAL,

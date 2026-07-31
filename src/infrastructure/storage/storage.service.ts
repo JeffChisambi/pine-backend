@@ -123,10 +123,27 @@ export class StorageService {
 
     // Rewrite internal Docker endpoint (e.g. http://minio:9000) to the
     // public-facing endpoint so browsers can actually reach the URL.
+    // Use URL-object parsing instead of simple string replacement so that
+    // the endpoint string can never accidentally match a substring of the
+    // S3 key or query params (e.g. a key that happens to contain the host).
     const internalEndpoint = this.config.storage.endpoint;
     const publicEndpoint = this.config.storage.publicEndpoint;
     if (publicEndpoint && internalEndpoint && publicEndpoint !== internalEndpoint) {
-      url = url.replace(internalEndpoint, publicEndpoint);
+      try {
+        const parsedUrl = new URL(url);
+        const parsedInternal = new URL(internalEndpoint);
+        // Only rewrite if the signed URL's origin matches the internal endpoint
+        if (parsedUrl.origin === parsedInternal.origin) {
+          const parsedPublic = new URL(publicEndpoint);
+          parsedUrl.protocol = parsedPublic.protocol;
+          parsedUrl.hostname = parsedPublic.hostname;
+          parsedUrl.port = parsedPublic.port;
+          url = parsedUrl.toString();
+        }
+      } catch {
+        // Malformed URL in config — fall back to literal replace as a last resort
+        url = url.replace(internalEndpoint, publicEndpoint);
+      }
     }
 
     return url;

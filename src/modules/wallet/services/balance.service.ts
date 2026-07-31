@@ -29,24 +29,21 @@ export class BalanceService {
       throw new NotFoundException('Wallet not found. Please contact support.');
     }
 
-    const [reservedAmount, pendingTxs] = await Promise.all([
-      this.repo.sumActiveReservations(wallet.id),
-      this.repo.findUserTransactions(wallet.id, 100, 0),
-    ]);
-
-    // Sum pending deposits/withdrawals from recent transactions
-    let pendingDeposits = new Decimal(0);
-    let pendingWithdrawals = new Decimal(0);
     // Use wallet balance (denormalized from ledger) for fast reads
     const ledgerBalance = wallet.balance;
+
+    const [reservedAmount, pendingAmounts] = await Promise.all([
+      this.repo.sumActiveReservations(wallet.id),
+      this.repo.sumPendingTransactions(wallet.id),
+    ]);
 
     return this.calculator.calculateSummary({
       walletId: wallet.id,
       currency: wallet.currency,
       ledgerBalance,
       reservedAmount,
-      pendingDeposits,
-      pendingWithdrawals,
+      pendingDeposits: pendingAmounts.deposits,
+      pendingWithdrawals: pendingAmounts.withdrawals,
       isFrozen: wallet.isFrozen,
       frozenReason: wallet.frozenReason,
     });

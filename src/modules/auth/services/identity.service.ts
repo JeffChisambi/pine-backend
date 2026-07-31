@@ -200,6 +200,8 @@ export class IdentityService {
         role: true,
         kycStatus: true,
         pinHash: true,
+        pinFailedAttempts: true,
+        pinLockedUntil: true,
         avatarKey: true,
         isActive: true,
         createdAt: true,
