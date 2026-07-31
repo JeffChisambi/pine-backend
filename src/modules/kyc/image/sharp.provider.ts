@@ -85,6 +85,11 @@ export class SharpProvider implements IImageProcessingProvider {
       pipeline = pipeline.withMetadata();
     }
 
+    // M-5 fix: use PNG (lossless) when the caller requests it, e.g. for OCR inputs
+    // where JPEG blocking artifacts reduce character recognition accuracy.
+    if (options.outputFormat === 'png') {
+      return pipeline.png({ compressionLevel: 6 }).toBuffer();
+    }
     return pipeline.jpeg({ quality, mozjpeg: true }).toBuffer();
   }
 

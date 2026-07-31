@@ -4,6 +4,7 @@ import { memoryStorage } from 'multer';
 import { ConfigModule } from '../../config/config.module';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
+import { QueueModule } from '../../infrastructure/queue/queue.module';
 
 // Interfaces — DI tokens
 import { KYC_REPOSITORY } from './interfaces/kyc-repository.interface';
@@ -16,6 +17,9 @@ import { KycController } from './controllers/kyc.controller';
 
 // Services
 import { KycWorkflowService } from './services/kyc-workflow.service';
+
+// Queue Processor
+import { KycProcessor } from './processors/kyc.processor';
 
 // Providers (Strategy pattern)
 import { SharpProvider } from './image/sharp.provider';
@@ -54,6 +58,7 @@ import { KycRepository } from './repositories/kyc.repository';
     ConfigModule,
     DatabaseModule,
     StorageModule,
+    QueueModule,   // provides @InjectQueue(QueueName.KYC) for KycController + KycProcessor
     MulterModule.register({
       storage: memoryStorage(),
       limits: {
@@ -85,6 +90,9 @@ import { KycRepository } from './repositories/kyc.repository';
 
     // ── Workflow Orchestrator ────────────────────────────────────
     KycWorkflowService,
+
+    // ── BullMQ Processor (H-3 fix: async pipeline) ──────────────
+    KycProcessor,
   ],
   exports: [KycWorkflowService, KYC_REPOSITORY],
 })

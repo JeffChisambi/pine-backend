@@ -248,6 +248,7 @@ model User {
   payments          Payment[]
   auditLogsAsActor  AuditLog[]        @relation("AuditActor")
   kycReviewsAsAdmin KycApplication[]  @relation("KycReviewer")
+  faceEmbeddings    FaceEmbedding[]   @relation("UserFaceEmbeddings")
   mfaConfig         MfaConfig?
   watchlistEntries      WatchlistEntry[]
   treasuryInvestments   TreasuryInvestment[]
@@ -416,6 +417,7 @@ model KycApplication {
   requestDocsMessage String?
 
   documents         KycDocument[]
+  faceEmbeddings    FaceEmbedding[]
 
   @@index([userId])
   @@index([status])
@@ -423,18 +425,48 @@ model KycApplication {
 }
 
 model KycDocument {
-  id               String          @id @default(uuid()) @db.Uuid
-  kycApplicationId String          @db.Uuid
-  kycApplication   KycApplication  @relation(fields: [kycApplicationId], references: [id], onDelete: Cascade)
-  type             KycDocumentType
-  storageBucket    String
-  storageKey       String
-  mimeType         String
-  sizeBytes        Int
-  uploadedAt       DateTime        @default(now())
+  id                  String          @id @default(uuid()) @db.Uuid
+  kycApplicationId    String          @db.Uuid
+  kycApplication      KycApplication  @relation(fields: [kycApplicationId], references: [id], onDelete: Cascade)
+  type                KycDocumentType
+  storageBucket       String
+  storageKey          String
+  mimeType            String
+  sizeBytes           Int
+  /// SHA-256 hash of the raw file content for duplicate-document detection (L-1 fix).
+  contentHash         String?
+  /// S3 key of the AI-enhanced version uploaded during the pipeline (H-5 fix).
+  enhancedStorageKey  String?
+  /// S3 key of the thumbnail uploaded during the pipeline (H-5 fix).
+  thumbnailStorageKey String?
+  uploadedAt          DateTime        @default(now())
 
   @@index([kycApplicationId])
+  @@index([contentHash])
   @@map("kyc_documents")
+}
+
+/// Face embeddings stored per document per KYC application.
+/// Replaces the ocrExtractedData JSON blob for embedding storage,
+/// enabling indexed lookups for duplicate-face fraud detection (M-4 fix).
+model FaceEmbedding {
+  id                  String         @id @default(uuid()) @db.Uuid
+  kycApplicationId    String         @db.Uuid
+  kycApplication      KycApplication @relation(fields: [kycApplicationId], references: [id], onDelete: Cascade)
+  userId              String         @db.Uuid
+  user                User           @relation("UserFaceEmbeddings", fields: [userId], references: [id], onDelete: Cascade)
+  /// 'selfie' or 'national_id'
+  sourceType          String
+  /// Raw Float32Array bytes — 512 floats × 4 bytes = 2 048 bytes per ArcFace embedding
+  embeddingData       Bytes
+  detectionConfidence Float
+  qualityScore        Float
+  createdAt           DateTime       @default(now())
+
+  @@index([userId])
+  @@index([kycApplicationId])
+  @@index([sourceType])
+  @@map("kyc_face_embeddings")
 }
 
 // ============================================================

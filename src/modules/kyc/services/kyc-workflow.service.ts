@@ -1,6 +1,13 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as crypto from 'node:crypto';
+import type Redis from 'ioredis';
+import { REDIS_CLIENT } from '../../../infrastructure/redis/redis.module';
 import { KycVerificationStage } from '../domain/kyc-stage.enum';
 import type {
   FaceMatchResult,
@@ -32,8 +39,28 @@ import { StorageService } from '../../../infrastructure/storage/storage.service'
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { validateUploadedFile } from '../../../infrastructure/storage/file-validation.util';
 
-const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png'];
+
+/**
+ * Stage order map for the H-2 regression fix.
+ * Only advance the stage — never regress it when documents are re-uploaded.
+ */
+const STAGE_ORDER: Record<string, number> = {
+  CREATED: 0,
+  ID_UPLOADED: 1,
+  SELFIE_UPLOADED: 2,
+  VALIDATING: 3,
+  ENHANCING: 4,
+  OCR_PROCESSING: 5,
+  FACE_EXTRACTING: 6,
+  FACE_MATCHING: 7,
+  FRAUD_CHECKING: 8,
+  SCORING: 9,
+  DECIDING: 10,
+  COMPLETE: 11,
+  FAILED: 12,
+};
 
 /**
  * KYC workflow orchestrator. Manages the full verification pipeline
@@ -43,8 +70,8 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png'];
  * OCR_PROCESSING → FACE_EXTRACTING → FACE_MATCHING → FRAUD_CHECKING →
  * SCORING → DECIDING → COMPLETE
  *
- * Each stage is isolated and idempotent. The workflow can be resumed
- * from any stage after a failure.
+ * processVerification() is called by KycProcessor (BullMQ background job).
+ * It is no longer called synchronously from the HTTP controller (H-3 fix).
  */
 @Injectable()
 export class KycWorkflowService {
@@ -65,17 +92,38 @@ export class KycWorkflowService {
     private readonly storageService: StorageService,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    @Inject(REDIS_CLIENT)
+    private readonly redis: Redis,  // H-7: concurrency lock
   ) {}
 
   // ──────────────────────────────────────────────────────────────
   // Application Lifecycle
   // ──────────────────────────────────────────────────────────────
 
+  /**
+   * H-9 fix:
+   * - Resume existing application for NOT_SUBMITTED / PENDING / ADDITIONAL_DOCS /
+   *   MANUAL_REVIEW statuses (was only resuming NOT_SUBMITTED + PENDING).
+   * - Block re-application for APPROVED users (was silently creating a duplicate).
+   * - REJECTED users can start a fresh application.
+   */
   async startApplication(userId: string): Promise<{ applicationId: string }> {
-    // Check for existing pending application
     const existing = await this.repository.getLatestApplicationByUserId(userId);
-    if (existing && (existing.status === 'PENDING' || existing.status === 'NOT_SUBMITTED')) {
-      return { applicationId: existing.id };
+
+    if (existing) {
+      const RESUMABLE = new Set([
+        'NOT_SUBMITTED',
+        'PENDING',
+        'ADDITIONAL_DOCS',
+        'MANUAL_REVIEW',
+      ]);
+      if (RESUMABLE.has(existing.status)) {
+        return { applicationId: existing.id };
+      }
+      if (existing.status === 'APPROVED') {
+        throw new ConflictException('KYC is already approved for this account');
+      }
+      // REJECTED → fall through to create a fresh application
     }
 
     const application = await this.repository.createApplication(userId);
@@ -106,30 +154,23 @@ export class KycWorkflowService {
     mimeType: string,
     buffer: Buffer,
   ): Promise<{ documentId: string }> {
-    // Validate the application
     const app = await this.repository.getApplicationById(applicationId);
     if (!app || app.userId !== userId) {
       throw new Error('Application not found or unauthorized');
     }
 
-    // Proof of residency accepts images and PDF; other types accept images only
-    const allowedMimeTypes = documentType === 'PROOF_OF_RESIDENCE'
-      ? [...ALLOWED_IMAGE_TYPES, 'application/pdf']
-      : ALLOWED_IMAGE_TYPES;
+    const allowedMimeTypes =
+      documentType === 'PROOF_OF_RESIDENCE'
+        ? [...ALLOWED_IMAGE_TYPES, 'application/pdf']
+        : ALLOWED_IMAGE_TYPES;
 
-    // Validate the file (MIME, magic bytes, size)
     validateUploadedFile(fileName, mimeType, buffer, {
       allowedMimeTypes,
       maxSizeBytes: MAX_UPLOAD_SIZE,
     });
 
-    // Compute content hash for duplicate detection
-    const contentHash = crypto
-      .createHash('sha256')
-      .update(buffer)
-      .digest('hex');
+    const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // Upload to S3/MinIO
     const uploadResult = await this.storageService.upload({
       bucket: 'kyc',
       keyPrefix: `${userId}/${applicationId}/${documentType.toLowerCase()}`,
@@ -138,7 +179,6 @@ export class KycWorkflowService {
       body: buffer,
     });
 
-    // Create document record
     const doc = await this.repository.createDocument({
       kycApplicationId: applicationId,
       type: documentType,
@@ -149,17 +189,20 @@ export class KycWorkflowService {
       contentHash,
     });
 
-    // Update application stage
-    const stageMap: Record<string, KycVerificationStage> = {
+    // H-2 fix: only advance the stage, never regress it.
+    // PROOF_OF_RESIDENCE is supplementary — it has no primary upload stage.
+    const stageAdvancement: Partial<Record<typeof documentType, KycVerificationStage>> = {
       NATIONAL_ID: KycVerificationStage.ID_UPLOADED,
       NATIONAL_ID_BACK: KycVerificationStage.ID_UPLOADED,
       SELFIE: KycVerificationStage.SELFIE_UPLOADED,
-      PROOF_OF_RESIDENCE: KycVerificationStage.ID_UPLOADED,
     };
-    const newStage = stageMap[documentType] ?? KycVerificationStage.ID_UPLOADED;
-
-
-    await this.repository.updateApplicationStage(applicationId, newStage);
+    const proposedStage = stageAdvancement[documentType];
+    if (proposedStage !== undefined) {
+      const currentOrder = STAGE_ORDER[app.verificationStage ?? 'CREATED'] ?? 0;
+      if ((STAGE_ORDER[proposedStage] ?? 0) > currentOrder) {
+        await this.repository.updateApplicationStage(applicationId, proposedStage);
+      }
+    }
 
     await this.repository.recordAuditEntry({
       kycApplicationId: applicationId,
@@ -186,18 +229,83 @@ export class KycWorkflowService {
   // Full Verification Pipeline
   // ──────────────────────────────────────────────────────────────
 
+  /**
+   * Called by KycProcessor (BullMQ background job) — NOT from the HTTP controller.
+   *
+   * H-7 fix: a Redis NX lock prevents two concurrent pipeline runs for the same
+   * application (e.g. rapid retry taps on mobile or a race between a queued job
+   * and a manual admin trigger). Lock TTL = 10 minutes (well above the typical
+   * 30–60 second pipeline duration).
+   */
   async processVerification(
     applicationId: string,
     userId: string,
   ): Promise<VerificationResult> {
     const startTime = Date.now();
 
+    // H-7 fix: acquire a Redis NX lock before touching any mutable state
+    const lockKey = `kyc:pipeline:lock:${applicationId}`;
+    const lockValue = `${userId}:${startTime}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lockAcquired = await (this.redis as any).set(lockKey, lockValue, 'EX', 600, 'NX') === 'OK';
+
+    if (!lockAcquired) {
+      this.logger.warn(
+        { applicationId },
+        'KYC pipeline already running for this application — skipping duplicate job',
+      );
+      return {
+        applicationId,
+        ocrResult: null,
+        faceMatchResult: null as any,
+        idImageQuality: null as any,
+        selfieImageQuality: null as any,
+        fraudFlags: [],
+        confidenceScore: 0,
+        scores: { ocr: 0, faceMatch: 0, imageQuality: 0, documentQuality: 0, fraudRisk: 0 },
+        decision: 'MANUAL_REVIEW',
+        decisionReason: 'Duplicate pipeline request — already processing',
+        totalProcessingTimeMs: 0,
+      };
+    }
+
+    try {
+      return await this.runPipeline(applicationId, userId, startTime);
+    } finally {
+      // H-7: always release the lock, even if the pipeline throws
+      await this.redis.del(lockKey);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Helpers
+  // ──────────────────────────────────────────────────────────────
+
+  /**
+   * Public entry point for the admin controller to sync user.kycStatus
+   * after a broker manually approves or rejects an application.
+   */
+  async setUserKycStatus(
+    userId: string,
+    status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ADDITIONAL_DOCS',
+  ): Promise<void> {
+    return this.updateUserKycStatus(userId, status);
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Private — pipeline internals
+  // ──────────────────────────────────────────────────────────────
+
+  private async runPipeline(
+    applicationId: string,
+    userId: string,
+    startTime: number,
+  ): Promise<VerificationResult> {
     const app = await this.repository.getApplicationById(applicationId);
     if (!app || app.userId !== userId) {
       throw new Error('Application not found or unauthorized');
     }
 
-    // Ensure both documents are uploaded
     const documents = await this.repository.getDocumentsByApplicationId(applicationId);
     const idDoc = documents.find((d) => d.type === 'NATIONAL_ID');
     const selfieDoc = documents.find((d) => d.type === 'SELFIE');
@@ -206,33 +314,23 @@ export class KycWorkflowService {
       throw new Error('Both national ID and selfie must be uploaded before processing');
     }
 
-    // ── CRITICAL: Immediately mark as submitted/under review ──────
-    // This guarantees the application appears in the Kusata broker
-    // dashboard even if the AI pipeline below crashes.
+    // ── Mark as submitted immediately ─────────────────────────────────────────
+    // Guarantees the application appears in the broker queue even if the AI
+    // pipeline below crashes.
     await this.repository.updateApplicationStatus(applicationId, 'PENDING');
-    // Also update user.kycStatus so the mobile app shows "Under Review"
     await this.updateUserKycStatus(userId, 'PENDING');
 
     await this.repository.recordAuditEntry({
       kycApplicationId: applicationId,
       action: 'KYC_SUBMITTED_FOR_REVIEW',
       actorId: userId,
-      details: {
-        hasIdDocument: true,
-        hasSelfie: true,
-      },
+      details: { hasIdDocument: true, hasSelfie: true },
     });
 
-    this.eventEmitter.emit('kyc.submitted', {
-      applicationId,
-      userId,
-    });
+    this.eventEmitter.emit('kyc.submitted', { applicationId, userId });
 
-    // ── AI verification pipeline (best-effort) ───────────────────
-    // If any AI step fails, the application remains PENDING for
-    // manual broker review in Kusata. Documents are already stored.
     try {
-      // ── Stage: ENHANCING ──────────────────────────────────────
+      // ── Stage: ENHANCING ─────────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.ENHANCING,
@@ -241,14 +339,19 @@ export class KycWorkflowService {
       const idUrl = await this.storageService.getSignedDownloadUrl('kyc', idDoc.storageKey);
       const selfieUrl = await this.storageService.getSignedDownloadUrl('kyc', selfieDoc.storageKey);
 
-      // For processing we need the raw buffer — download from storage
       const idBuffer = await this.downloadBuffer(idUrl);
       const selfieBuffer = await this.downloadBuffer(selfieUrl);
 
-      // Enhance images
+      // Enhance images (JPEG for S3 storage and admin preview)
       const enhancedId = await this.imageProcessor.enhance(idBuffer);
       const enhancedSelfie = await this.imageProcessor.enhance(selfieBuffer, {
         normalize: false, // Selfies usually have good lighting
+      });
+
+      // M-5 fix: separate PNG-format enhanced image for OCR (lossless, no blocking
+      // artifacts that degrade character recognition on Malawi NRC fonts)
+      const enhancedIdForOcr = await this.imageProcessor.enhance(idBuffer, {
+        outputFormat: 'png',
       });
 
       // Analyze image quality
@@ -265,37 +368,55 @@ export class KycWorkflowService {
         height: 200,
       });
 
-      // Upload enhanced images and thumbnails
-      await this.storageService.upload({
-        bucket: 'kyc',
-        keyPrefix: `${userId}/${applicationId}/enhanced`,
-        fileName: 'id-enhanced.jpg',
-        contentType: 'image/jpeg',
-        body: enhancedId,
-      });
-      await this.storageService.upload({
-        bucket: 'kyc',
-        keyPrefix: `${userId}/${applicationId}/enhanced`,
-        fileName: 'selfie-enhanced.jpg',
-        contentType: 'image/jpeg',
-        body: enhancedSelfie,
-      });
-      await this.storageService.upload({
-        bucket: 'kyc',
-        keyPrefix: `${userId}/${applicationId}/thumbnails`,
-        fileName: 'id-thumb.jpg',
-        contentType: 'image/jpeg',
-        body: idThumb,
-      });
-      await this.storageService.upload({
-        bucket: 'kyc',
-        keyPrefix: `${userId}/${applicationId}/thumbnails`,
-        fileName: 'selfie-thumb.jpg',
-        contentType: 'image/jpeg',
-        body: selfieThumb,
-      });
+      // H-5 fix: capture upload results so we can persist the storage keys.
+      // The previous code discarded the upload result with await-without-assignment,
+      // making updateDocument() a permanent no-op.
+      const [idEnhancedUpload, selfieEnhancedUpload, idThumbUpload, selfieThumbUpload] =
+        await Promise.all([
+          this.storageService.upload({
+            bucket: 'kyc',
+            keyPrefix: `${userId}/${applicationId}/enhanced`,
+            fileName: 'id-enhanced.jpg',
+            contentType: 'image/jpeg',
+            body: enhancedId,
+          }),
+          this.storageService.upload({
+            bucket: 'kyc',
+            keyPrefix: `${userId}/${applicationId}/enhanced`,
+            fileName: 'selfie-enhanced.jpg',
+            contentType: 'image/jpeg',
+            body: enhancedSelfie,
+          }),
+          this.storageService.upload({
+            bucket: 'kyc',
+            keyPrefix: `${userId}/${applicationId}/thumbnails`,
+            fileName: 'id-thumb.jpg',
+            contentType: 'image/jpeg',
+            body: idThumb,
+          }),
+          this.storageService.upload({
+            bucket: 'kyc',
+            keyPrefix: `${userId}/${applicationId}/thumbnails`,
+            fileName: 'selfie-thumb.jpg',
+            contentType: 'image/jpeg',
+            body: selfieThumb,
+          }),
+        ]);
 
-      // ── Stage: OCR_PROCESSING ──────────────────────────────────
+      // H-5 fix: persist enhanced and thumbnail keys to the document records
+      // so the broker dashboard can link to the AI-enhanced versions.
+      await Promise.all([
+        this.repository.updateDocument(idDoc.id, {
+          enhancedStorageKey: idEnhancedUpload.key,
+          thumbnailStorageKey: idThumbUpload.key,
+        }),
+        this.repository.updateDocument(selfieDoc.id, {
+          enhancedStorageKey: selfieEnhancedUpload.key,
+          thumbnailStorageKey: selfieThumbUpload.key,
+        }),
+      ]);
+
+      // ── Stage: OCR_PROCESSING ─────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.OCR_PROCESSING,
@@ -303,7 +424,8 @@ export class KycWorkflowService {
 
       let ocrResult: OcrExtractionResult | null = null;
       if (this.ocrProvider.isReady()) {
-        ocrResult = await this.ocrProvider.extractFields(enhancedId, {
+        // M-5 fix: use the lossless PNG-enhanced image for OCR
+        ocrResult = await this.ocrProvider.extractFields(enhancedIdForOcr, {
           documentType: 'national_id',
           preprocess: true,
         });
@@ -316,7 +438,6 @@ export class KycWorkflowService {
           rawText: ocrResult.rawText,
         });
 
-        // Update application with extracted data
         if (ocrResult.nationalIdNumber?.value || ocrResult.dateOfBirth?.value) {
           await this.repository.updateApplicationStatus(applicationId, 'PENDING', {
             nationalIdNumber: ocrResult.nationalIdNumber?.value ?? null,
@@ -329,7 +450,7 @@ export class KycWorkflowService {
         }
       }
 
-      // ── Stage: FACE_EXTRACTING ──────────────────────────────────
+      // ── Stage: FACE_EXTRACTING ────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.FACE_EXTRACTING,
@@ -348,7 +469,6 @@ export class KycWorkflowService {
         idFace = await this.faceRecognition.detectAndEmbed(enhancedId);
         selfieFace = await this.faceRecognition.detectAndEmbed(enhancedSelfie);
 
-        // Save embeddings for future duplicate detection
         if (idFace.embedding) {
           await this.repository.saveFaceEmbedding({
             kycApplicationId: applicationId,
@@ -371,7 +491,7 @@ export class KycWorkflowService {
         }
       }
 
-      // ── Stage: FACE_MATCHING ──────────────────────────────────
+      // ── Stage: FACE_MATCHING ──────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.FACE_MATCHING,
@@ -387,7 +507,7 @@ export class KycWorkflowService {
         faceMatchConfidence: faceMatchResult.confidence,
       });
 
-      // ── Stage: FRAUD_CHECKING ──────────────────────────────────
+      // ── Stage: FRAUD_CHECKING ─────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.FRAUD_CHECKING,
@@ -408,7 +528,7 @@ export class KycWorkflowService {
         await this.repository.saveFraudFlags(applicationId, fraudResult.flags);
       }
 
-      // ── Stage: SCORING ──────────────────────────────────────────
+      // ── Stage: SCORING ────────────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.SCORING,
@@ -423,19 +543,20 @@ export class KycWorkflowService {
         fraudRiskScore: fraudResult.riskScore,
       });
 
-      // ── Stage: DECIDING ──────────────────────────────────────────
+      // ── Stage: DECIDING ───────────────────────────────────────────────────────
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.DECIDING,
       );
 
-      // Map scoring decision to a valid KycApplication DB status.
-      // MANUAL_REVIEW is NOT a DB enum value — keep application PENDING
-      // so it appears in the Kusata queue for human broker review.
+      // MANUAL_REVIEW is not a DB enum value — keep application PENDING so it
+      // appears in the Kusata queue for human broker review.
       const applicationStatus =
-        scoring.decision === 'APPROVED' ? 'APPROVED' :
-        scoring.decision === 'REJECTED' ? 'REJECTED' :
-        'PENDING'; // MANUAL_REVIEW stays PENDING
+        scoring.decision === 'APPROVED'
+          ? 'APPROVED'
+          : scoring.decision === 'REJECTED'
+            ? 'REJECTED'
+            : 'PENDING'; // MANUAL_REVIEW stays PENDING
 
       await this.repository.updateApplicationStatus(applicationId, applicationStatus, {
         confidenceScore: scoring.compositeScore,
@@ -444,8 +565,6 @@ export class KycWorkflowService {
         fraudScore: fraudResult.riskScore,
       });
 
-      // Update user.kycStatus only for terminal states (APPROVED / REJECTED).
-      // MANUAL_REVIEW leaves user at PENDING → mobile shows "Under Review".
       if (applicationStatus === 'APPROVED' || applicationStatus === 'REJECTED') {
         await this.updateUserKycStatus(userId, applicationStatus);
       }
@@ -455,7 +574,6 @@ export class KycWorkflowService {
         KycVerificationStage.COMPLETE,
       );
 
-      // Build final result
       const totalProcessingTimeMs = Date.now() - startTime;
 
       const result: VerificationResult = {
@@ -472,7 +590,6 @@ export class KycWorkflowService {
         totalProcessingTimeMs,
       };
 
-      // Audit trail
       await this.repository.recordAuditEntry({
         kycApplicationId: applicationId,
         action: `VERIFICATION_COMPLETE:${scoring.decision}`,
@@ -485,7 +602,6 @@ export class KycWorkflowService {
         },
       });
 
-      // Domain events
       this.eventEmitter.emit('kyc.verification.complete', {
         applicationId,
         userId,
@@ -503,17 +619,14 @@ export class KycWorkflowService {
         });
       }
 
-      this.logger.log({
-        applicationId,
-        decision: scoring.decision,
-        compositeScore: scoring.compositeScore,
-        totalProcessingTimeMs,
-      }, `KYC verification complete: ${scoring.decision}`);
+      this.logger.log(
+        { applicationId, decision: scoring.decision, compositeScore: scoring.compositeScore, totalProcessingTimeMs },
+        `KYC verification complete: ${scoring.decision}`,
+      );
 
       return result;
     } catch (error) {
-      // AI pipeline failed — but the application stays PENDING.
-      // The broker can manually review it in Kusata.
+      // AI pipeline failed — application stays PENDING for manual broker review
       await this.repository.updateApplicationStage(
         applicationId,
         KycVerificationStage.FAILED,
@@ -534,7 +647,6 @@ export class KycWorkflowService {
         'KYC AI pipeline failed — application stays PENDING for manual review',
       );
 
-      // Return a MANUAL_REVIEW result instead of throwing
       return {
         applicationId,
         ocrResult: null,
@@ -543,13 +655,7 @@ export class KycWorkflowService {
         selfieImageQuality: null as any,
         fraudFlags: [],
         confidenceScore: 0,
-        scores: {
-          ocr: 0,
-          faceMatch: 0,
-          imageQuality: 0,
-          documentQuality: 0,
-          fraudRisk: 0,
-        },
+        scores: { ocr: 0, faceMatch: 0, imageQuality: 0, documentQuality: 0, fraudRisk: 0 },
         decision: 'MANUAL_REVIEW',
         decisionReason: 'AI pipeline unavailable — queued for manual broker review',
         totalProcessingTimeMs: Date.now() - startTime,
@@ -557,28 +663,9 @@ export class KycWorkflowService {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // Helpers
-  // ──────────────────────────────────────────────────────────────
-
-  /**
-   * Public entry point for the admin controller to sync user.kycStatus
-   * after a broker manually approves or rejects an application.
-   */
-  async setUserKycStatus(
-    userId: string,
-    status: 'PENDING' | 'APPROVED' | 'REJECTED',
-  ): Promise<void> {
-    return this.updateUserKycStatus(userId, status);
-  }
-
-  /**
-   * Update user.kycStatus on the User record.
-   * This is what the mobile app and trading validation check.
-   */
   private async updateUserKycStatus(
     userId: string,
-    status: 'PENDING' | 'APPROVED' | 'REJECTED',
+    status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ADDITIONAL_DOCS',
   ): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
@@ -586,7 +673,6 @@ export class KycWorkflowService {
     });
     this.logger.log({ userId, kycStatus: status }, 'User kycStatus updated');
   }
-
 
   private async downloadBuffer(url: string): Promise<Buffer> {
     const response = await fetch(url);
@@ -596,15 +682,31 @@ export class KycWorkflowService {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  /**
+   * H-6 fix:
+   * - 2-digit years now use a pivot (≤ 30 → 20xx, > 30 → 19xx) so that
+   *   a scanned "79" maps to 1979, not 2079.
+   * - Uses Date.UTC to avoid the local-timezone offset that new Date(y,m,d)
+   *   introduces, which caused dates near midnight to shift by ±1 day in
+   *   non-UTC server deployments.
+   */
   private parseDate(dateStr: string): Date | null {
     try {
       const parts = dateStr.split('/');
       if (parts.length < 3) return null;
       const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const year = parseInt(parts[2], 10);
-      const fullYear = year < 100 ? 2000 + year : year;
-      return new Date(fullYear, month, day);
+      const month = parseInt(parts[1], 10) - 1; // 0-based for Date.UTC
+      const rawYear = parseInt(parts[2], 10);
+
+      // 2-digit year pivot: ≤ 30 → 2000+, > 30 → 1900+
+      const fullYear =
+        rawYear < 100
+          ? rawYear <= 30
+            ? 2000 + rawYear
+            : 1900 + rawYear
+          : rawYear;
+
+      return new Date(Date.UTC(fullYear, month, day)); // UTC, not local time
     } catch {
       return null;
     }

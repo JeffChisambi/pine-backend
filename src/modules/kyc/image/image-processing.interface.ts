@@ -21,6 +21,12 @@ export interface EnhanceImageOptions {
   denoise?: boolean;
   /** Whether to strip EXIF/GPS metadata */
   stripMetadata?: boolean;
+  /**
+   * Output format.
+   * - 'jpeg' (default): lossy, smaller — suitable for S3 storage and admin preview.
+   * - 'png': lossless — use for OCR inputs where JPEG artifacts degrade accuracy (M-5 fix).
+   */
+  outputFormat?: 'jpeg' | 'png';
 }
 
 export interface ThumbnailOptions {

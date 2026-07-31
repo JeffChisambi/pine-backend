@@ -578,6 +578,26 @@ export class AdminKycController {
       message: body.message,
     });
 
+    // H-4 fix: sync user.kycStatus so the mobile app shows
+    // "Additional Documents Required" instead of staying on "Under Review".
+    await this.prisma.user.update({
+      where: { id: app.userId },
+      data: { kycStatus: 'ADDITIONAL_DOCS' as any },
+    });
+
+    // M-3 fix: record the event in the KYC application's own audit trail
+    // (was only logged to the system-wide AuditLog, not the KYC timeline).
+    await this.kycRepo.recordAuditEntry({
+      kycApplicationId: applicationId,
+      action: 'DOCS_REQUESTED',
+      actorId: admin.id,
+      details: {
+        requiredDocuments: body.requiredDocuments,
+        message: body.message,
+        reviewerName,
+      },
+    });
+
     await this.auditLogService.log({
       actorId: admin.id,
       actorRole: admin.role,

@@ -1,19 +1,24 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
+  NotFoundException,
+  Param,
   Post,
   UploadedFile,
   UseInterceptors,
-  Param,
-  Inject,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { KycWorkflowService } from '../services/kyc-workflow.service';
-import { StartKycDto } from '../dto/start-kyc.dto';
 import type {
   KycStatusResponseDto,
   KycResultResponseDto,
@@ -24,21 +29,27 @@ import {
 } from '../interfaces/kyc-repository.interface';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
+import {
+  QueueName,
+  DEFAULT_JOB_OPTIONS,
+} from '../../../core/constants/queue-names.constant';
 
 /**
- * Customer-facing KYC endpoints. All routes are under `/v1/kyc/`.
+ * Customer-facing KYC endpoints. All routes are under /v1/kyc/.
  *
- * In a fully implemented system, these would be protected by
- * `@UseGuards(JwtAuthGuard)` (Phase 2). For now they accept
- * a `userId` from the request body/query for testing.
+ * Auth: JwtAuthGuard is registered globally via APP_GUARD in AuthModule.
+ * Every route here requires a valid JWT — no @Public() decoration = protected.
  */
 @ApiTags('kyc')
 @Controller('kyc')
+@UsePipes(new ValidationPipe({ whitelist: true, transform: true }))  // M-10 fix
 export class KycController {
   constructor(
     private readonly workflowService: KycWorkflowService,
     @Inject(KYC_REPOSITORY)
     private readonly repository: IKycRepository,
+    @InjectQueue(QueueName.KYC)                                       // H-3 fix
+    private readonly kycQueue: Queue,
   ) {}
 
   @Post('start')
@@ -135,26 +146,51 @@ export class KycController {
     );
   }
 
-
+  /**
+   * Enqueues the full KYC verification pipeline as a background job (H-3 fix).
+   * Returns 202 immediately — poll GET /kyc/status/:applicationId for the result.
+   * BullMQ jobId deduplication prevents concurrent pipeline runs for the same app.
+   */
   @Post('process')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Trigger the KYC verification pipeline',
-    description: 'Runs the full pipeline: enhance → OCR → face detect → face match → fraud → score → decide',
+    description:
+      'Enqueues the full pipeline (enhance → OCR → face detect → face match → fraud → score → decide). ' +
+      'Returns 202 immediately; poll GET /kyc/status for progress.',
   })
-  @ApiResponse({ status: 202, description: 'Verification processing started' })
+  @ApiResponse({ status: 202, description: 'Verification job enqueued' })
   async process(
     @Body('applicationId') applicationId: string,
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<{ decision: string; confidenceScore: number }> {
-    const result = await this.workflowService.processVerification(
-      applicationId,
-      user.id,
+  ): Promise<{ queued: boolean; applicationId: string }> {
+    // Validate ownership and document readiness before enqueueing (fail fast)
+    const app = await this.repository.getApplicationById(applicationId);
+    if (!app || app.userId !== user.id) {
+      throw new NotFoundException('Application not found');
+    }
+
+    const docs = await this.repository.getDocumentsByApplicationId(applicationId);
+    const hasId = docs.some((d) => d.type === 'NATIONAL_ID');
+    const hasSelfie = docs.some((d) => d.type === 'SELFIE');
+    if (!hasId || !hasSelfie) {
+      throw new BadRequestException(
+        'Both national ID and selfie must be uploaded before processing',
+      );
+    }
+
+    // jobId uniqueness: BullMQ skips the second enqueue if a job with this ID
+    // is already waiting or active — prevents duplicate concurrent pipeline runs.
+    await this.kycQueue.add(
+      'verify',
+      { applicationId, userId: user.id },
+      {
+        jobId: `kyc-verify-${applicationId}`,
+        ...DEFAULT_JOB_OPTIONS,
+      },
     );
-    return {
-      decision: result.decision,
-      confidenceScore: result.confidenceScore,
-    };
+
+    return { queued: true, applicationId };
   }
 
   @Get('status')
@@ -171,7 +207,7 @@ export class KycController {
         status: 'NOT_SUBMITTED',
         verificationStage: 'NONE',
         confidenceScore: null,
-        submittedAt: '',
+        submittedAt: null,        // M-1 fix: null not ''
         hasIdDocument: false,
         hasSelfie: false,
         canProcess: false,
@@ -182,6 +218,11 @@ export class KycController {
     const hasId = docs.some((d) => d.type === 'NATIONAL_ID');
     const hasSelfie = docs.some((d) => d.type === 'SELFIE');
 
+    // M-2 fix: only allow processing when the application is in a state where
+    // the user is still expected to submit — NOT when it's APPROVED/REJECTED/PENDING.
+    const PROCESSABLE_STATUSES = new Set(['NOT_SUBMITTED', 'ADDITIONAL_DOCS']);
+    const canProcess = hasId && hasSelfie && PROCESSABLE_STATUSES.has(app.status);
+
     return {
       applicationId: app.id,
       status: app.status,
@@ -190,28 +231,39 @@ export class KycController {
       submittedAt: app.submittedAt.toISOString(),
       hasIdDocument: hasId,
       hasSelfie: hasSelfie,
-      canProcess: hasId && hasSelfie && app.status !== 'APPROVED',
+      canProcess,
     };
   }
 
+  /**
+   * C-2 fix: ownership check — a user can only fetch their own result.
+   * Without this any authenticated user can request another user's
+   * NRC number, face match scores, and fraud flags by guessing a UUID.
+   */
   @Get('result/:applicationId')
   @ApiOperation({ summary: 'Get full verification result' })
   @ApiResponse({ status: 200, description: 'Verification result' })
   async getResult(
     @Param('applicationId') applicationId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<KycResultResponseDto> {
     const app = await this.repository.getApplicationById(applicationId);
-    if (!app) {
-      throw new Error('Application not found');
+    // C-2 fix: null check + ownership — throws 404 for both not-found and wrong owner
+    if (!app || app.userId !== user.id) {
+      throw new NotFoundException('Application not found');
     }
+
+    // H-8 fix: read real fraud flag count from the riskFlags column
+    const fraudFlagCount = (app.riskFlags as string[] | null)?.length ?? 0;
 
     return {
       applicationId: app.id,
-      decision: app.status === 'APPROVED'
-        ? 'APPROVED'
-        : app.status === 'REJECTED'
-          ? 'REJECTED'
-          : 'MANUAL_REVIEW',
+      decision:
+        app.status === 'APPROVED'
+          ? 'APPROVED'
+          : app.status === 'REJECTED'
+            ? 'REJECTED'
+            : 'MANUAL_REVIEW',
       confidenceScore: app.confidenceScore ?? 0,
       decisionReason: app.rejectionReason ?? '',
       scores: {
@@ -221,28 +273,41 @@ export class KycController {
         documentQuality: app.documentQualityScore ?? 0,
         fraudRisk: app.fraudScore ?? 0,
       },
-      fraudFlagCount: 0, // TODO: query fraud flags
+      fraudFlagCount,                 // H-8 fix: real count not hardcoded 0
       extractedName: (app.ocrExtractedData as any)?.fullName?.value ?? null,
       extractedIdNumber: app.nationalIdNumber,
       faceMatchSimilarity: app.facialMatchScore,
-      totalProcessingTimeMs: 0,
+      totalProcessingTimeMs: 0,       // not persisted; reserved for future column
     };
   }
 
+  /**
+   * Retry failed verification.
+   * C-1 fix: userId MUST come from the validated JWT (@CurrentUser), not from
+   * the request body — otherwise any user can re-run another user's pipeline.
+   */
   @Post('retry')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({ summary: 'Retry failed KYC verification' })
   async retry(
     @Body('applicationId') applicationId: string,
-    @Body('userId') userId: string,
-  ): Promise<{ decision: string; confidenceScore: number }> {
-    const result = await this.workflowService.processVerification(
-      applicationId,
-      userId,
+    @CurrentUser() user: AuthenticatedUser,  // C-1 fix: never trust userId from body
+  ): Promise<{ queued: boolean; applicationId: string }> {
+    const app = await this.repository.getApplicationById(applicationId);
+    if (!app || app.userId !== user.id) {
+      throw new NotFoundException('Application not found');
+    }
+
+    // Unique jobId per retry attempt (unlike process which deduplicates strictly)
+    await this.kycQueue.add(
+      'verify',
+      { applicationId, userId: user.id },
+      {
+        jobId: `kyc-retry-${applicationId}-${Date.now()}`,
+        ...DEFAULT_JOB_OPTIONS,
+      },
     );
-    return {
-      decision: result.decision,
-      confidenceScore: result.confidenceScore,
-    };
+
+    return { queued: true, applicationId };
   }
 }

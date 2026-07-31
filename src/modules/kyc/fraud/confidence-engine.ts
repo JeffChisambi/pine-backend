@@ -54,6 +54,18 @@ export class ConfidenceEngine {
     fraudRisk: parseFloat(process.env.KYC_WEIGHT_FRAUD ?? '0.05'),
   };
 
+  constructor() {
+    // M-7 fix: validate weights at construction time so a misconfigured deployment
+    // fails at startup rather than silently producing out-of-range composite scores.
+    const weightSum = Object.values(this.weights).reduce((s, w) => s + w, 0);
+    if (Math.abs(weightSum - 1.0) > 0.001) {
+      throw new Error(
+        `KYC confidence weights must sum to 1.0, got ${weightSum.toFixed(4)}. ` +
+        `Check KYC_WEIGHT_OCR, KYC_WEIGHT_FACE, KYC_WEIGHT_IMAGE, KYC_WEIGHT_DOCUMENT, KYC_WEIGHT_FRAUD.`,
+      );
+    }
+  }
+
   private readonly thresholds: DecisionThresholds = {
     autoApprove: parseFloat(process.env.KYC_THRESHOLD_APPROVE ?? '0.85'),
     autoReject: parseFloat(process.env.KYC_THRESHOLD_REJECT ?? '0.60'),

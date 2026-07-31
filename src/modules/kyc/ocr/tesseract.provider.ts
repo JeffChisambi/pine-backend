@@ -61,11 +61,12 @@ export class TesseractProvider
         },
       });
 
-      // FIX: PSM.SPARSE_TEXT_OSD reads text from cards regardless of orientation or
-      // layout order; PSM.SINGLE_BLOCK is used as fallback when the image is
-      // known-upright. We default to SPARSE_TEXT_OSD for national IDs.
+      // PSM.SPARSE_TEXT: recognises text at arbitrary positions without orientation/
+      // script detection (OSD). OSD adds 200–500 ms per image and can misfire on
+      // bi-lingual (English/Chichewa) Malawi NRC cards. Auto-rotation is handled
+      // upstream by Sharp's EXIF.rotate(), so OSD is redundant here (M-9 fix).
       await this.worker.setParameters({
-        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT_OSD,
+        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
         // Keep inter-word spacing so label:value patterns survive
         preserve_interword_spaces: '1',
         // Raise minimum word confidence to filter garbage

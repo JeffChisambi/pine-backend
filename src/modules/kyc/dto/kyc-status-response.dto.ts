@@ -6,7 +6,7 @@ export class KycStatusResponseDto {
   status: string;
   @ApiProperty() verificationStage: string;
   @ApiPropertyOptional() confidenceScore: number | null;
-  @ApiPropertyOptional() submittedAt: string;
+  @ApiPropertyOptional() submittedAt: string | null;
   @ApiProperty() hasIdDocument: boolean;
   @ApiProperty() hasSelfie: boolean;
   @ApiProperty() canProcess: boolean;

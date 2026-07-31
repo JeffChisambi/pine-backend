@@ -434,7 +434,11 @@ export class MalawiIdParser {
    * replacing any leftover noise separators with '/'.
    */
   private normalizeNrc(raw: string): string {
-    return raw.replace(/[|\\lI1]/g, '/').replace(/\s+/g, '');
+    // Replace only the unambiguous non-digit noise characters.
+    // '1' is a valid NRC digit and must NOT be replaced globally —
+    // a valid NRC ending in '1' (e.g. 123456/78/1) would otherwise
+    // become '123456/78//' (C-5 fix).
+    return raw.replace(/[|\\lI]/g, '/').replace(/\s+/g, '');
   }
 
   /** Title-case a name, preserving hyphens and apostrophes. */
@@ -470,7 +474,8 @@ export class MalawiIdParser {
         parseInt(parts[2], 10) + (parseInt(parts[2], 10) < 100 ? 2000 : 0);
       if (month < 1 || month > 12) return false;
       const currentYear = new Date().getFullYear();
-      if (year < 1900 || year > currentYear - 10) return false;
+      // Minimum KYC age on Pine is 18 years (regulatory requirement)
+      if (year < 1900 || year > currentYear - 18) return false;
       return true;
     } catch {
       return false;
