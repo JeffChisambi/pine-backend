@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
+import { AuthModule } from '../auth/auth.module';
 
 // Repository
 import { WalletRepository } from './repositories/wallet.repository';
@@ -44,6 +45,7 @@ import { WalletController } from './controllers/wallet.controller';
   imports: [
     DatabaseModule,
     ConfigModule,
+    AuthModule,
   ],
   controllers: [WalletController],
   providers: [

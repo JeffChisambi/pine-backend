@@ -15,6 +15,7 @@ import { ValidationException } from './core/exceptions/app.exception';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    rawBody: true,
   });
 
   // Pino replaces Nest's default console logger for the entire app,
@@ -59,7 +60,7 @@ async function bootstrap(): Promise<void> {
     origin: corsOrigins,
     credentials: config.cors.credentials,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id', 'X-Pin-Token'],
   });
 
   // ---- Request size limits ----

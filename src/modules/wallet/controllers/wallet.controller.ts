@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -15,6 +16,7 @@ import {
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
+import { PinGuard } from '../../auth/guards/pin.guard';
 import { WalletService } from '../services/wallet.service';
 import { DepositDto, WithdrawDto, StatementQueryDto } from '../dto/wallet.dto';
 
@@ -107,7 +109,7 @@ export class WalletController {
       transactions: result.entries.map((e) => ({
         id: e.id,
         type: e.type,
-        amount: (e.amount as number).toFixed(2),
+        amount: (e.amount as unknown as { toNumber(): number }).toNumber().toFixed(2),
         currency: e.currency,
         status: 'COMPLETED',
         description: e.description ?? '',
@@ -170,6 +172,7 @@ export class WalletController {
   // ── Withdrawal ──────────────────────────────────────────────
 
   @Post('withdraw')
+  @UseGuards(PinGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Initiate a withdrawal',

@@ -8,7 +8,10 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
+  Headers,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -16,7 +19,8 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Response } from 'express';
+import { Request, Response } from 'express';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import { Public } from '../../../core/decorators/public.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
@@ -262,11 +266,59 @@ export class PaymentsController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'PayChangu webhook endpoint' })
-  async handleWebhook(@Body() body: any) {
+  async handleWebhook(
+    @Req() req: Request,
+    @Headers('verif-hash') verifHash: string | undefined,
+    @Body() body: any,
+  ) {
     this.logger.log({ event: body?.event, txRef: body?.tx_ref }, 'Webhook received');
 
-    // TODO: Validate webhook signature using PAYCHANGU_WEBHOOK_SECRET
-    // For now, just log — the callback flow is the primary path
+    // Verify the HMAC-SHA512 signature PayChangu sends in the `verif-hash` header.
+    // Uses timing-safe comparison to prevent timing attacks.
+    const webhookSecret = this.config.paychangu.webhookSecret;
+    if (webhookSecret) {
+      if (!verifHash) {
+        this.logger.warn('Webhook rejected — missing verif-hash header');
+        throw new UnauthorizedException('Missing webhook signature');
+      }
+
+      // Use raw body for HMAC if available (requires rawBody: true in bootstrap),
+      // fall back to re-serialised JSON otherwise.
+      const rawBody: Buffer | undefined = (req as any).rawBody;
+      const payload = rawBody ? rawBody : Buffer.from(JSON.stringify(body));
+
+      const expected = createHmac('sha512', webhookSecret)
+        .update(payload)
+        .digest('hex');
+
+      let signatureValid = false;
+      try {
+        signatureValid = timingSafeEqual(
+          Buffer.from(expected, 'hex'),
+          Buffer.from(verifHash, 'hex'),
+        );
+      } catch {
+        // Buffer lengths differ — signature is invalid
+        signatureValid = false;
+      }
+
+      if (!signatureValid) {
+        this.logger.warn({ txRef: body?.tx_ref }, 'Webhook rejected — invalid signature');
+        throw new UnauthorizedException('Invalid webhook signature');
+      }
+    } else {
+      this.logger.warn('PAYCHANGU_WEBHOOK_SECRET not set — skipping signature verification');
+    }
+
+    // Process confirmed payment events
+    if (body?.event === 'payment.success' && body?.tx_ref) {
+      try {
+        await this.walletService.processPaymentByTxRef(body.tx_ref as string);
+        this.logger.log({ txRef: body.tx_ref }, 'Webhook: payment processed');
+      } catch (error) {
+        this.logger.error({ err: error, txRef: body.tx_ref }, 'Webhook: payment processing failed');
+      }
+    }
 
     return { received: true };
   }

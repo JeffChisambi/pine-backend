@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -17,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
+import { PinGuard } from '../../auth/guards/pin.guard';
 import { TradingService } from '../services/trading.service';
 import {
   BuyOrderDto,
@@ -50,6 +52,7 @@ export class TradingController {
   // ── Buy ─────────────────────────────────────────────────────
 
   @Post('buy')
+  @UseGuards(PinGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Submit a buy order',
@@ -81,6 +84,7 @@ export class TradingController {
   // ── Sell ────────────────────────────────────────────────────
 
   @Post('sell')
+  @UseGuards(PinGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Submit a sell order',

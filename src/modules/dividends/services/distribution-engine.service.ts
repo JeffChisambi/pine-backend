@@ -94,6 +94,13 @@ export class DistributionEngine {
             where: { userId: holder.userId },
           });
 
+          if (!wallet) {
+            this.logger.warn(
+              { userId: holder.userId, dividendId },
+              'Dividend skipped — user has no wallet. Manual crediting required.',
+            );
+          }
+
           if (wallet) {
             // Create transaction
             const transaction = await tx.transaction.create({
@@ -231,7 +238,7 @@ export class DistributionEngine {
           });
 
           affected++;
-        });
+        }, FINANCIAL_TRANSACTION_OPTIONS);
 
         this.eventEmitter.emit('corporate-actions.split.applied', {
           userId: holder.userId,
@@ -308,7 +315,7 @@ export class DistributionEngine {
 
           affected++;
           totalBonusShares = totalBonusShares.add(bonusShares);
-        });
+        }, FINANCIAL_TRANSACTION_OPTIONS);
 
         this.eventEmitter.emit('corporate-actions.bonus.issued', {
           userId: holder.userId,

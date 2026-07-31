@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
+import { AuthModule } from '../auth/auth.module';
 
 // Repository
 import { TradingRepository } from './repositories/trading.repository';
@@ -42,6 +43,7 @@ import { TradingController } from './controllers/trading.controller';
   imports: [
     DatabaseModule,
     ConfigModule,
+    AuthModule,
   ],
   controllers: [TradingController],
   providers: [

@@ -46,7 +46,7 @@ export class AdminDashboardController {
   })
   @ApiResponse({ status: 200, description: 'Health check results' })
   async getHealth() {
-    const checks: Record<string, { status: string; latencyMs?: number }> = {};
+    const checks: Record<string, { status: string; latencyMs?: number; queueDepth?: number; failedCount?: number }> = {};
 
     // DB health
     const dbStart = Date.now();

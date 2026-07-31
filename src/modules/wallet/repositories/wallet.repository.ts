@@ -153,20 +153,20 @@ export class WalletRepository {
    * findUserTransactions only returns COMPLETED transactions).
    */
   async sumPendingTransactions(walletId: string): Promise<{ deposits: Decimal; withdrawals: Decimal }> {
-    const pendingStatuses = ['PENDING', 'PROCESSING'];
+    const pendingStatuses = ['PENDING', 'PROCESSING'] as const;
     const [depositsAgg, withdrawalsAgg] = await Promise.all([
       this.prisma.transaction.aggregate({
-        where: { walletId, type: 'DEPOSIT', status: { in: pendingStatuses } },
+        where: { walletId, type: 'DEPOSIT', status: { in: [...pendingStatuses] } },
         _sum: { amount: true },
       }),
       this.prisma.transaction.aggregate({
-        where: { walletId, type: 'WITHDRAWAL', status: { in: pendingStatuses } },
+        where: { walletId, type: 'WITHDRAWAL', status: { in: [...pendingStatuses] } },
         _sum: { amount: true },
       }),
     ]);
     return {
-      deposits: depositsAgg._sum.amount ?? new Decimal(0),
-      withdrawals: withdrawalsAgg._sum.amount ?? new Decimal(0),
+      deposits: depositsAgg._sum?.amount ?? new Decimal(0),
+      withdrawals: withdrawalsAgg._sum?.amount ?? new Decimal(0),
     };
   }
 
