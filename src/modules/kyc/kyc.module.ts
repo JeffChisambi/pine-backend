@@ -13,7 +13,6 @@ import { FACE_RECOGNITION_PROVIDER } from './face/face-recognition.interface';
 
 // Controllers
 import { KycController } from './controllers/kyc.controller';
-import { KycAdminController } from './controllers/kyc-admin.controller';
 
 // Services
 import { KycWorkflowService } from './services/kyc-workflow.service';
@@ -63,7 +62,7 @@ import { KycRepository } from './repositories/kyc.repository';
       },
     }),
   ],
-  controllers: [KycController, KycAdminController],
+  controllers: [KycController],
   providers: [
     // ── Repository ──────────────────────────────────────────────
     { provide: KYC_REPOSITORY, useClass: KycRepository },
