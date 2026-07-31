@@ -152,7 +152,15 @@ export class InsightFaceProvider
   private async verifyChecksums(): Promise<void> {
     const checksumFile = path.join(this.modelDir, 'checksums.json');
     if (!fs.existsSync(checksumFile)) {
-      this.logger.debug('No checksums.json — skipping integrity check');
+      // L-3 fix: warn (not debug) so operators notice the gap in integrity checks.
+      // Generate checksums.json with:
+      //   sha256sum det_10g.onnx w600k_r50.onnx | awk '{print $1, $2}' > checksums.json
+      // then format as { "det_10g.onnx": "<sha256>", "w600k_r50.onnx": "<sha256>" }
+      this.logger.warn(
+        { modelDir: this.modelDir },
+        'No checksums.json found — model integrity check skipped. ' +
+        'Provide checksums.json to detect tampered or corrupted ONNX files at startup.',
+      );
       return;
     }
 
@@ -299,10 +307,13 @@ export class InsightFaceProvider
    * not the `pixel / 255.0` used originally. Using the wrong range shifts the
    * input distribution by ~50%, significantly reducing detection recall.
    *
-   * Channel order: RGB (Sharp's default output order). InsightFace ONNX models
-   * exported via the standard pipeline expect BGR; however, many community
-   * exports include a BGR→RGB conversion layer. If detection recall remains
-   * poor after testing, swap R and B channels here.
+   * M-6 fix — channel order resolved: BGR.
+   * The standard buffalo_l ONNX export (det_10g.onnx) follows OpenCV convention
+   * and does NOT include an internal BGR→RGB conversion layer. Sharp outputs RGB,
+   * so we swap R and B channels here before writing into the CHW tensor.
+   * Concretely: channel-0 (first CHW plane) = Blue, channel-2 = Red.
+   * If you replace the ONNX file with a community export that does include an
+   * internal BGR→RGB layer, remove the channel swap (R→ch0, G→ch1, B→ch2).
    */
   private async bufferToDetectionFloat32(
     buffer: Buffer,
@@ -316,10 +327,13 @@ export class InsightFaceProvider
     const pixels = new Float32Array(3 * pixelCount);
 
     for (let i = 0; i < pixelCount; i++) {
-      // FIX: (value − 127.5) / 128.0  ← correct SCRFD normalisation
-      pixels[i]              = (data[i * 3]     - 127.5) / 128.0; // R
-      pixels[pixelCount + i] = (data[i * 3 + 1] - 127.5) / 128.0; // G
-      pixels[2 * pixelCount + i] = (data[i * 3 + 2] - 127.5) / 128.0; // B
+      const r = data[i * 3];
+      const g = data[i * 3 + 1];
+      const b = data[i * 3 + 2];
+      // M-6 fix: write in BGR order to match the ONNX model's expected channel layout
+      pixels[i]                  = (b - 127.5) / 128.0; // ch0 = B
+      pixels[pixelCount + i]     = (g - 127.5) / 128.0; // ch1 = G
+      pixels[2 * pixelCount + i] = (r - 127.5) / 128.0; // ch2 = R
     }
 
     return { data: pixels, width: info.width, height: info.height };

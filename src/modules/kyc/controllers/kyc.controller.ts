@@ -228,7 +228,7 @@ export class KycController {
       status: app.status,
       verificationStage: app.verificationStage,
       confidenceScore: app.confidenceScore,
-      submittedAt: app.submittedAt.toISOString(),
+      submittedAt: app.submittedAt?.toISOString() ?? null,
       hasIdDocument: hasId,
       hasSelfie: hasSelfie,
       canProcess,
