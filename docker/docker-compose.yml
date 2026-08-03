@@ -85,7 +85,12 @@ services:
     environment:
       DATABASE_URL: postgresql://pine:pine_dev_password@postgres:5432/pine_dev?schema=public
       REDIS_HOST: redis
+      # MinIO credentials must match MINIO_ROOT_USER / MINIO_ROOT_PASSWORD above.
+      # These override any credentials set in .env so the app always talks to
+      # the minio service in this compose stack with the correct identity.
       STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_ACCESS_KEY_ID: pine_minio_admin
+      STORAGE_SECRET_ACCESS_KEY: change-me-minio-secret
       EMAIL_HOST: mailhog
       EMAIL_PORT: 1025
       KYC_MODEL_DIR: /app/models/insightface

@@ -84,16 +84,31 @@ export class StorageService {
       this.logger.log(`Upload successful: ${bucketName}/${key}`);
       return { key, bucket: bucketName, etag: result.ETag };
     } catch (error: any) {
+      const s3Code = error?.Code ?? error?.name ?? error?.$metadata?.httpStatusCode;
+      const cause = error?.cause?.code ?? error?.code; // ECONNREFUSED, ENOTFOUND, etc.
+
+      // Categorize the failure so the log message is immediately actionable
+      let category = 'UNKNOWN';
+      if (cause === 'ECONNREFUSED' || cause === 'ENOTFOUND') {
+        category = 'CONNECTION_REFUSED — MinIO/S3 is unreachable at the configured endpoint';
+      } else if (s3Code === 'InvalidAccessKeyId' || s3Code === 'SignatureDoesNotMatch' || s3Code === 403) {
+        category = 'AUTH_FAILURE — credentials do not match the storage server';
+      } else if (s3Code === 'NoSuchBucket') {
+        category = 'BUCKET_NOT_FOUND — run minio-init to create buckets';
+      }
+
       this.logger.error(
         {
-          err: error,
+          category,
+          s3Code,
+          cause,
           bucket: bucketName,
           key,
-          code: error?.Code ?? error?.$metadata?.httpStatusCode,
-          s3Message: error?.message,
           endpoint: this.config.storage.endpoint,
+          accessKeyId: this.config.storage.accessKeyId,
+          s3Message: error?.message,
         },
-        'Object storage upload failed',
+        `Object storage upload failed [${category}]`,
       );
       throw new ServiceUnavailableException('File upload failed, please try again');
     }
