@@ -336,8 +336,8 @@ export class KycWorkflowService {
         KycVerificationStage.ENHANCING,
       );
 
-      const idUrl = await this.storageService.getSignedDownloadUrl('kyc', idDoc.storageKey);
-      const selfieUrl = await this.storageService.getSignedDownloadUrl('kyc', selfieDoc.storageKey);
+      const idUrl = await this.storageService.getSignedDownloadUrl('kyc', idDoc.storageKey, undefined, true);
+      const selfieUrl = await this.storageService.getSignedDownloadUrl('kyc', selfieDoc.storageKey, undefined, true);
 
       const idBuffer = await this.downloadBuffer(idUrl);
       const selfieBuffer = await this.downloadBuffer(selfieUrl);

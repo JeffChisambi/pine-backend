@@ -128,6 +128,7 @@ export class StorageService {
     bucket: StorageBucket,
     key: string,
     expiresIn?: number,
+    internal = false,
   ): Promise<string> {
     const bucketName = this.resolveBucketName(bucket);
     const command = new GetObjectCommand({ Bucket: bucketName, Key: key });
@@ -143,7 +144,7 @@ export class StorageService {
     // S3 key or query params (e.g. a key that happens to contain the host).
     const internalEndpoint = this.config.storage.endpoint;
     const publicEndpoint = this.config.storage.publicEndpoint;
-    if (publicEndpoint && internalEndpoint && publicEndpoint !== internalEndpoint) {
+    if (!internal && publicEndpoint && internalEndpoint && publicEndpoint !== internalEndpoint) {
       try {
         const parsedUrl = new URL(url);
         const parsedInternal = new URL(internalEndpoint);
@@ -153,6 +154,7 @@ export class StorageService {
           parsedUrl.protocol = parsedPublic.protocol;
           parsedUrl.hostname = parsedPublic.hostname;
           parsedUrl.port = parsedPublic.port;
+          parsedUrl.pathname = parsedPublic.pathname.replace(/\/$/, '') + parsedUrl.pathname;
           url = parsedUrl.toString();
         }
       } catch {
