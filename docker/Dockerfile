@@ -29,15 +29,17 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -s /bin/sh -m pine
 
-# Install Playwright system dependencies and Chromium browser
-RUN npx playwright install --with-deps chromium && \
-    chown -R pine:nodejs /ms-playwright
-
 COPY --from=build --chown=pine:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=pine:nodejs /app/dist ./dist
 COPY --from=build --chown=pine:nodejs /app/prisma ./prisma
 COPY --from=build --chown=pine:nodejs /app/scripts ./scripts
 COPY --from=build --chown=pine:nodejs /app/package.json ./package.json
+
+# Install Playwright system dependencies and Chromium browser
+# We do this AFTER copying node_modules so that it uses the exact Playwright version from package.json
+RUN npx playwright install --with-deps chromium && \
+    chown -R pine:nodejs /ms-playwright
+
 
 # KYC: Tesseract OCR language data (Tesseract.js reads from CWD)
 COPY --from=build --chown=pine:nodejs /app/eng.traineddata ./eng.traineddata
