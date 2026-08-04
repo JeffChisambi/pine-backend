@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -174,5 +175,95 @@ export class AdminUsersController {
     });
 
     return { message: `Revoked ${sessions.length} sessions`, userId };
+  }
+
+  @Patch(':id/kyc-status')
+  @RequirePermissions(Permission.USERS_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Manually override a user KYC status' })
+  async updateKycStatus(
+    @Param('id') userId: string,
+    @Body() body: { status: string; reason?: string },
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new ResourceNotFoundException('User', userId);
+
+    const validStatuses = ['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'REJECTED'];
+    if (!validStatuses.includes(body.status)) {
+      throw new Error(`Invalid KYC status: ${body.status}`);
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { kycStatus: body.status as any },
+    });
+
+    // Also update the KYC application record if it exists
+    await this.prisma.kYCApplication.updateMany({
+      where: { userId },
+      data: {
+        status: body.status === 'APPROVED' ? 'APPROVED' :
+                body.status === 'REJECTED' ? 'REJECTED' :
+                body.status === 'PENDING' ? 'PENDING' : 'NOT_SUBMITTED',
+        reviewedAt: new Date(),
+        reviewedBy: admin.id,
+      },
+    });
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: `KYC_STATUS_OVERRIDE_${body.status}`,
+      resourceType: 'USER',
+      resourceId: userId,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { status: body.status, reason: body.reason, previousStatus: user.kycStatus },
+    });
+
+    return { message: `KYC status updated to ${body.status}`, userId };
+  }
+
+  @Delete(':id')
+  @RequirePermissions(Permission.USERS_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Permanently delete a user account and all associated data' })
+  @ApiResponse({ status: 200, description: 'User deleted' })
+  async deleteUser(
+    @Param('id') userId: string,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new ResourceNotFoundException('User', userId);
+
+    // Revoke all sessions first
+    const sessions = await this.prisma.session.findMany({ where: { userId } });
+    for (const session of sessions) {
+      await this.sessionService.revokeSession(session.id, userId, 'admin_account_deletion');
+    }
+
+    // Log before deletion (audit record survives)
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'USER_DELETED',
+      resourceType: 'USER',
+      resourceId: userId,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: {
+        deletedEmail: user.email,
+        deletedPhone: user.phone,
+        deletedName: `${user.firstName} ${user.lastName}`,
+      },
+    });
+
+    // Cascade delete (Prisma will handle relations via schema onDelete)
+    await this.prisma.user.delete({ where: { id: userId } });
+
+    return { message: 'User account permanently deleted', userId };
   }
 }

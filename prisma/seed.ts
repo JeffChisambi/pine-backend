@@ -80,44 +80,9 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('🌱 Seeding admin user...');
-  const adminPassword = await argon2.hash('PineAdmin2026!', {
-    type: argon2.argon2id,
-    memoryCost: 19456,
-    timeCost: 2,
-    parallelism: 1,
-  });
+  // Admin user removed — broker account holds all privileges.
 
-  await prisma.user.upsert({
-    where: { phone: '+265888000001' },
-    update: {
-      email: 'admin@pine.mw',
-      firstName: 'Pine',
-      lastName: 'Admin',
-      role: 'SUPER_ADMIN',
-      passwordHash: adminPassword,
-      isActive: true,
-      phoneVerifiedAt: new Date(),
-      emailVerifiedAt: new Date(),
-      kycStatus: 'APPROVED',
-    },
-    create: {
-      phone: '+265888000001',
-      email: 'admin@pine.mw',
-      firstName: 'Pine',
-      lastName: 'Admin',
-      passwordHash: adminPassword,
-      role: 'SUPER_ADMIN',
-      isActive: true,
-      phoneVerifiedAt: new Date(),
-      emailVerifiedAt: new Date(),
-      kycStatus: 'APPROVED',
-    },
-  });
-
-  console.log('  ✓ Admin: admin@pine.mw / PineAdmin2026!');
-
-  console.log('🌱 Seeding broker user...');
+  console.log('🌱 Seeding broker user (SUPER_ADMIN — full privileges)...');
   const brokerPassword = await argon2.hash('PineBroker2026!', {
     type: argon2.argon2id,
     memoryCost: 19456,
@@ -131,7 +96,7 @@ async function main(): Promise<void> {
       email: 'broker@pine.mw',
       firstName: 'Pine',
       lastName: 'Broker',
-      role: 'BROKER',
+      role: 'SUPER_ADMIN',
       passwordHash: brokerPassword,
       isActive: true,
       phoneVerifiedAt: new Date(),
@@ -144,7 +109,7 @@ async function main(): Promise<void> {
       firstName: 'Pine',
       lastName: 'Broker',
       passwordHash: brokerPassword,
-      role: 'BROKER',
+      role: 'SUPER_ADMIN',
       isActive: true,
       phoneVerifiedAt: new Date(),
       emailVerifiedAt: new Date(),
@@ -152,7 +117,7 @@ async function main(): Promise<void> {
     },
   });
 
-  console.log('  ✓ Broker: broker@pine.mw / PineBroker2026!');
+  console.log('  ✓ Broker: broker@pine.mw / PineBroker2026! (SUPER_ADMIN)');
 
   console.log('✅ Seed complete');
 }
