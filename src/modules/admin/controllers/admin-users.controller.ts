@@ -208,7 +208,7 @@ export class AdminUsersController {
                 body.status === 'REJECTED' ? 'REJECTED' :
                 body.status === 'PENDING' ? 'PENDING' : 'NOT_SUBMITTED',
         reviewedAt: new Date(),
-        reviewedBy: admin.id,
+        reviewedById: admin.id,
       },
     });
 
