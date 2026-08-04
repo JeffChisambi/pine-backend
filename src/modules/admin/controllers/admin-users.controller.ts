@@ -201,7 +201,7 @@ export class AdminUsersController {
     });
 
     // Also update the KYC application record if it exists
-    await this.prisma.kYCApplication.updateMany({
+    await this.prisma.kycApplication.updateMany({
       where: { userId },
       data: {
         status: body.status === 'APPROVED' ? 'APPROVED' :
