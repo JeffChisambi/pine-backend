@@ -1239,3 +1239,37 @@ model DailyMetric {
 
   @@map("daily_metrics")
 }
+
+// ============================================================
+// News / Content
+// ============================================================
+
+/// Editorial news articles surfaced in the mobile app's News tab.
+/// Managed from the broker dashboard (admin write) and read by the
+/// mobile app (published only). `body` is an ordered array of plain-text
+/// paragraphs — the mobile UI renders each element as its own <Text>.
+model NewsArticle {
+  id          String   @id @default(uuid()) @db.Uuid
+  category    String   @default("Markets") /// Banking | Markets | Insurance | ...
+  title       String
+  /// Short one-line teaser (optional; not shown on the current mobile cards).
+  summary     String?
+  /// Ordered paragraphs of plain text — rendered one <Text> per element.
+  body        String[]
+  /// Byline / publisher, e.g. "FDH Bank Plc".
+  source      String   @default("")
+  /// Hero image URL (shown on card + article). Null → mobile shows no image.
+  imageUrl    String?
+  featured    Boolean  @default(false)
+  isPublished Boolean  @default(true)
+  /// Drives display ordering + the human "time" string on mobile.
+  publishedAt DateTime @default(now())
+  /// Admin (User) who created it, if known. Nullable — survives user deletion.
+  authorId    String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isPublished, publishedAt])
+  @@index([category])
+  @@map("news_articles")
+}

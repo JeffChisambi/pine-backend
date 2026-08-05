@@ -21,7 +21,7 @@ import { AuditLogService } from '../../audit/services/audit-log.service';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { SessionService } from '../../auth/services/session.service';
 import { ListUsersQueryDto, UpdateUserStatusDto } from '../dto/admin.dto';
-import { ResourceNotFoundException } from '../../../core/exceptions/app.exception';
+import { ResourceNotFoundException, ValidationException } from '../../../core/exceptions/app.exception';
 
 @ApiTags('admin', 'users')
 @ApiBearerAuth()
@@ -265,5 +265,128 @@ export class AdminUsersController {
     await this.prisma.user.delete({ where: { id: userId } });
 
     return { message: 'User account permanently deleted', userId };
+  }
+
+  // ── POST /v1/admin/users/:id/notify ────────────────────────────────────────
+  // Send a direct in-app message/notification to a single user.
+
+  @Post(':id/notify')
+  @RequirePermissions(Permission.USERS_MANAGE)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Send a direct notification/message to a single user' })
+  async notifyUser(
+    @Param('id') userId: string,
+    @Body() body: { title?: string; message: string; channel?: string },
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new ResourceNotFoundException('User', userId);
+    if (!body?.message || !body.message.trim()) {
+      throw new ValidationException('Message body is required');
+    }
+
+    const channel = (body.channel ?? 'IN_APP').toUpperCase();
+    const allowed = ['IN_APP', 'PUSH', 'EMAIL', 'SMS'];
+    const notification = await this.prisma.notification.create({
+      data: {
+        userId,
+        channel: (allowed.includes(channel) ? channel : 'IN_APP') as any,
+        type: 'INFORMATIONAL',
+        priority: 2,
+        category: 'SYSTEM',
+        title: body.title?.trim() || 'Message from Pine',
+        body: body.message.trim(),
+        status: 'QUEUED',
+      },
+    });
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'USER_MESSAGED',
+      resourceType: 'USER',
+      resourceId: userId,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { channel, title: notification.title },
+    });
+
+    return { message: 'Notification queued', notificationId: notification.id };
+  }
+
+  // ── POST /v1/admin/users/:id/devices/:deviceId/revoke ──────────────────────
+  // Sign out one device: revoke its active sessions and mark it revoked.
+
+  @Post(':id/devices/:deviceId/revoke')
+  @RequirePermissions(Permission.USERS_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sign out a single device (revoke its sessions)' })
+  async revokeDevice(
+    @Param('id') userId: string,
+    @Param('deviceId') deviceId: string,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const device = await this.prisma.device.findFirst({ where: { id: deviceId, userId } });
+    if (!device) throw new ResourceNotFoundException('Device', deviceId);
+
+    const sessions = await this.prisma.session.findMany({
+      where: { deviceId, userId, isRevoked: false },
+    });
+    for (const session of sessions) {
+      await this.sessionService.revokeSession(session.id, userId, 'admin_device_signout');
+    }
+    await this.prisma.device.update({
+      where: { id: deviceId },
+      data: { isRevoked: true, revokedAt: new Date() },
+    });
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'USER_DEVICE_REVOKED',
+      resourceType: 'USER',
+      resourceId: userId,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { deviceId, sessionsRevoked: sessions.length },
+    });
+
+    return { message: `Signed out device (${sessions.length} sessions)`, deviceId };
+  }
+
+  // ── POST /v1/admin/users/:id/devices/:deviceId/untrust ─────────────────────
+
+  @Post(':id/devices/:deviceId/untrust')
+  @RequirePermissions(Permission.USERS_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Remove trust from a device' })
+  async untrustDevice(
+    @Param('id') userId: string,
+    @Param('deviceId') deviceId: string,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const device = await this.prisma.device.findFirst({ where: { id: deviceId, userId } });
+    if (!device) throw new ResourceNotFoundException('Device', deviceId);
+
+    await this.prisma.device.update({
+      where: { id: deviceId },
+      data: { trustLevel: 'UNKNOWN', trustScore: 50 },
+    });
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'USER_DEVICE_UNTRUSTED',
+      resourceType: 'USER',
+      resourceId: userId,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { deviceId },
+    });
+
+    return { message: 'Device trust removed', deviceId };
   }
 }

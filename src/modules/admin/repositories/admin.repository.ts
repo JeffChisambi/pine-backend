@@ -204,6 +204,10 @@ export class AdminRepository {
             stock: { select: { symbol: true, name: true } },
           },
         },
+        linkedBanks: {
+          where: { deletedAt: null },
+          orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+        },
         preferences: true,
         mfaConfig: {
           select: {
