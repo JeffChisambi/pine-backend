@@ -55,6 +55,8 @@
     "jsonwebtoken": "^9.0.3",
     "nestjs-pino": "^4.3.1",
     "onnxruntime-node": "^1.20.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.2.108",
     "pg": "^8.13.1",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",

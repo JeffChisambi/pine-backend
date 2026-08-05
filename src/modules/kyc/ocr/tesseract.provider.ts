@@ -143,6 +143,35 @@ export class TesseractProvider
     return result.data.text;
   }
 
+  /**
+   * MRZ-optimised recognition pass. Constrains Tesseract to the ICAO OCR-B
+   * character set (A–Z, 0–9, '<') and single-block segmentation, then
+   * restores the standard parameters. The whitelist eliminates the lowercase
+   * and punctuation confusions that routinely corrupt MRZ '<' fillers.
+   */
+  async extractMrzText(buffer: Buffer): Promise<string> {
+    if (!this.worker || !this.ready) {
+      throw new Error('Tesseract worker not initialized');
+    }
+
+    try {
+      await this.worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+        preserve_interword_spaces: '1',
+      });
+      const result = await this.worker.recognize(buffer);
+      return result.data.text;
+    } finally {
+      // Restore the standard document parameters regardless of outcome
+      await this.worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+        tessedit_char_whitelist: '',
+        preserve_interword_spaces: '1',
+      });
+    }
+  }
+
   async destroy(): Promise<void> {
     if (this.worker) {
       try {

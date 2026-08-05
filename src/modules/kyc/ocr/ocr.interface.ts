@@ -45,6 +45,14 @@ export interface IOcrProvider {
   extractRawText(buffer: Buffer): Promise<string>;
 
   /**
+   * Optional MRZ-optimised pass: restricts the character set to the ICAO
+   * OCR-B alphabet (A-Z, 0-9, '<') and uses block segmentation, which
+   * dramatically improves machine-readable-zone recognition on ID backs.
+   * Falls back to extractRawText when not implemented.
+   */
+  extractMrzText?(buffer: Buffer): Promise<string>;
+
+  /**
    * Returns true if the engine is initialized and ready.
    */
   isReady(): boolean;

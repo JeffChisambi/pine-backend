@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Inject,
@@ -9,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  StreamableFile,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
@@ -31,6 +33,7 @@ import {
 } from '../../kyc/interfaces/kyc-repository.interface';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
+import { CsdFormService } from '../../kyc/services/csd-form.service';
 import { ApproveKycDto } from '../../kyc/dto/approve-kyc.dto';
 import { RejectKycDto } from '../../kyc/dto/reject-kyc.dto';
 import { RequestDocsDto } from '../../kyc/dto/request-docs.dto';
@@ -81,11 +84,27 @@ function extractOcrData(ocrJson: unknown): Record<string, string | null> | null 
   const expiryDate = fieldValue(data.expiryDate);
   const address = fieldValue(data.address);
   const nationality = fieldValue(data.nationality);
+  const gender = fieldValue(data.gender);
 
   // Only return an object if at least one meaningful field has a value.
   if (!fullName && !dateOfBirth && !nationalId && !documentNumber) return null;
 
-  return { fullName, dateOfBirth, nationalId, documentNumber, expiryDate, address, nationality };
+  return { fullName, dateOfBirth, nationalId, documentNumber, expiryDate, address, nationality, gender };
+}
+
+// ── Helper: per-field OCR confidences for the review UI ──────────────────────
+function extractOcrFieldConfidences(ocrJson: unknown): Record<string, number> | null {
+  if (!ocrJson || typeof ocrJson !== 'object') return null;
+  const data = ocrJson as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const key of ['fullName', 'nationalIdNumber', 'dateOfBirth', 'gender', 'documentNumber', 'expiryDate', 'nationality']) {
+    const f = data[key];
+    if (f && typeof f === 'object' && 'confidence' in (f as any)) {
+      const c = (f as any).confidence;
+      if (typeof c === 'number') out[key] = Math.round(c * 100);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 // ── Helper: build a KycApplicationRow from a Prisma + user record ─────────────
@@ -189,6 +208,7 @@ export class AdminKycController {
     private readonly auditLogService: AuditLogService,
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
+    private readonly csdFormService: CsdFormService,
   ) {}
 
   // ── GET /admin/kyc/queue ───────────────────────────────────────────────────
@@ -364,14 +384,87 @@ export class AdminKycController {
 
     // Extract OCR data from the AI pipeline's JSON blob into the flat KycOcrData shape
     const ocrExtractedData = extractOcrData(app.ocrExtractedData);
+    const ocrFieldConfidences = extractOcrFieldConfidences(app.ocrExtractedData);
+
+    // MRZ verification summary (present when the ID back carried a readable MRZ)
+    const extraJson = (app.ocrExtractedData ?? {}) as Record<string, unknown>;
+    const mrzRaw = extraJson.mrz as { found?: boolean; checkDigitScore?: number } | undefined;
+    const mrz = mrzRaw?.found
+      ? { found: true, checkDigitScore: Math.round((mrzRaw.checkDigitScore ?? 0) * 100) }
+      : null;
+
+    // Extracted + formatted residential address (proof-of-residency pipeline)
+    const extractedAddressRaw = extraJson._extractedAddress as
+      | { formatted?: string | null; confidence?: number; sourceLines?: string[] }
+      | undefined;
+    const address = {
+      addressLine1: app.addressLine1 ?? null,
+      addressLine2: app.addressLine2 ?? null,
+      city: app.city ?? null,
+      district: app.district ?? null,
+      formatted:
+        extractedAddressRaw?.formatted ??
+        ([app.addressLine1, app.addressLine2, app.city]
+          .filter(Boolean)
+          .join(', ') || null),
+      confidence:
+        extractedAddressRaw?.confidence != null
+          ? Math.round(extractedAddressRaw.confidence * 100)
+          : null,
+    };
 
     return {
       application: {
         ...applicationRow,
         ocrExtractedData,
+        ocrFieldConfidences,
+        mrz,
+        address,
       },
       documents,
     };
+  }
+
+  // ── GET /admin/kyc/:applicationId/csd-form ────────────────────────────────
+
+  @Get(':applicationId/csd-form')
+  @RequirePermissions(Permission.KYC_REVIEW)
+  @Header('Content-Type', 'application/pdf')
+  @ApiOperation({
+    summary: 'Generate the filled CSD Securities Account Opening form (PDF)',
+    description:
+      'Returns the Reserve Bank of Malawi CSD account-opening form pre-filled ' +
+      'with the applicant\'s verified KYC data, ready for signing and submission.',
+  })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  @ApiResponse({ status: 200, description: 'PDF document.' })
+  @ApiResponse({ status: 404, description: 'Application not found.' })
+  async getCsdForm(
+    @Param('applicationId') applicationId: string,
+    @CurrentUser() admin: AuthenticatedUser,
+  ): Promise<StreamableFile> {
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { id: true },
+    });
+    if (!app) {
+      throw new ResourceNotFoundException('KYC application', applicationId);
+    }
+
+    const pdf = await this.csdFormService.generateForApplication(applicationId);
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'KYC_CSD_FORM_GENERATED',
+      resourceType: 'KYC_APPLICATION',
+      resourceId: applicationId,
+    });
+
+    return new StreamableFile(pdf, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="CSD-Account-Opening-${applicationId.slice(0, 8)}.pdf"`,
+    });
   }
 
   // ── POST /admin/kyc/:applicationId/approve ────────────────────────────────

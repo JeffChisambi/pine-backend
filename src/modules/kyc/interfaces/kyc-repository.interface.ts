@@ -18,7 +18,10 @@ export interface KycApplicationRecord {
   verificationStage: string;
   nationalIdNumber: string | null;
   dateOfBirth: Date | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
   city: string | null;
+  district: string | null;
   ocrExtractedData: unknown;
   facialMatchScore: number | null;
   confidenceScore: number | null;

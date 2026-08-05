@@ -35,6 +35,9 @@ import {
 import { FaceMatchingService } from '../face/face-matching.service';
 import { FraudDetectionService } from '../fraud/fraud-detection.service';
 import { ConfidenceEngine } from '../fraud/confidence-engine';
+import { MrzParser } from '../ocr/mrz.parser';
+import { mergeOcrWithMrz } from '../ocr/ocr-merge.util';
+import { AddressExtractor, type ExtractedAddress } from '../ocr/address-extractor';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { validateUploadedFile } from '../../../infrastructure/storage/file-validation.util';
@@ -76,6 +79,8 @@ const STAGE_ORDER: Record<string, number> = {
 @Injectable()
 export class KycWorkflowService {
   private readonly logger = new Logger(KycWorkflowService.name);
+  private readonly mrzParser = new MrzParser();
+  private readonly addressExtractor = new AddressExtractor();
 
   constructor(
     @Inject(KYC_REPOSITORY)
@@ -430,6 +435,44 @@ export class KycWorkflowService {
           preprocess: true,
         });
 
+        // ── Back of card: machine-readable zone (MRZ) ─────────────────────────
+        // The TD1 MRZ carries every identity field in a fixed OCR-B format with
+        // ICAO check digits — far more reliable than the printed front. Merge
+        // it in with best-field-wins precedence.
+        const idBackDoc = documents.find((d) => d.type === 'NATIONAL_ID_BACK');
+        if (idBackDoc) {
+          try {
+            const backUrl = await this.storageService.getSignedDownloadUrl(
+              'kyc', idBackDoc.storageKey, undefined, true,
+            );
+            const backBuffer = await this.downloadBuffer(backUrl);
+            const enhancedBack = await this.imageProcessor.enhance(backBuffer, {
+              outputFormat: 'png',
+            });
+            const mrzText = this.ocrProvider.extractMrzText
+              ? await this.ocrProvider.extractMrzText(enhancedBack)
+              : await this.ocrProvider.extractRawText(enhancedBack);
+            const mrz = this.mrzParser.parse(mrzText);
+
+            if (mrz.found) {
+              ocrResult = mergeOcrWithMrz(ocrResult, mrz);
+              this.logger.log(
+                { applicationId, checkDigitScore: mrz.checkDigitScore },
+                'MRZ parsed from ID back and merged into OCR result',
+              );
+            } else {
+              // MRZ pass failed — still try the generic parser on the back
+              // text in case the printed fields are on the reverse side.
+              this.logger.debug({ applicationId }, 'No MRZ found on ID back');
+            }
+          } catch (backError) {
+            this.logger.warn(
+              { err: backError, applicationId },
+              'ID back OCR failed — continuing with front-side extraction only',
+            );
+          }
+        }
+
         await this.repository.saveOcrResult({
           kycApplicationId: applicationId,
           documentId: idDoc.id,
@@ -438,15 +481,41 @@ export class KycWorkflowService {
           rawText: ocrResult.rawText,
         });
 
-        if (ocrResult.nationalIdNumber?.value || ocrResult.dateOfBirth?.value) {
-          await this.repository.updateApplicationStatus(applicationId, 'PENDING', {
-            nationalIdNumber: ocrResult.nationalIdNumber?.value ?? null,
-            dateOfBirth: ocrResult.dateOfBirth?.value
-              ? this.parseDate(ocrResult.dateOfBirth.value)
-              : null,
-            ocrExtractedData: ocrResult as unknown,
-            ocrConfidence: ocrResult.overallConfidence,
-          });
+        // Always persist confidence + extracted data — even a low-confidence
+        // extraction must reach the review dashboard instead of showing 0%.
+        await this.repository.updateApplicationStatus(applicationId, 'PENDING', {
+          nationalIdNumber: ocrResult.nationalIdNumber?.value ?? null,
+          dateOfBirth: ocrResult.dateOfBirth?.value
+            ? this.parseDate(ocrResult.dateOfBirth.value)
+            : null,
+          ocrExtractedData: ocrResult as unknown,
+          ocrConfidence: ocrResult.overallConfidence,
+        });
+      }
+
+      // ── Proof of residency: extract + persist the applicant's address ────────
+      const porDoc = documents.find((d) => d.type === 'PROOF_OF_RESIDENCE');
+      if (porDoc && this.ocrProvider.isReady()) {
+        try {
+          const porAddress = await this.extractAddressFromProof(porDoc);
+          if (porAddress?.formatted) {
+            await this.repository.updateApplicationStatus(applicationId, 'PENDING', {
+              addressLine1: porAddress.addressLine1,
+              addressLine2: porAddress.addressLine2,
+              city: porAddress.city,
+              district: porAddress.district,
+              ocrExtractedData: { _extractedAddress: porAddress } as unknown,
+            });
+            this.logger.log(
+              { applicationId, confidence: porAddress.confidence },
+              'Address extracted from proof of residency',
+            );
+          }
+        } catch (porError) {
+          this.logger.warn(
+            { err: porError, applicationId },
+            'Proof-of-residency address extraction failed — continuing',
+          );
         }
       }
 
@@ -672,6 +741,68 @@ export class KycWorkflowService {
       data: { kycStatus: status },
     });
     this.logger.log({ userId, kycStatus: status }, 'User kycStatus updated');
+  }
+
+  /**
+   * OCR (image) or text-extract (PDF) a proof-of-residency document, then run
+   * the heuristic address extractor over the text.
+   */
+  private async extractAddressFromProof(porDoc: {
+    storageKey: string;
+    mimeType: string;
+  }): Promise<ExtractedAddress | null> {
+    const url = await this.storageService.getSignedDownloadUrl(
+      'kyc', porDoc.storageKey, undefined, true,
+    );
+    const buffer = await this.downloadBuffer(url);
+
+    let text = '';
+    if (porDoc.mimeType === 'application/pdf') {
+      text = await this.extractPdfText(buffer);
+    } else {
+      const enhanced = await this.imageProcessor.enhance(buffer, {
+        outputFormat: 'png',
+      });
+      text = await this.ocrProvider.extractRawText(enhanced);
+    }
+
+    if (!text.trim()) return null;
+    return this.addressExtractor.extract(text);
+  }
+
+  /** Extract embedded text from a digitally-generated PDF (no OCR). */
+  private async extractPdfText(buffer: Buffer): Promise<string> {
+    // pdfjs-dist is ESM-only; load lazily so cold paths don't pay the cost.
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const doc = await pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      useSystemFonts: true,
+    }).promise;
+
+    const parts: string[] = [];
+    const pageCount = Math.min(doc.numPages, 5); // bills are 1–2 pages
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      // Group items into lines by their y-coordinate so the address block
+      // survives as consecutive lines for the extractor.
+      const rows = new Map<number, Array<{ x: number; str: string }>>();
+      for (const item of content.items as Array<{ str: string; transform: number[] }>) {
+        if (!item.str?.trim()) continue;
+        const y = Math.round(item.transform[5]);
+        const x = item.transform[4];
+        const bucket = [...rows.keys()].find((k) => Math.abs(k - y) <= 2) ?? y;
+        if (!rows.has(bucket)) rows.set(bucket, []);
+        rows.get(bucket)!.push({ x, str: item.str });
+      }
+      const lines = [...rows.entries()]
+        .sort((a, b) => b[0] - a[0]) // PDF y-axis is bottom-up
+        .map(([, items]) =>
+          items.sort((a, b) => a.x - b.x).map((i) => i.str).join(' '),
+        );
+      parts.push(lines.join('\n'));
+    }
+    return parts.join('\n');
   }
 
   private async downloadBuffer(url: string): Promise<Buffer> {

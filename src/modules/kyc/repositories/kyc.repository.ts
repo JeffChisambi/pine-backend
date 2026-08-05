@@ -115,6 +115,11 @@ export class KycRepository implements IKycRepository {
     if (data?.rejectionReason !== undefined) {
       updateData.rejectionReason = data.rejectionReason;
     }
+    // Address columns — populated by the proof-of-residency extraction stage
+    if (data?.addressLine1 !== undefined) updateData.addressLine1 = data.addressLine1;
+    if (data?.addressLine2 !== undefined) updateData.addressLine2 = data.addressLine2;
+    if (data?.city !== undefined) updateData.city = data.city;
+    if (data?.district !== undefined) updateData.district = data.district;
 
     // Always read → merge → write to preserve existing JSON keys
     if (data?.ocrExtractedData !== undefined || data?.confidenceScore !== undefined) {
@@ -626,7 +631,10 @@ export class KycRepository implements IKycRepository {
       verificationStage: (extraData._stage as string) ?? 'CREATED',
       nationalIdNumber: app.nationalIdNumber,
       dateOfBirth: app.dateOfBirth,
+      addressLine1: app.addressLine1 ?? null,
+      addressLine2: app.addressLine2 ?? null,
       city: app.city ?? null,
+      district: app.district ?? null,
       ocrExtractedData: app.ocrExtractedData,
       facialMatchScore: app.facialMatchScore ? Number(app.facialMatchScore) : null,
       confidenceScore: (extraData._confidenceScore as number) ?? null,

@@ -20,6 +20,18 @@ export interface OcrExtractionResult {
   address: OcrFieldResult | null;
   documentNumber: OcrFieldResult | null;
   expiryDate: OcrFieldResult | null;
+  /** ISO 3166-1 alpha-3 nationality (e.g. MWI) — from the MRZ when available. */
+  nationality?: OcrFieldResult | null;
+  /**
+   * Machine-readable-zone extraction summary (back of the ID card).
+   * checkDigitScore is the fraction of ICAO check digits that validated —
+   * 1.0 means every numeric field is cryptographically-style verified.
+   */
+  mrz?: {
+    found: boolean;
+    checkDigitScore: number;
+    rawLines: string[] | null;
+  } | null;
   /** Overall OCR confidence (average of field confidences) */
   overallConfidence: number;
   /** Raw full-text output from OCR engine */

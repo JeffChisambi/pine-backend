@@ -10,19 +10,19 @@ import sharp from 'sharp';
 import type { IFaceRecognitionProvider } from './face-recognition.interface';
 import type { FaceDetectionResult } from '../domain/verification-result';
 
-interface ModelConfig {
-  detectionModel: string;
-  recognitionModel: string;
-  checksums: Record<string, string>;
-}
-
 const DEFAULT_MODEL_DIR = process.env.KYC_MODEL_DIR ?? './models/insightface';
 
-const MODEL_CONFIG: ModelConfig = {
-  detectionModel: 'det_10g.onnx',
-  recognitionModel: 'w600k_r50.onnx',
-  checksums: {},
-};
+/**
+ * Known InsightFace packs, in preference order. buffalo_l (det_10g + w600k_r50)
+ * is the most accurate; buffalo_s (det_500m + w600k_mbf) is ~11× smaller with
+ * the same SCRFD/ArcFace architectures and 512-dim embeddings — same code path.
+ * Download either with: node scripts/download-models.mjs [--pack buffalo_l]
+ * Env overrides: KYC_DET_MODEL / KYC_REC_MODEL (file names inside KYC_MODEL_DIR).
+ */
+const MODEL_CANDIDATES: Array<{ det: string; rec: string; pack: string }> = [
+  { det: 'det_10g.onnx', rec: 'w600k_r50.onnx', pack: 'buffalo_l' },
+  { det: 'det_500m.onnx', rec: 'w600k_mbf.onnx', pack: 'buffalo_s' },
+];
 
 /**
  * Size used for both the detection preprocessing and the crop source buffer.
@@ -112,21 +112,42 @@ export class InsightFaceProvider
         this.logger.error(
           `Model directory ${this.modelDir} not found. ` +
           `Face recognition unavailable until models are installed. ` +
-          `Place det_10g.onnx and w600k_r50.onnx in ${this.modelDir}.`,
+          `Run: node scripts/download-models.mjs`,
         );
         return;
       }
 
-      const detPath = path.join(this.modelDir, MODEL_CONFIG.detectionModel);
-      const recPath = path.join(this.modelDir, MODEL_CONFIG.recognitionModel);
+      // Resolve model files: explicit env override first, then known packs
+      // in preference order (buffalo_l, then buffalo_s).
+      let detPath: string | null = null;
+      let recPath: string | null = null;
+      let packName = 'custom';
 
-      if (!fs.existsSync(detPath) || !fs.existsSync(recPath)) {
+      if (process.env.KYC_DET_MODEL && process.env.KYC_REC_MODEL) {
+        detPath = path.join(this.modelDir, process.env.KYC_DET_MODEL);
+        recPath = path.join(this.modelDir, process.env.KYC_REC_MODEL);
+      } else {
+        for (const candidate of MODEL_CANDIDATES) {
+          const det = path.join(this.modelDir, candidate.det);
+          const rec = path.join(this.modelDir, candidate.rec);
+          if (fs.existsSync(det) && fs.existsSync(rec)) {
+            detPath = det;
+            recPath = rec;
+            packName = candidate.pack;
+            break;
+          }
+        }
+      }
+
+      if (!detPath || !recPath || !fs.existsSync(detPath) || !fs.existsSync(recPath)) {
         this.logger.warn(
-          { detPath, recPath },
-          'One or more InsightFace model files are missing. Face recognition unavailable.',
+          { modelDir: this.modelDir },
+          'No complete InsightFace model pack found (need detection + recognition ONNX). ' +
+          'Run: node scripts/download-models.mjs — face recognition unavailable.',
         );
         return;
       }
+      this.logger.log({ pack: packName, detPath, recPath }, 'InsightFace model pack resolved');
 
       await this.verifyChecksums();
 
@@ -405,54 +426,60 @@ export class InsightFaceProvider
       }
     }
 
-    // ── Strategy B: match score tensors [N] with bbox tensors [N×4] ──
-    const scoreTensors: Float32Array[] = [];
-    const bboxTensors: Float32Array[] = [];
+    // ── Strategy B: raw SCRFD per-stride outputs (buffalo_l / buffalo_s) ──
+    //
+    // SCRFD raw exports emit, per FPN stride (8, 16, 32), a score tensor of
+    // [numAnchors] and a bbox tensor of [numAnchors × 4] where the 4 values
+    // are DISTANCES (left, top, right, bottom) from the anchor centre in
+    // stride units — NOT absolute corners. Decode:
+    //   cx = (i % (2·fw)) >> 1 · stride ; cy = floor(i / (2·fw)) · stride
+    //   x1 = cx − l·s ; y1 = cy − t·s ; x2 = cx + r·s ; y2 = cy + b·s
+    // With a 640×640 input the anchor counts are fixed (2 anchors/cell):
+    //   stride 8 → 80×80×2 = 12800 ; stride 16 → 3200 ; stride 32 → 800.
+    // We key tensors on these counts, which also disambiguates score vs bbox
+    // vs keypoint (kps = numAnchors × 10) tensors regardless of export order.
+    const STRIDE_BY_COUNT: Record<number, number> = {};
+    for (const stride of [8, 16, 32]) {
+      const cells = Math.ceil(imgWidth / stride) * Math.ceil(imgHeight / stride);
+      STRIDE_BY_COUNT[cells * 2] = stride;
+    }
+
+    const scoresByStride = new Map<number, Float32Array>();
+    const bboxByStride = new Map<number, Float32Array>();
 
     for (const name of outputNames) {
       const tensor = result[name];
-      if (!tensor?.data || !tensor?.dims) continue;
-
+      if (!tensor?.data) continue;
       const data = tensor.data as Float32Array;
-      const dims = tensor.dims as number[];
-      const totalElements = data.length;
+      const len = data.length;
 
-      if (totalElements === 0) continue;
-
-      // Determine if this looks like a score tensor (last dim = 1 or 2)
-      // or a bbox tensor (last dim = 4 or total divisible by 4)
-      const lastDim = dims[dims.length - 1];
-
-      if (lastDim === 1 || (dims.length >= 2 && dims[dims.length - 1] === 1)) {
-        scoreTensors.push(data);
-      } else if (lastDim === 4 || (totalElements % 4 === 0 && totalElements % 5 !== 0)) {
-        bboxTensors.push(data);
-      } else if (lastDim === 2) {
-        // Binary classification logits — take the "face" column
-        const scores = new Float32Array(totalElements / 2);
-        for (let i = 0; i < scores.length; i++) {
-          // Softmax approximation: face score is second logit
-          const a = Math.exp(data[i * 2]);
-          const b = Math.exp(data[i * 2 + 1]);
-          scores[i] = b / (a + b);
-        }
-        scoreTensors.push(scores);
+      if (STRIDE_BY_COUNT[len] !== undefined) {
+        // [numAnchors] → per-anchor face score
+        scoresByStride.set(STRIDE_BY_COUNT[len], data);
+      } else if (STRIDE_BY_COUNT[len / 4] !== undefined) {
+        // [numAnchors × 4] → per-anchor bbox distances
+        bboxByStride.set(STRIDE_BY_COUNT[len / 4], data);
       }
+      // [numAnchors × 10] keypoints are ignored.
     }
 
-    for (const scores of scoreTensors) {
-      const numAnchors = scores.length;
-      const bbox = bboxTensors.find((b) => b.length === numAnchors * 4);
+    for (const [stride, scores] of scoresByStride) {
+      const bbox = bboxByStride.get(stride);
       if (!bbox) continue;
 
-      for (let i = 0; i < numAnchors; i++) {
+      const fw = Math.ceil(imgWidth / stride);
+      for (let i = 0; i < scores.length; i++) {
         const score = scores[i];
         if (score <= SCORE_THRESHOLD) continue;
 
-        const x1 = Math.max(0, bbox[i * 4]);
-        const y1 = Math.max(0, bbox[i * 4 + 1]);
-        const x2 = Math.min(imgWidth, bbox[i * 4 + 2]);
-        const y2 = Math.min(imgHeight, bbox[i * 4 + 3]);
+        const cell = i >> 1; // 2 anchors per cell share a centre
+        const cx = (cell % fw) * stride;
+        const cy = Math.floor(cell / fw) * stride;
+
+        const x1 = Math.max(0, cx - bbox[i * 4] * stride);
+        const y1 = Math.max(0, cy - bbox[i * 4 + 1] * stride);
+        const x2 = Math.min(imgWidth, cx + bbox[i * 4 + 2] * stride);
+        const y2 = Math.min(imgHeight, cy + bbox[i * 4 + 3] * stride);
         if (x2 > x1 && y2 > y1) {
           faces.push({ box: [x1, y1, x2 - x1, y2 - y1], score });
         }

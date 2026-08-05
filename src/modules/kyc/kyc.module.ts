@@ -17,6 +17,7 @@ import { KycController } from './controllers/kyc.controller';
 
 // Services
 import { KycWorkflowService } from './services/kyc-workflow.service';
+import { CsdFormService } from './services/csd-form.service';
 
 // Queue Processor
 import { KycProcessor } from './processors/kyc.processor';
@@ -91,9 +92,12 @@ import { KycRepository } from './repositories/kyc.repository';
     // ── Workflow Orchestrator ────────────────────────────────────
     KycWorkflowService,
 
+    // ── CSD Account Opening form generator ──────────────────────
+    CsdFormService,
+
     // ── BullMQ Processor (H-3 fix: async pipeline) ──────────────
     KycProcessor,
   ],
-  exports: [KycWorkflowService, KYC_REPOSITORY],
+  exports: [KycWorkflowService, CsdFormService, KYC_REPOSITORY],
 })
 export class KycModule {}
