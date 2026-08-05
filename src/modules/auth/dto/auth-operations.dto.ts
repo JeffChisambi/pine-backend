@@ -77,14 +77,26 @@ export class ChangePinDto {
   newPin: string;
 }
 
+/**
+ * OTP destinations can be a phone number OR an email address.
+ * Only phone-shaped values go through the Malawi phone normaliser —
+ * emails (anything containing '@') are lowercased and trimmed instead.
+ */
+const normalizeOtpDestination = (value: unknown): unknown =>
+  typeof value === 'string'
+    ? value.includes('@')
+      ? value.trim().toLowerCase()
+      : normalizeMalawiPhoneNumber(value)
+    : value;
+
 export class SendOtpDto {
-  @ApiProperty({ example: '+265991234567', description: 'Phone number to send OTP to' })
-  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
+  @ApiProperty({ example: '+265991234567', description: 'Phone number or email address to send OTP to' })
+  @Transform(({ value }) => normalizeOtpDestination(value))
   @IsString()
   @IsNotEmpty()
   destination: string;
 
-  @ApiProperty({ enum: ['phone_verification', 'password_reset', 'transaction'] })
+  @ApiProperty({ enum: ['phone_verification', 'email_verification', 'password_reset', 'transaction'] })
   @IsString()
   @IsNotEmpty()
   purpose: string;
@@ -92,7 +104,7 @@ export class SendOtpDto {
 
 export class VerifyOtpDto {
   @ApiProperty({ example: '+265991234567' })
-  @Transform(({ value }) => (typeof value === 'string' ? normalizeMalawiPhoneNumber(value) : value))
+  @Transform(({ value }) => normalizeOtpDestination(value))
   @IsString()
   @IsNotEmpty()
   destination: string;
@@ -102,7 +114,7 @@ export class VerifyOtpDto {
   @IsNotEmpty()
   code: string;
 
-  @ApiProperty({ enum: ['phone_verification', 'password_reset', 'transaction'] })
+  @ApiProperty({ enum: ['phone_verification', 'email_verification', 'password_reset', 'transaction'] })
   @IsString()
   @IsNotEmpty()
   purpose: string;

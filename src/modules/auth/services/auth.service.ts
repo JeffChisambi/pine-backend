@@ -10,6 +10,7 @@ import type { RegisterDto } from '../dto/register.dto';
 import type { LoginDto } from '../dto/login.dto';
 import type { AuthResponseDto, AuthUserDto } from '../dto/auth-response.dto';
 import { ValidationException } from '../../../core/exceptions/app.exception';
+import { MailService } from '../../../infrastructure/mail/mail.service';
 
 /**
  * Auth orchestrator — coordinates identity, session, token,
@@ -40,6 +41,7 @@ export class AuthService {
     private readonly devices: DeviceService,
     private readonly pins: PinService,
     private readonly events: EventEmitter2,
+    private readonly mail: MailService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────
@@ -400,7 +402,13 @@ export class AuthService {
     destination: string,
     purpose: string,
   ): Promise<{ message: string; expiresInSeconds: number }> {
-    const { expiresInSeconds } = await this.otp.generate(destination, purpose);
+    const { code, expiresInSeconds } = await this.otp.generate(destination, purpose);
+
+    // Dispatch the code over the destination's channel. Email is delivered
+    // via SMTP; SMS relies on the dev log until an SMS provider is wired.
+    if (destination.includes('@')) {
+      await this.mail.sendVerificationCode(destination, code);
+    }
 
     this.events.emit('auth.otp.sent', { destination, purpose });
     return { message: 'OTP sent', expiresInSeconds };
@@ -412,6 +420,14 @@ export class AuthService {
     code: string,
   ): Promise<{ verified: boolean }> {
     await this.otp.verify(destination, purpose, code);
+
+    // A successfully verified OTP is proof of ownership — stamp the matching
+    // user record so downstream checks (KYC review, notifications) see it.
+    if (purpose === 'email_verification' && destination.includes('@')) {
+      await this.identity.markEmailVerified(destination);
+    } else if (purpose === 'phone_verification' && !destination.includes('@')) {
+      await this.identity.markPhoneVerified(destination);
+    }
 
     this.events.emit('auth.otp.verified', { destination, purpose });
     return { verified: true };

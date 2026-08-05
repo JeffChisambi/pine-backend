@@ -216,6 +216,34 @@ export class IdentityService {
   }
 
   /**
+   * Stamp a user's phone as verified, looked up by the (normalised)
+   * phone number that just passed OTP verification. No-op if already
+   * verified or no user matches (pre-registration OTP flows).
+   */
+  async markPhoneVerified(phone: string): Promise<void> {
+    await this.prisma.user.updateMany({
+      where: { phone, phoneVerifiedAt: null },
+      data: { phoneVerifiedAt: new Date() },
+    });
+  }
+
+  /**
+   * Stamp a user's email as verified, looked up by the email address
+   * that just passed OTP verification.
+   */
+  async markEmailVerified(email: string): Promise<void> {
+    await this.prisma.user.updateMany({
+      // Case-insensitive: the OTP destination is lowercased at the DTO layer,
+      // but historical accounts may have stored mixed-case emails.
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+        emailVerifiedAt: null,
+      },
+      data: { emailVerifiedAt: new Date() },
+    });
+  }
+
+  /**
    * Change password. Validates the old password first, checks
    * that the new password hasn't been used recently, then updates.
    */

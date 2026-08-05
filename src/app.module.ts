@@ -11,6 +11,7 @@ import { ResponseEnvelopeInterceptor } from './core/interceptors/response-envelo
 import { ThrottlerBehindProxyGuard } from './core/guards/throttler-behind-proxy.guard';
 import { DatabaseModule } from './infrastructure/database/database.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
+import { MailModule } from './infrastructure/mail/mail.module';
 import { LoggerModule } from './infrastructure/logger/logger.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { StorageModule } from './infrastructure/storage/storage.module';
@@ -39,6 +40,7 @@ import { TreasuryModule } from './modules/treasury/treasury.module';
     LoggerModule,
     DatabaseModule,
     RedisModule,
+    MailModule,
     QueueModule,
     StorageModule,
     HealthModule,
