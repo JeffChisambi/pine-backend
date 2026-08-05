@@ -15,6 +15,20 @@ export class TradingRepository {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Read the user's CURRENT KYC status straight from the database.
+   * The JWT carries a `kyc` claim, but it is a snapshot from login time —
+   * a user approved mid-session would still hold a stale "not approved"
+   * token, so trade gating must read the live value here.
+   */
+  async getCurrentKycStatus(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { kycStatus: true },
+    });
+    return user?.kycStatus ?? null;
+  }
+
   // ── Orders ──────────────────────────────────────────────────
 
   async createOrder(data: {

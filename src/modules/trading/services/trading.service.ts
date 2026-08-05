@@ -89,6 +89,11 @@ export class TradingService {
   ) {
     const startTime = Date.now();
 
+    // The JWT's kyc claim is a login-time snapshot; a user approved mid-session
+    // would still carry a stale "not approved" token. Read the LIVE status so
+    // verified users can trade without having to log out and back in.
+    const liveKycStatus = (await this.repo.getCurrentKycStatus(userId)) ?? userKycStatus;
+
     // ── Step 1: Create draft order ──────────────────────────
     this.logger.log(
       { userId, symbol: dto.stockSymbol, side: dto.side },
@@ -133,7 +138,7 @@ export class TradingService {
         type: dto.orderType,
         quantity: new Decimal(dto.quantity),
         limitPrice: dto.limitPrice ? new Decimal(dto.limitPrice) : null,
-        userKycStatus,
+        userKycStatus: liveKycStatus,
       });
 
       // Mark validated
