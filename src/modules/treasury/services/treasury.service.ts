@@ -135,17 +135,117 @@ export class TreasuryService {
     return { earnings, maturityValue, maturityDate };
   }
 
+  /**
+   * Mobile-facing product shape — matches the app's TBillOption so the
+   * treasury screens render DB products identically to the old hardcoded data.
+   * Dates are pre-formatted display strings (e.g. "28 Jul 2026").
+   */
   private formatProduct(p: any) {
+    const fmt = (d: Date | null) =>
+      d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
+    const auction = fmt(p.auctionDate);
     return {
       id: p.id,
       label: p.label,
+      // mobile field names
+      duration: p.tenorDays,
+      yieldPct: p.yieldPercent.toNumber(),
+      minInvestment: p.minAmount.toNumber(),
+      maxInvestment: p.maxAmount?.toNumber() ?? null,
+      riskLevel: p.riskLevel ?? 'Low',
+      nextAuction: auction,
+      auctionDate: auction,
+      issueDate: fmt(p.issueDate),
+      maturityDate: fmt(p.maturityDate),
+      status: p.status ?? 'open',
+      currency: p.currency,
+      // canonical names kept for the invest flow / admin
       tenorDays: p.tenorDays,
       yieldPercent: p.yieldPercent.toNumber(),
       minAmount: p.minAmount.toNumber(),
       maxAmount: p.maxAmount?.toNumber() ?? null,
-      currency: p.currency,
       isActive: p.isActive,
     };
+  }
+
+  // ── Admin CRUD (dashboard-managed products) ──────────────────
+
+  async listAllProducts() {
+    const products = await this.prisma.treasuryProduct.findMany({
+      orderBy: [{ isActive: 'desc' }, { tenorDays: 'asc' }],
+    });
+    return products.map((p) => this.formatProduct(p));
+  }
+
+  async createProduct(data: {
+    label: string; tenorDays: number; yieldPercent: number;
+    minAmount: number; maxAmount?: number | null; riskLevel?: string;
+    auctionDate?: string | null; issueDate?: string | null; maturityDate?: string | null;
+    status?: string; isActive?: boolean; currency?: string;
+  }) {
+    const p = await this.prisma.treasuryProduct.create({
+      data: {
+        label: data.label,
+        tenorDays: data.tenorDays,
+        yieldPercent: new Decimal(data.yieldPercent),
+        minAmount: new Decimal(data.minAmount),
+        maxAmount: data.maxAmount != null ? new Decimal(data.maxAmount) : null,
+        riskLevel: data.riskLevel ?? 'Low',
+        auctionDate: data.auctionDate ? new Date(data.auctionDate) : null,
+        issueDate: data.issueDate ? new Date(data.issueDate) : null,
+        maturityDate: data.maturityDate ? new Date(data.maturityDate) : null,
+        status: data.status ?? 'open',
+        isActive: data.isActive ?? true,
+        currency: data.currency ?? 'MWK',
+      },
+    });
+    return this.formatProduct(p);
+  }
+
+  async updateProduct(id: string, data: Record<string, any>) {
+    const existing = await this.prisma.treasuryProduct.findUnique({ where: { id } });
+    if (!existing) throw new Error('Treasury product not found');
+    const patch: Record<string, any> = {};
+    if (data.label !== undefined) patch.label = data.label;
+    if (data.tenorDays !== undefined) patch.tenorDays = data.tenorDays;
+    if (data.yieldPercent !== undefined) patch.yieldPercent = new Decimal(data.yieldPercent);
+    if (data.minAmount !== undefined) patch.minAmount = new Decimal(data.minAmount);
+    if (data.maxAmount !== undefined) patch.maxAmount = data.maxAmount != null ? new Decimal(data.maxAmount) : null;
+    if (data.riskLevel !== undefined) patch.riskLevel = data.riskLevel;
+    if (data.auctionDate !== undefined) patch.auctionDate = data.auctionDate ? new Date(data.auctionDate) : null;
+    if (data.issueDate !== undefined) patch.issueDate = data.issueDate ? new Date(data.issueDate) : null;
+    if (data.maturityDate !== undefined) patch.maturityDate = data.maturityDate ? new Date(data.maturityDate) : null;
+    if (data.status !== undefined) patch.status = data.status;
+    if (data.isActive !== undefined) patch.isActive = data.isActive;
+    if (data.currency !== undefined) patch.currency = data.currency;
+    const p = await this.prisma.treasuryProduct.update({ where: { id }, data: patch });
+    return this.formatProduct(p);
+  }
+
+  async deleteProduct(id: string) {
+    const invCount = await this.prisma.treasuryInvestment.count({ where: { productId: id } });
+    if (invCount > 0) {
+      // Preserve investment history — soft-disable instead of hard delete.
+      await this.prisma.treasuryProduct.update({ where: { id }, data: { isActive: false, status: 'closed' } });
+      return { message: 'Product has investments — archived (set inactive) instead of deleted', id, archived: true };
+    }
+    await this.prisma.treasuryProduct.delete({ where: { id } });
+    return { message: 'Treasury product deleted', id, archived: false };
+  }
+
+  /** All investments across users — for the dashboard "treasury orders" view. */
+  async listAllInvestments() {
+    const investments = await this.prisma.treasuryInvestment.findMany({
+      include: { product: true, user: { select: { id: true, firstName: true, lastName: true, phone: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    return investments.map((i) => ({
+      ...this.formatInvestment(i),
+      user: i.user
+        ? { id: i.user.id, name: `${i.user.firstName} ${i.user.lastName}`.trim(), phone: i.user.phone }
+        : null,
+    }));
   }
 
   private formatInvestment(i: any) {

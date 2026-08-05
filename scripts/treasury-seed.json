@@ -1,0 +1,5 @@
+[
+  { "label": "91-Day Treasury Bill",  "tenorDays": 91,  "yieldPercent": 24.5, "minAmount": 100000, "riskLevel": "Very Low", "auctionDate": "2026-07-28", "issueDate": "2026-07-30", "maturityDate": "2026-10-29", "status": "open" },
+  { "label": "182-Day Treasury Bill", "tenorDays": 182, "yieldPercent": 26.0, "minAmount": 100000, "riskLevel": "Very Low", "auctionDate": "2026-07-28", "issueDate": "2026-07-30", "maturityDate": "2027-01-28", "status": "closing_soon" },
+  { "label": "364-Day Treasury Bill", "tenorDays": 364, "yieldPercent": 28.5, "minAmount": 100000, "riskLevel": "Low",      "auctionDate": "2026-07-28", "issueDate": "2026-07-30", "maturityDate": "2027-07-29", "status": "open" }
+]

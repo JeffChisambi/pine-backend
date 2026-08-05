@@ -204,15 +204,28 @@ export class KycReconciliationService {
     overrides: Record<string, string> = {},
   ): CsdFieldValues {
     const r = this.reconcile(input);
-    const nationality = r.nationality.value;
+
+    // Investor type + nationality are derived from the PHONE the user
+    // registered with, not from (imperfect) OCR: a Malawi (+265) number means
+    // the applicant is, by definition, a LOCAL investor — no document reading
+    // required. We only fall back to OCR nationality for non-Malawi numbers.
+    const isMalawiPhone = (input.user.phone ?? '').replace(/[\s-]/g, '').startsWith('+265');
+    const ocrNationality = r.nationality.value;
+    const nationality = isMalawiPhone
+      ? 'MALAWIAN'
+      : (ocrNationality ?? '');
+    const investorType = isMalawiPhone
+      ? 'LOCAL'
+      : (ocrNationality && ocrNationality !== 'MWI' ? 'FOREIGN' : 'LOCAL');
+
     const base: CsdFieldValues = {
       fullName: (r.fullName.value ?? '').toUpperCase(),
       gender: (r.gender.value as 'M' | 'F' | '') ?? '',
       idType: 'NATIONAL ID',
       idNumber: (r.nationalId.value ?? '').toUpperCase(),
       dateOfBirth: r.dateOfBirth.value ?? '',
-      nationality: (nationality ?? '').toUpperCase(),
-      investorType: nationality && nationality !== 'MWI' ? 'FOREIGN' : 'LOCAL',
+      nationality: nationality.toUpperCase(),
+      investorType,
       physicalAddress: (r.address.formatted ?? '').toUpperCase(),
       postalAddress: this.postalFrom(r.address.formatted),
       telephone: r.phone.value ?? '',

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
+import { AuditModule } from '../audit/audit.module';
 import { TreasuryController } from './controllers/treasury.controller';
+import { AdminTreasuryController } from './controllers/admin-treasury.controller';
 import { TreasuryService } from './services/treasury.service';
 
 /**
@@ -13,8 +15,8 @@ import { TreasuryService } from './services/treasury.service';
  *   GET  /v1/treasury/investments/:id  → single investment status
  */
 @Module({
-  imports: [DatabaseModule],
-  controllers: [TreasuryController],
+  imports: [DatabaseModule, AuditModule],
+  controllers: [TreasuryController, AdminTreasuryController],
   providers: [TreasuryService],
   exports: [TreasuryService],
 })

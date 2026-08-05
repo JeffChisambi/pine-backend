@@ -46,7 +46,7 @@ export const redisConfig = registerAs('redis', () => ({
 
 export const jwtConfig = registerAs('jwt', () => ({
   accessSecret: process.env.JWT_ACCESS_SECRET,
-  accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
+  accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '45m',
   refreshSecret: process.env.JWT_REFRESH_SECRET,
   refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
   issuer: process.env.JWT_ISSUER ?? 'pine.mw',

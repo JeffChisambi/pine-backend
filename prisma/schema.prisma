@@ -1188,6 +1188,14 @@ model TreasuryProduct {
   minAmount    Decimal  @db.Decimal(18, 4)
   maxAmount    Decimal? @db.Decimal(18, 4)
   currency     String   @default("MWK")
+  /// 'Very Low' | 'Low' — displayed on the mobile T-bill card.
+  riskLevel    String   @default("Low")
+  /// Auction / issue / maturity dates surfaced in the mobile detail screen.
+  auctionDate  DateTime? @db.Date
+  issueDate    DateTime? @db.Date
+  maturityDate DateTime? @db.Date
+  /// 'open' | 'closing_soon' | 'closed' — drives the mobile status badge.
+  status       String   @default("open")
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
