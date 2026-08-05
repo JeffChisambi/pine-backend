@@ -33,18 +33,21 @@ export class AdminNotificationsController {
   @ApiOperation({ summary: 'List all notifications with filters' })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'channel', required: false, type: String })
+  @ApiQuery({ name: 'category', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Paginated notification list' })
   async listNotifications(
     @Query('status') status?: string,
     @Query('channel') channel?: string,
+    @Query('category') category?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     return this.adminRepo.listNotifications({
       status,
       channel,
+      category,
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 50,
     });
@@ -82,23 +85,45 @@ export class AdminNotificationsController {
       select: { id: true },
     });
 
-    // Create notifications in batch
     const channel = (dto.channel ?? 'IN_APP') as 'PUSH' | 'EMAIL' | 'SMS' | 'IN_APP';
-    const notifications = users.map((u) => ({
+    // Broker-authored broadcasts default to ANNOUNCEMENT so the dashboard can
+    // distinguish them from platform-generated SYSTEM notifications.
+    const category = dto.category ?? 'ANNOUNCEMENT';
+
+    // ALWAYS create the IN_APP inbox row — the mobile app's notification list
+    // reads channel IN_APP only, so PUSH/EMAIL/SMS-channel broadcasts written
+    // without one were invisible in the app (root cause of "dashboard
+    // notifications never reach the mobile app"). The chosen channel is
+    // recorded as an additional delivery row when it isn't IN_APP.
+    const inAppRows = users.map((u) => ({
       userId: u.id,
-      channel,
+      channel: 'IN_APP' as const,
       title: dto.title,
       body: dto.body,
       type: 'INFORMATIONAL' as const,
       priority: 2,
-      category: 'SYSTEM' as const,
-      status: 'QUEUED' as const,
+      category,
+      status: 'SENT' as const,
+      sentAt: new Date(),
     }));
 
-    // Batch insert (Prisma createMany)
-    const result = await this.prisma.notification.createMany({
-      data: notifications,
-    });
+    const result = await this.prisma.notification.createMany({ data: inAppRows });
+
+    if (channel !== 'IN_APP') {
+      // Secondary delivery-channel rows (push/email/sms pipelines pick these up)
+      await this.prisma.notification.createMany({
+        data: users.map((u) => ({
+          userId: u.id,
+          channel,
+          title: dto.title,
+          body: dto.body,
+          type: 'INFORMATIONAL' as const,
+          priority: 2,
+          category,
+          status: 'QUEUED' as const,
+        })),
+      });
+    }
 
     await this.auditLogService.log({
       actorId: admin.id,
@@ -110,6 +135,7 @@ export class AdminNotificationsController {
       metadata: {
         title: dto.title,
         channel,
+        category,
         targetRole: dto.targetRole ?? 'ALL',
         recipientCount: result.count,
       },

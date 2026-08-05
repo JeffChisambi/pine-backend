@@ -241,4 +241,56 @@ export class PortfolioRepository {
       },
     });
   }
+
+  // ── Dividends ───────────────────────────────────────────────
+
+  /**
+   * Total dividends the user has received (credited or reinvested), plus the
+   * most recent dividend transactions for display.
+   */
+  async getDividendsSummary(userId: string, recentLimit = 10) {
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!wallet) return { totalDividends: 0, count: 0, recent: [] };
+
+    const where = {
+      walletId: wallet.id,
+      type: { in: ['DIVIDEND_CREDIT', 'DIVIDEND_REINVESTMENT'] as any },
+      status: 'COMPLETED' as any,
+    };
+
+    const [agg, recent] = await Promise.all([
+      this.prisma.transaction.aggregate({
+        where,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.transaction.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: recentLimit,
+        select: {
+          id: true,
+          type: true,
+          amount: true,
+          description: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    return {
+      totalDividends: agg._sum.amount?.toNumber() ?? 0,
+      count: agg._count,
+      recent: recent.map((t) => ({
+        id: t.id,
+        type: t.type,
+        amount: t.amount.toNumber(),
+        description: t.description,
+        createdAt: t.createdAt,
+      })),
+    };
+  }
 }

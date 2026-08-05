@@ -4,6 +4,7 @@ import { ConfigModule } from '../../config/config.module';
 import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
 import { KycModule } from '../kyc/kyc.module';
+import { TradingModule } from '../trading/trading.module';
 
 
 // Repository
@@ -54,6 +55,7 @@ import { AdminNotificationsController } from './controllers/admin-notifications.
     AuthModule,
     AuditModule,
     KycModule,
+    TradingModule,
   ],
   controllers: [
     AdminAuthController,

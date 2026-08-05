@@ -233,6 +233,7 @@ export class AdminRepository {
 
   async listOrders(filters: {
     status?: string;
+    side?: string;
     userId?: string;
     stockId?: string;
     dateFrom?: string;
@@ -246,6 +247,7 @@ export class AdminRepository {
     const where: Prisma.OrderWhereInput = {};
 
     if (filters.status) where.status = filters.status as Prisma.EnumOrderStatusFilter;
+    if (filters.side) where.side = filters.side as Prisma.EnumOrderSideFilter;
     if (filters.userId) where.userId = filters.userId;
     if (filters.stockId) where.stockId = filters.stockId;
     if (filters.dateFrom || filters.dateTo) {
@@ -346,6 +348,7 @@ export class AdminRepository {
   async listNotifications(filters: {
     status?: string;
     channel?: string;
+    category?: string;
     page?: number;
     limit?: number;
   }) {
@@ -355,6 +358,7 @@ export class AdminRepository {
     const where: Prisma.NotificationWhereInput = {};
     if (filters.status) where.status = filters.status as Prisma.EnumNotificationStatusFilter;
     if (filters.channel) where.channel = filters.channel as Prisma.EnumNotificationChannelFilter;
+    if (filters.category) where.category = filters.category;
 
     const [notifications, total] = await Promise.all([
       this.prisma.notification.findMany({

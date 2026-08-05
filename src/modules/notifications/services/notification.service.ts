@@ -132,6 +132,56 @@ export class NotificationService implements OnModuleInit {
 
   // ── Event Handlers ──────────────────────────────────────────
 
+  /** Trading: order placed (immediate or queued for market open) */
+  @OnEvent('trading.order.created')
+  async onOrderCreated(event: {
+    orderId: string;
+    userId: string;
+    stockSymbol: string;
+    side: 'BUY' | 'SELL';
+    quantity: number;
+    orderType: string;
+  }) {
+    await this.notify({
+      userId: event.userId,
+      templateKey: 'trade.order.placed',
+      variables: {
+        symbol: event.stockSymbol,
+        quantity: event.quantity,
+        side: event.side,
+      },
+      category: 'TRADING',
+      priority: PRIORITY.INFORMATIONAL,
+      data: { orderId: event.orderId },
+    });
+  }
+
+  /** KYC: application approved (emitted by the admin review actions) */
+  @OnEvent('kyc.approved')
+  async onKycApproved(event: { userId: string }) {
+    await this.notify({
+      userId: event.userId,
+      templateKey: 'kyc.approved',
+      variables: {},
+      category: 'KYC',
+      priority: PRIORITY.IMPORTANT,
+      data: { type: 'KYC_APPROVED' },
+    });
+  }
+
+  /** KYC: application rejected (emitted by the admin review actions) */
+  @OnEvent('kyc.rejected')
+  async onKycRejected(event: { userId: string; reason?: string }) {
+    await this.notify({
+      userId: event.userId,
+      templateKey: 'kyc.rejected',
+      variables: { reason: event.reason ?? 'See the app for details' },
+      category: 'KYC',
+      priority: PRIORITY.IMPORTANT,
+      data: { type: 'KYC_REJECTED' },
+    });
+  }
+
   /** Trading: order executed */
   @OnEvent('trading.order.executed')
   async onOrderExecuted(event: {

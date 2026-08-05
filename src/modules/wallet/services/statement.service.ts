@@ -15,6 +15,8 @@ export interface StatementEntry {
   type: string;
   amount: number;
   currency: string;
+  /** Real transaction status (PENDING / COMPLETED / FAILED / …). */
+  status: string;
   direction: string;
   description: string | null;
   reference: string;
@@ -56,6 +58,7 @@ export class StatementService {
         type: tx.type,
         amount: tx.amount.toNumber(),
         currency: tx.currency,
+        status: tx.status,
         direction: this.getDirection(tx.type),
         description: tx.description,
         reference: tx.reference,

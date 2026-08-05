@@ -79,6 +79,20 @@ export class PortfolioController {
     return this.portfolioService.getPortfolioSummary(user.id);
   }
 
+  // ── Dividends ───────────────────────────────────────────────
+
+  @Get('dividends')
+  @ApiOperation({
+    summary: 'Get dividends summary',
+    description:
+      'Total dividends received (credited + reinvested) and the most recent ' +
+      'dividend transactions. Powers the Dividends card in the mobile portfolio.',
+  })
+  @ApiResponse({ status: 200, description: 'Dividends summary' })
+  async getDividends(@CurrentUser() user: AuthenticatedUser) {
+    return this.portfolioService.getDividendsSummary(user.id);
+  }
+
   // ── Holdings ────────────────────────────────────────────────
 
   @Get('holdings')

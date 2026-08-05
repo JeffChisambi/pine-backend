@@ -35,6 +35,7 @@ import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
 import { CsdFormService } from '../../kyc/services/csd-form.service';
 import { KycReconciliationService } from '../../kyc/services/kyc-reconciliation.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ApproveKycDto } from '../../kyc/dto/approve-kyc.dto';
 import { RejectKycDto } from '../../kyc/dto/reject-kyc.dto';
 import { RequestDocsDto } from '../../kyc/dto/request-docs.dto';
@@ -211,6 +212,7 @@ export class AdminKycController {
     private readonly storageService: StorageService,
     private readonly csdFormService: CsdFormService,
     private readonly reconciliation: KycReconciliationService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ── GET /admin/kyc/queue ───────────────────────────────────────────────────
@@ -611,6 +613,9 @@ export class AdminKycController {
       });
     });
 
+    // Notify the applicant (kyc.approved listener creates the in-app notification)
+    this.eventEmitter.emit('kyc.approved', { userId: app.userId });
+
     await this.auditLogService.log({
       actorId: admin.id,
       actorRole: admin.role,
@@ -693,6 +698,9 @@ export class AdminKycController {
         data: { kycStatus: 'REJECTED' },
       });
     });
+
+    // Notify the applicant with the rejection reason
+    this.eventEmitter.emit('kyc.rejected', { userId: app.userId, reason: body.reason });
 
     await this.auditLogService.log({
       actorId: admin.id,

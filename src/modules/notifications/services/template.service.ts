@@ -16,6 +16,10 @@ import { NotificationRepository } from '../repositories/notification.repository'
 /** Default templates seeded on startup if not in DB */
 const DEFAULT_TEMPLATES: Record<string, { subject?: string; body: string }> = {
   // ── Trading ─────────────────────────────────────────────
+  'trade.order.placed': {
+    subject: 'Order Placed',
+    body: 'Your {{side}} order for {{quantity}} {{symbol}} shares has been placed and sent to your broker for execution.',
+  },
   'trade.buy.executed': {
     subject: 'Buy Order Filled',
     body: 'Your purchase of {{quantity}} {{symbol}} shares at MWK {{price}} has been completed. Total cost: MWK {{totalCost}}.',

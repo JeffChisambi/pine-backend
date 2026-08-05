@@ -5,7 +5,7 @@ import { TradingRepository } from '../repositories/trading.repository';
 import { BrokerGateway } from './broker-gateway.service';
 import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
 import { calculateTradingFees, serializeFees } from '../domain/trading-fee.calculator';
-import { OrderExecutedEvent } from '../events/trading.events';
+import { OrderExecutedEvent, OrderRejectedEvent } from '../events/trading.events';
 
 /**
  * Execution Engine — the heart of the trading system.
@@ -48,11 +48,16 @@ export class ExecutionEngineService {
 
     const currentStatus = order.status as OrderLifecycleStatus;
 
-    // Transition: VALIDATED → SUBMITTED
-    assertTransition(currentStatus, OrderLifecycleStatus.SUBMITTED);
-    await this.repo.updateOrderStatus(orderId, OrderLifecycleStatus.SUBMITTED, {
-      submittedAt: new Date(),
-    });
+    // Transition: VALIDATED → SUBMITTED.
+    // Broker-confirmed execution of a QUEUED order arrives already in
+    // SUBMITTED (parked there when the market was closed) — skip the
+    // transition in that case rather than asserting SUBMITTED → SUBMITTED.
+    if (currentStatus !== OrderLifecycleStatus.SUBMITTED) {
+      assertTransition(currentStatus, OrderLifecycleStatus.SUBMITTED);
+      await this.repo.updateOrderStatus(orderId, OrderLifecycleStatus.SUBMITTED, {
+        submittedAt: new Date(),
+      });
+    }
 
     await this.repo.createTradeAudit({
       orderId,
@@ -93,6 +98,17 @@ export class ExecutionEngineService {
         toStatus: OrderLifecycleStatus.REJECTED,
         metadata: { reason: fillResult.rejectionReason, brokerRef: fillResult.brokerRef },
       });
+
+      // Notify the user — the trading.order.rejected listener creates the
+      // in-app notification (previously nothing ever emitted this event).
+      this.eventEmitter.emit(
+        OrderRejectedEvent.event,
+        new OrderRejectedEvent(
+          orderId,
+          order.userId,
+          fillResult.rejectionReason ?? 'Rejected by broker',
+        ),
+      );
 
       return { order, status: 'REJECTED' as const };
     }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
 import { AuditModule } from '../audit/audit.module';
+import { StorageModule } from '../../infrastructure/storage/storage.module';
 import { NewsController } from './controllers/news.controller';
 import { AdminNewsController } from './controllers/admin-news.controller';
 import { NewsService } from './services/news.service';
@@ -12,7 +13,7 @@ import { NewsService } from './services/news.service';
  *   - AdminNewsController → dashboard CRUD (ADMIN_ACCESS, audited)
  */
 @Module({
-  imports: [DatabaseModule, ConfigModule, AuditModule],
+  imports: [DatabaseModule, ConfigModule, AuditModule, StorageModule],
   controllers: [NewsController, AdminNewsController],
   providers: [NewsService],
   exports: [NewsService],

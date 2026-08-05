@@ -109,9 +109,13 @@ export class WalletController {
       transactions: result.entries.map((e) => ({
         id: e.id,
         type: e.type,
-        amount: (e.amount as unknown as { toNumber(): number }).toNumber().toFixed(2),
+        // Statement entries expose amount as a plain number — the previous
+        // `.toNumber()` cast crashed every call to this endpoint.
+        amount: Number(e.amount).toFixed(2),
         currency: e.currency,
-        status: 'COMPLETED',
+        // Real transaction status (was hardcoded 'COMPLETED', so pending
+        // deposits/withdrawals rendered as completed in the app).
+        status: e.status,
         description: e.description ?? '',
         createdAt: e.createdAt,
       })),

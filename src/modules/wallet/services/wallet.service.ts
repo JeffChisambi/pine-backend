@@ -443,6 +443,21 @@ export class WalletService {
     }, FINANCIAL_TRANSACTION_OPTIONS);
 
     this.logger.log({ transactionId }, 'Withdrawal processed (ledger + wallet updated)');
+
+    // Emit wallet updated — mirrors the deposit path so the notification
+    // listener's WITHDRAWAL branch (previously unreachable) actually fires.
+    const doneTx = await this.repo.prismaClient.transaction.findUnique({
+      where: { id: transactionId },
+      include: { wallet: true },
+    });
+    if (doneTx) {
+      this.eventEmitter.emit(WALLET_UPDATED_EVENT, {
+        userId: doneTx.wallet.userId,
+        type: 'WITHDRAWAL',
+        amount: doneTx.amount.toNumber(),
+        newBalance: doneTx.wallet.balance.toNumber(),
+      });
+    }
   }
 
   // ── Event Handlers ──────────────────────────────────────────

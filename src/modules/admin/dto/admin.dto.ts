@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional, IsEnum, IsInt, Min, Max } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional, IsEnum, IsInt, IsIn, Min, Max } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -138,6 +138,11 @@ export class ListOrdersQueryDto {
   @IsString()
   status?: string;
 
+  @ApiPropertyOptional({ enum: ['BUY', 'SELL'] })
+  @IsOptional()
+  @IsIn(['BUY', 'SELL'])
+  side?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -196,4 +201,15 @@ export class BroadcastNotificationDto {
   @IsOptional()
   @IsString()
   targetRole?: string;
+
+  @ApiPropertyOptional({
+    enum: ['ANNOUNCEMENT', 'SYSTEM', 'MARKETING'],
+    default: 'ANNOUNCEMENT',
+    description:
+      'Notification category. Broker-authored broadcasts are ANNOUNCEMENT; ' +
+      'SYSTEM is reserved for platform-generated notices.',
+  })
+  @IsOptional()
+  @IsIn(['ANNOUNCEMENT', 'SYSTEM', 'MARKETING'])
+  category?: string;
 }

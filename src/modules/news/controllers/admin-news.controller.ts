@@ -10,10 +10,13 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
+  UseInterceptors,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
 import { Permission } from '../../auth/constants/permissions.constant';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
@@ -21,6 +24,7 @@ import type { AuthenticatedUser, RequestWithUser } from '../../../core/types/req
 import { AuditLogService } from '../../audit/services/audit-log.service';
 import { NewsService } from '../services/news.service';
 import { CreateNewsDto, ListNewsQueryDto, UpdateNewsDto } from '../dto/news.dto';
+import { ValidationException } from '../../../core/exceptions/app.exception';
 
 /**
  * Admin (dashboard) news management. Reuses ADMIN_ACCESS — every staff role
@@ -42,6 +46,39 @@ export class AdminNewsController {
   @ApiOperation({ summary: 'List all news articles (incl. drafts) for the CMS' })
   async list(@Query() query: ListNewsQueryDto) {
     return this.newsService.listAdmin(query);
+  }
+
+  // ── POST /admin/news/upload-image ─────────────────────────────────────────
+  // Upload a hero image; returns a permanent public URL served by the backend
+  // (GET /v1/news/images/:name) with immutable cache headers.
+
+  @Post('upload-image')
+  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload a news hero image (max 5 MB, image types only)' })
+  async uploadImage(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    if (!file) throw new ValidationException('No file provided');
+    const result = await this.newsService.uploadImage(
+      file.originalname,
+      file.mimetype,
+      file.buffer,
+    );
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'NEWS_IMAGE_UPLOADED',
+      resourceType: 'NEWS_ARTICLE',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { fileName: file.originalname, size: file.size },
+    });
+    return result;
   }
 
   @Get(':id')

@@ -96,6 +96,13 @@ export class PortfolioService {
   // ── API Methods ─────────────────────────────────────────────
 
   /**
+   * GET /portfolio/dividends — total dividends received + recent payouts.
+   */
+  async getDividendsSummary(userId: string) {
+    return this.repo.getDividendsSummary(userId);
+  }
+
+  /**
    * GET /portfolio — full portfolio overview.
    */
   async getPortfolioSummary(userId: string): Promise<PortfolioSummary> {

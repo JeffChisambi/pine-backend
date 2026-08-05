@@ -29,6 +29,16 @@ export class TradingRepository {
     return user?.kycStatus ?? null;
   }
 
+  /** Latest close price for a stock (used for broker execution of queued orders). */
+  async getLatestClosePrice(stockId: string): Promise<Decimal | null> {
+    const price = await this.prisma.stockPrice.findFirst({
+      where: { stockId },
+      orderBy: { tradedAt: 'desc' },
+      select: { closePrice: true },
+    });
+    return price?.closePrice ?? null;
+  }
+
   // ── Orders ──────────────────────────────────────────────────
 
   async createOrder(data: {

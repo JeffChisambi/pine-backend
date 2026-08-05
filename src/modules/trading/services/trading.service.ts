@@ -7,7 +7,12 @@ import { RiskService } from './risk.service';
 import { ExecutionEngineService } from './execution-engine.service';
 import { TradingRepository } from '../repositories/trading.repository';
 import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
-import { OrderCreatedEvent, OrderCancelledEvent } from '../events/trading.events';
+import { OrderCreatedEvent, OrderCancelledEvent, OrderRejectedEvent } from '../events/trading.events';
+import {
+  ConflictException,
+  ResourceNotFoundException,
+  ValidationException,
+} from '../../../core/exceptions/app.exception';
 
 /**
  * Trading Service — the main orchestrator.
@@ -265,10 +270,75 @@ export class TradingService {
           toStatus: OrderLifecycleStatus.REJECTED,
           metadata: { reason: (error as Error).message },
         });
+
+        // Notify the user their order failed (the listener for this event
+        // existed but nothing ever emitted it).
+        this.eventEmitter.emit(
+          OrderRejectedEvent.event,
+          new OrderRejectedEvent(order.id, userId, (error as Error).message),
+        );
       }
 
       throw error;
     }
+  }
+
+  /**
+   * Broker-confirmed execution of a QUEUED order.
+   *
+   * Orders placed while the market is closed are parked at SUBMITTED (the
+   * response surfaces them as "queued"). This runs the remaining pipeline —
+   * broker gateway → trade → fees → FILLED — which cascades through the
+   * event listeners (ledger, settlement, portfolio, notifications).
+   *
+   * Idempotent: only a SUBMITTED order can be executed. A second call finds
+   * the order in ACCEPTED/FILLED/... and is rejected with a conflict.
+   */
+  async executeQueuedOrder(
+    orderId: string,
+    executedBy: { adminId: string; role: string },
+  ) {
+    const order = await this.repo.findOrderById(orderId);
+    if (!order) throw new ResourceNotFoundException('Order', orderId);
+
+    if (order.status !== OrderLifecycleStatus.SUBMITTED) {
+      throw new ConflictException(
+        `Order is ${order.status} — only queued (SUBMITTED) orders can be executed.`,
+      );
+    }
+
+    // Price: LIMIT orders execute at their limit; MARKET orders at the
+    // latest close available for the stock.
+    const latestClose = await this.repo.getLatestClosePrice(order.stockId);
+    const price =
+      order.type === 'LIMIT' && order.limitPrice
+        ? new Decimal(order.limitPrice.toString())
+        : latestClose;
+    if (!price) {
+      throw new ValidationException(
+        'No market price available for this stock — cannot execute.',
+      );
+    }
+
+    await this.repo.createTradeAudit({
+      orderId,
+      userId: order.userId,
+      action: 'ORDER_EXECUTED_BY_BROKER',
+      fromStatus: OrderLifecycleStatus.SUBMITTED,
+      toStatus: OrderLifecycleStatus.SUBMITTED,
+      metadata: { adminId: executedBy.adminId, adminRole: executedBy.role, price: price.toString() },
+    });
+
+    // Execution emits OrderExecutedEvent / OrderRejectedEvent itself, which
+    // cascades to ledger, settlement, portfolio and user notifications.
+    const result = await this.executionEngine.execute(orderId, price);
+
+    this.logger.log(
+      { orderId, adminId: executedBy.adminId, status: result.status },
+      'Queued order executed by broker',
+    );
+
+    return result;
   }
 
   /**

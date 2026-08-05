@@ -171,6 +171,25 @@ export class StorageService {
     await this.client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
   }
 
+  /**
+   * Stream an object's bytes (used by backend-proxied public file routes,
+   * e.g. news images, where presigned URLs are unsuitable because the URL
+   * must be permanent and fetchable without auth headers).
+   */
+  async getObjectStream(
+    bucket: StorageBucket,
+    key: string,
+  ): Promise<{ body: NodeJS.ReadableStream; contentType?: string; contentLength?: number }> {
+    const res = await this.client.send(
+      new GetObjectCommand({ Bucket: this.resolveBucketName(bucket), Key: key }),
+    );
+    return {
+      body: res.Body as unknown as NodeJS.ReadableStream,
+      contentType: res.ContentType,
+      contentLength: res.ContentLength,
+    };
+  }
+
   async exists(bucket: StorageBucket, key: string): Promise<boolean> {
     try {
       await this.client.send(

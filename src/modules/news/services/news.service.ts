@@ -1,7 +1,20 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
-import { ResourceNotFoundException } from '../../../core/exceptions/app.exception';
+import { StorageService } from '../../../infrastructure/storage/storage.service';
+import { AppConfigService } from '../../../config/app-config.service';
+import {
+  ResourceNotFoundException,
+  ValidationException,
+} from '../../../core/exceptions/app.exception';
 import { CreateNewsDto, ListNewsQueryDto, UpdateNewsDto } from '../dto/news.dto';
+
+const ALLOWED_IMAGE_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
 
 /** Shape the mobile app consumes — must match app/(tabs)/news.tsx NewsItem. */
 export interface PublicNewsItem {
@@ -20,7 +33,53 @@ export interface PublicNewsItem {
 
 @Injectable()
 export class NewsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+    private readonly config: AppConfigService,
+  ) {}
+
+  // ── Images ───────────────────────────────────────────────────────────────
+
+  /**
+   * Store a news hero image and return its permanent, public URL.
+   * Images live in the avatars bucket under a `news/` prefix (content-unique
+   * key), served via GET /v1/news/images/:name with immutable cache headers —
+   * safe to cache forever on devices and any CDN in front.
+   */
+  async uploadImage(fileName: string, mimeType: string, buffer: Buffer) {
+    const ext = ALLOWED_IMAGE_TYPES[mimeType];
+    if (!ext) {
+      throw new ValidationException(
+        `Unsupported image type ${mimeType}. Use JPEG, PNG, WebP or GIF.`,
+      );
+    }
+    const { key } = await this.storage.upload({
+      bucket: 'avatars',
+      keyPrefix: 'news',
+      fileName: `${randomUUID()}.${ext}`,
+      contentType: mimeType,
+      body: buffer,
+    });
+    // key = news/<timestamp>-<uuid>-<uuid>.<ext>; the public route addresses
+    // it by basename (no slashes — traversal-safe by construction).
+    const name = key.slice('news/'.length);
+    const base = this.config.app.url.replace(/\/$/, '');
+    return { imageUrl: `${base}/v1/news/images/${name}`, key };
+  }
+
+  /** Stream a stored news image for the public route. */
+  async getImageStream(name: string) {
+    // Only the exact generated shape is accepted — no slashes, no traversal.
+    if (!/^[0-9]+-[a-f0-9-]{36}-[a-f0-9-]{36}\.(jpg|png|webp|gif)$/i.test(name)) {
+      throw new ResourceNotFoundException('Image', name);
+    }
+    try {
+      return await this.storage.getObjectStream('avatars', `news/${name}`);
+    } catch {
+      throw new ResourceNotFoundException('Image', name);
+    }
+  }
 
   // ── Public (mobile) ──────────────────────────────────────────────────────
 
