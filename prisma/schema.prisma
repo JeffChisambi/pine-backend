@@ -222,6 +222,11 @@ model User {
   emailVerifiedAt   DateTime?
   firstName         String
   lastName          String
+  /// Date of birth captured at registration — a trusted anchor the KYC
+  /// pipeline reconciles OCR/MRZ extraction against.
+  dateOfBirth       DateTime?
+  /// 'M' | 'F' captured at registration (trusted anchor for reconciliation).
+  gender            String?
   passwordHash      String
   pinHash           String?
   pinFailedAttempts Int        @default(0)

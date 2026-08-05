@@ -538,25 +538,36 @@ export class KycWorkflowService {
         idFace = await this.faceRecognition.detectAndEmbed(enhancedId);
         selfieFace = await this.faceRecognition.detectAndEmbed(enhancedSelfie);
 
-        if (idFace.embedding) {
-          await this.repository.saveFaceEmbedding({
-            kycApplicationId: applicationId,
-            documentId: idDoc.id,
-            sourceType: 'national_id',
-            embedding: idFace.embedding,
-            detectionConfidence: idFace.detectionConfidence,
-            qualityScore: idFace.qualityScore,
-          });
-        }
-        if (selfieFace.embedding) {
-          await this.repository.saveFaceEmbedding({
-            kycApplicationId: applicationId,
-            documentId: selfieDoc.id,
-            sourceType: 'selfie',
-            embedding: selfieFace.embedding,
-            detectionConfidence: selfieFace.detectionConfidence,
-            qualityScore: selfieFace.qualityScore,
-          });
+        // Persisting embeddings is only needed for cross-user duplicate
+        // detection — the face MATCH below uses the in-memory embeddings.
+        // So a persistence failure (e.g. transient DB error) must NOT abort
+        // the pipeline and lose the face score. Degrade gracefully.
+        try {
+          if (idFace.embedding) {
+            await this.repository.saveFaceEmbedding({
+              kycApplicationId: applicationId,
+              documentId: idDoc.id,
+              sourceType: 'national_id',
+              embedding: idFace.embedding,
+              detectionConfidence: idFace.detectionConfidence,
+              qualityScore: idFace.qualityScore,
+            });
+          }
+          if (selfieFace.embedding) {
+            await this.repository.saveFaceEmbedding({
+              kycApplicationId: applicationId,
+              documentId: selfieDoc.id,
+              sourceType: 'selfie',
+              embedding: selfieFace.embedding,
+              detectionConfidence: selfieFace.detectionConfidence,
+              qualityScore: selfieFace.qualityScore,
+            });
+          }
+        } catch (embedErr) {
+          this.logger.warn(
+            { err: embedErr, applicationId },
+            'Face embedding persistence failed — face match still computed from in-memory embeddings',
+          );
         }
       }
 

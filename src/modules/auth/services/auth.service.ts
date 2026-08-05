@@ -60,6 +60,8 @@ export class AuthService {
       lastName: dto.lastName,
       password: dto.password,
       email: dto.email,
+      dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
+      gender: dto.gender,
     });
 
     // 2. Register device (if fingerprint provided)

@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from 'pdf-lib';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import {
+  KycReconciliationService,
+  type CsdFieldValues,
+} from './kyc-reconciliation.service';
 
 /**
  * Generates a filled Reserve Bank of Malawi "Securities Account Opening/Update
@@ -19,19 +23,80 @@ import { PrismaService } from '../../../infrastructure/database/prisma.service';
  *   4. Primary linked bank for the Dividend Disposal instruction
  *      (account number is masked — broker confirms the full number at signing)
  */
+const CSD_OVERRIDES_KEY = '_csdOverrides';
+
 @Injectable()
 export class CsdFormService {
   private readonly logger = new Logger(CsdFormService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reconciliation: KycReconciliationService,
+  ) {}
 
-  async generateForApplication(applicationId: string): Promise<Buffer> {
+  /**
+   * Resolve the CSD form's field values for an application: reconciled KYC data
+   * (registration-anchored) with any saved broker overrides applied on top.
+   * This is what the editable dashboard form binds to.
+   */
+  async resolveFields(applicationId: string): Promise<CsdFieldValues> {
+    const { input, bank, overrides } = await this.load(applicationId);
+    return this.reconciliation.resolveCsdFields(input, bank, overrides);
+  }
+
+  /** Persist broker field overrides for an application's CSD form. */
+  async saveOverrides(
+    applicationId: string,
+    overrides: Record<string, string>,
+  ): Promise<CsdFieldValues> {
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { ocrExtractedData: true },
+    });
+    if (!app) throw new Error('KYC application not found');
+
+    const existing = (app.ocrExtractedData ?? {}) as Record<string, unknown>;
+    // Keep only non-empty string overrides; empty string clears a field back
+    // to the reconciled default.
+    const clean: Record<string, string> = {};
+    for (const [k, v] of Object.entries(overrides)) {
+      if (typeof v === 'string' && v.trim() !== '') clean[k] = v;
+    }
+
+    await this.prisma.kycApplication.update({
+      where: { id: applicationId },
+      data: { ocrExtractedData: { ...existing, [CSD_OVERRIDES_KEY]: clean } as any },
+    });
+
+    return this.resolveFields(applicationId);
+  }
+
+  async generateForApplication(
+    applicationId: string,
+    /** One-off overrides merged on top of any saved overrides. */
+    extraOverrides: Record<string, string> = {},
+  ): Promise<Buffer> {
+    const { input, bank, overrides } = await this.load(applicationId);
+    const fields = this.reconciliation.resolveCsdFields(input, bank, {
+      ...overrides,
+      ...extraOverrides,
+    });
+    return this.render({ ...fields, date: this.formatDate(new Date()), applicationId });
+  }
+
+  /** Shared loader: application + user + primary bank + saved overrides. */
+  private async load(applicationId: string): Promise<{
+    input: Parameters<KycReconciliationService['resolveCsdFields']>[0];
+    bank: { bankName?: string | null; accountName?: string | null; accountNumberMasked?: string | null } | null;
+    overrides: Record<string, string>;
+  }> {
     const app = await this.prisma.kycApplication.findUnique({
       where: { id: applicationId },
       include: {
         user: {
           select: {
-            id: true, firstName: true, lastName: true, email: true, phone: true,
+            firstName: true, lastName: true, email: true, phone: true,
+            dateOfBirth: true, gender: true,
           },
         },
       },
@@ -43,79 +108,53 @@ export class CsdFormService {
       orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
     });
 
-    const ocr = (app.ocrExtractedData ?? {}) as Record<string, any>;
-    const field = (f: unknown): string | null => {
-      if (!f) return null;
-      if (typeof f === 'string') return f || null;
-      if (typeof f === 'object' && f !== null && 'value' in (f as any)) {
-        const v = (f as any).value;
-        return typeof v === 'string' && v ? v : null;
-      }
-      return null;
+    const ocrData = (app.ocrExtractedData ?? {}) as Record<string, unknown>;
+    const overrides = (ocrData[CSD_OVERRIDES_KEY] as Record<string, string>) ?? {};
+
+    return {
+      input: {
+        user: {
+          firstName: app.user.firstName,
+          lastName: app.user.lastName,
+          email: app.user.email,
+          phone: app.user.phone,
+          dateOfBirth: app.user.dateOfBirth,
+          gender: app.user.gender,
+        },
+        application: {
+          nationalIdNumber: app.nationalIdNumber,
+          dateOfBirth: app.dateOfBirth,
+          addressLine1: app.addressLine1,
+          addressLine2: app.addressLine2,
+          city: app.city,
+          district: app.district,
+          ocrExtractedData: app.ocrExtractedData,
+        },
+      },
+      bank,
+      overrides,
     };
-
-    const extractedAddress = ocr._extractedAddress as
-      | { addressLine1?: string | null; addressLine2?: string | null; city?: string | null; formatted?: string | null }
-      | undefined;
-
-    const fullName =
-      field(ocr.fullName) ?? `${app.user.firstName} ${app.user.lastName}`;
-    const gender = field(ocr.gender); // 'M' | 'F' | null
-    const idNumber = app.nationalIdNumber ?? field(ocr.nationalIdNumber);
-    const dob = app.dateOfBirth
-      ? this.formatDate(app.dateOfBirth)
-      : field(ocr.dateOfBirth);
-    const nationality = field(ocr.nationality);
-    const investorType =
-      nationality && nationality !== 'MWI' ? 'FOREIGN' : 'LOCAL';
-
-    const physicalLines: string[] = [];
-    if (app.addressLine1) physicalLines.push(app.addressLine1);
-    if (app.addressLine2) physicalLines.push(app.addressLine2);
-    if (app.city && !physicalLines.some((l) => l.includes(app.city!)))
-      physicalLines.push(app.city);
-    if (physicalLines.length === 0 && extractedAddress?.formatted)
-      physicalLines.push(extractedAddress.formatted);
-
-    // Postal address: use the P.O. Box line when present in the extraction
-    const postalLines = physicalLines.filter((l) => /\bP\.?\s*O\.?\s*Box|Private\s+Bag/i.test(l));
-
-    const data = {
-      fullName: fullName.toUpperCase(),
-      genderMale: gender === 'M',
-      genderFemale: gender === 'F',
-      idType: 'NATIONAL ID',
-      idNumber: (idNumber ?? '').toUpperCase(),
-      dateOfBirth: dob ?? '',
-      investorType,
-      physicalLines: physicalLines.map((l) => l.toUpperCase()),
-      postalLines: postalLines.map((l) => l.toUpperCase()),
-      telephone: app.user.phone ?? '',
-      cellphone: app.user.phone ?? '',
-      email: (app.user.email ?? '').toUpperCase(),
-      bankName: bank?.bankName?.toUpperCase() ?? '',
-      bankBranchCode: '',
-      accountNumber: bank?.accountNumberMasked ?? '',
-      accountName: bank?.accountName?.toUpperCase() ?? '',
-      date: this.formatDate(new Date()),
-      applicationId: app.id,
-    };
-
-    return this.render(data);
   }
 
   // ────────────────────────────────────────────────────────────────
   // PDF rendering
   // ────────────────────────────────────────────────────────────────
 
-  private async render(d: {
-    fullName: string; genderMale: boolean; genderFemale: boolean;
-    idType: string; idNumber: string; dateOfBirth: string; investorType: string;
-    physicalLines: string[]; postalLines: string[];
-    telephone: string; cellphone: string; email: string;
-    bankName: string; bankBranchCode: string; accountNumber: string; accountName: string;
-    date: string; applicationId: string;
-  }): Promise<Buffer> {
+  private async render(
+    v: CsdFieldValues & { date: string; applicationId: string },
+  ): Promise<Buffer> {
+    // Adapt the flat field values to the renderer's shape (checkbox booleans,
+    // wrapped address lines).
+    const wrapAddress = (s: string): string[] =>
+      s ? s.split(',').map((p) => p.trim()).filter(Boolean) : [];
+    const d = {
+      ...v,
+      genderMale: v.gender === 'M',
+      genderFemale: v.gender === 'F',
+      physicalLines: wrapAddress(v.physicalAddress),
+      postalLines: wrapAddress(v.postalAddress),
+    };
+
     const doc = await PDFDocument.create();
     const helv = await doc.embedFont(StandardFonts.Helvetica);
     const bold = await doc.embedFont(StandardFonts.HelveticaBold);

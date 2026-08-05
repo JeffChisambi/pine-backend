@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { CsdFormService } from './csd-form.service';
+import { KycReconciliationService } from './kyc-reconciliation.service';
 import type { PrismaService } from '../../../infrastructure/database/prisma.service';
+
+const makeService = (prisma: PrismaService) =>
+  new CsdFormService(prisma, new KycReconciliationService());
 
 /** Minimal Prisma mock covering the two queries the service makes. */
 function prismaMock(overrides?: { bank?: unknown }): PrismaService {
@@ -31,8 +35,11 @@ function prismaMock(overrides?: { bank?: unknown }): PrismaService {
           lastName: 'Chisambi',
           email: 'thelmer@example.com',
           phone: '+265990342842',
+          dateOfBirth: new Date(Date.UTC(1979, 2, 12)),
+          gender: 'M',
         },
       }),
+      update: async () => ({}),
     },
     linkedBank: {
       findFirst: async () =>
@@ -49,7 +56,7 @@ function prismaMock(overrides?: { bank?: unknown }): PrismaService {
 
 describe('CsdFormService', () => {
   it('generates a 2-page PDF with the applicant data', async () => {
-    const service = new CsdFormService(prismaMock());
+    const service = makeService(prismaMock());
     const pdf = await service.generateForApplication('app-1234-5678');
 
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
@@ -60,7 +67,7 @@ describe('CsdFormService', () => {
   });
 
   it('still generates when the user has no linked bank', async () => {
-    const service = new CsdFormService(prismaMock({ bank: null }));
+    const service = makeService(prismaMock({ bank: null }));
     const pdf = await service.generateForApplication('app-1234-5678');
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
   });

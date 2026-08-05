@@ -34,6 +34,7 @@ import {
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
 import { CsdFormService } from '../../kyc/services/csd-form.service';
+import { KycReconciliationService } from '../../kyc/services/kyc-reconciliation.service';
 import { ApproveKycDto } from '../../kyc/dto/approve-kyc.dto';
 import { RejectKycDto } from '../../kyc/dto/reject-kyc.dto';
 import { RequestDocsDto } from '../../kyc/dto/request-docs.dto';
@@ -209,6 +210,7 @@ export class AdminKycController {
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
     private readonly csdFormService: CsdFormService,
+    private readonly reconciliation: KycReconciliationService,
   ) {}
 
   // ── GET /admin/kyc/queue ───────────────────────────────────────────────────
@@ -343,6 +345,8 @@ export class AdminKycController {
             emailVerifiedAt: true,
             phone: true,
             phoneVerifiedAt: true,
+            dateOfBirth: true,
+            gender: true,
           },
         },
         documents: true,
@@ -413,6 +417,29 @@ export class AdminKycController {
           : null,
     };
 
+    // Reconcile OCR/MRZ extraction against the trusted registration data.
+    // This drives the dashboard's "verified value + provenance + mismatch"
+    // display and is the same logic that fills the CSD form.
+    const reconciled = this.reconciliation.reconcile({
+      user: {
+        firstName: app.user.firstName,
+        lastName: app.user.lastName,
+        email: app.user.email,
+        phone: app.user.phone,
+        dateOfBirth: app.user.dateOfBirth,
+        gender: app.user.gender,
+      },
+      application: {
+        nationalIdNumber: app.nationalIdNumber,
+        dateOfBirth: app.dateOfBirth,
+        addressLine1: app.addressLine1,
+        addressLine2: app.addressLine2,
+        city: app.city,
+        district: app.district,
+        ocrExtractedData: app.ocrExtractedData,
+      },
+    });
+
     return {
       application: {
         ...applicationRow,
@@ -420,6 +447,18 @@ export class AdminKycController {
         ocrFieldConfidences,
         mrz,
         address,
+        reconciled,
+        registration: {
+          firstName: app.user.firstName,
+          lastName: app.user.lastName,
+          fullName: `${app.user.firstName} ${app.user.lastName}`.trim(),
+          email: app.user.email,
+          emailVerified: app.user.emailVerifiedAt != null,
+          phone: app.user.phone,
+          phoneVerified: app.user.phoneVerifiedAt != null,
+          dateOfBirth: app.user.dateOfBirth ? app.user.dateOfBirth.toISOString() : null,
+          gender: app.user.gender,
+        },
       },
       documents,
     };
@@ -465,6 +504,58 @@ export class AdminKycController {
       type: 'application/pdf',
       disposition: `attachment; filename="CSD-Account-Opening-${applicationId.slice(0, 8)}.pdf"`,
     });
+  }
+
+  // ── GET /admin/kyc/:applicationId/csd-data ────────────────────────────────
+  // The editable form binds to these resolved field values (reconciled KYC
+  // data with any saved broker overrides applied).
+
+  @Get(':applicationId/csd-data')
+  @RequirePermissions(Permission.KYC_REVIEW)
+  @ApiOperation({ summary: 'Get resolved CSD form field values for editing' })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  async getCsdData(@Param('applicationId') applicationId: string) {
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { id: true },
+    });
+    if (!app) throw new ResourceNotFoundException('KYC application', applicationId);
+    return { fields: await this.csdFormService.resolveFields(applicationId) };
+  }
+
+  // ── PUT /admin/kyc/:applicationId/csd-data ────────────────────────────────
+  // Persist broker overrides (manual edits) to the CSD form fields.
+
+  @Post(':applicationId/csd-data')
+  @RequirePermissions(Permission.KYC_REVIEW)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Save broker overrides for the CSD form fields' })
+  @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
+  async saveCsdData(
+    @Param('applicationId') applicationId: string,
+    @Body() body: { fields?: Record<string, string> },
+    @CurrentUser() admin: AuthenticatedUser,
+  ) {
+    const app = await this.prisma.kycApplication.findUnique({
+      where: { id: applicationId },
+      select: { id: true },
+    });
+    if (!app) throw new ResourceNotFoundException('KYC application', applicationId);
+
+    const fields = await this.csdFormService.saveOverrides(
+      applicationId,
+      body?.fields ?? {},
+    );
+
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'KYC_CSD_FORM_EDITED',
+      resourceType: 'KYC_APPLICATION',
+      resourceId: applicationId,
+    });
+
+    return { fields };
   }
 
   // ── POST /admin/kyc/:applicationId/approve ────────────────────────────────

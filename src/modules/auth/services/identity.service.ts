@@ -41,6 +41,8 @@ export class IdentityService {
     lastName: string;
     password: string;
     email?: string;
+    dateOfBirth?: Date;
+    gender?: string;
   }): Promise<{
     id: string;
     phone: string;
@@ -87,6 +89,8 @@ export class IdentityService {
         lastName: data.lastName,
         passwordHash,
         email: data.email,
+        dateOfBirth: data.dateOfBirth,
+        gender: data.gender,
         preferences: {
           create: {}, // defaults defined in schema
         },

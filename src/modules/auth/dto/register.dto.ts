@@ -8,6 +8,8 @@ import {
   Matches,
   IsOptional,
   IsEmail,
+  IsIn,
+  IsISO8601,
 } from 'class-validator';
 import { normalizeMalawiPhoneNumber } from '../../../shared/phone/malawi-phone';
 
@@ -49,6 +51,23 @@ export class RegisterDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+
+  @ApiPropertyOptional({ example: '1998-03-12', description: 'Date of birth (ISO 8601)' })
+  @IsOptional()
+  @IsISO8601()
+  dateOfBirth?: string;
+
+  @ApiPropertyOptional({ example: 'M', enum: ['M', 'F'] })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value !== 'string') return value;
+    const v = value.trim().toUpperCase();
+    if (v === 'MALE') return 'M';
+    if (v === 'FEMALE') return 'F';
+    return v;
+  })
+  @IsIn(['M', 'F'])
+  gender?: string;
 
   @ApiPropertyOptional({ description: 'Device fingerprint for trust tracking' })
   @IsOptional()

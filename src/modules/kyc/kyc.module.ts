@@ -18,6 +18,7 @@ import { KycController } from './controllers/kyc.controller';
 // Services
 import { KycWorkflowService } from './services/kyc-workflow.service';
 import { CsdFormService } from './services/csd-form.service';
+import { KycReconciliationService } from './services/kyc-reconciliation.service';
 
 // Queue Processor
 import { KycProcessor } from './processors/kyc.processor';
@@ -95,9 +96,12 @@ import { KycRepository } from './repositories/kyc.repository';
     // ── CSD Account Opening form generator ──────────────────────
     CsdFormService,
 
+    // ── OCR ↔ registration reconciliation ───────────────────────
+    KycReconciliationService,
+
     // ── BullMQ Processor (H-3 fix: async pipeline) ──────────────
     KycProcessor,
   ],
-  exports: [KycWorkflowService, CsdFormService, KYC_REPOSITORY],
+  exports: [KycWorkflowService, CsdFormService, KycReconciliationService, KYC_REPOSITORY],
 })
 export class KycModule {}
