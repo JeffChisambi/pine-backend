@@ -397,7 +397,7 @@ model KycApplication {
   submittedAt       DateTime          @default(now())
   reviewedAt        DateTime?
   reviewedById      String?           @db.Uuid
-  reviewedBy        User?             @relation("KycReviewer", fields: [reviewedById], references: [id])
+  reviewedBy        User?             @relation("KycReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewDecision    KycReviewDecision?
   rejectionReason   String?
   ocrExtractedData  Json?
@@ -704,7 +704,7 @@ model MarketCalendar {
 model Order {
   id              String      @id @default(uuid()) @db.Uuid
   userId          String      @db.Uuid
-  user            User        @relation(fields: [userId], references: [id])
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   stockId         String      @db.Uuid
   stock           Stock       @relation(fields: [stockId], references: [id])
   side            OrderSide
@@ -827,7 +827,7 @@ model TradingSession {
 model Holding {
   id               String   @id @default(uuid()) @db.Uuid
   userId           String   @db.Uuid
-  user             User     @relation(fields: [userId], references: [id])
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   stockId          String   @db.Uuid
   stock            Stock    @relation(fields: [stockId], references: [id])
   quantity         Decimal  @default(0) @db.Decimal(18, 4)
@@ -1098,7 +1098,7 @@ model NotificationDelivery {
 model Payment {
   id               String        @id @default(uuid()) @db.Uuid
   userId           String        @db.Uuid
-  user             User          @relation(fields: [userId], references: [id])
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider         PaymentProvider
   status           PaymentStatus @default(INITIATED)
   amount           Decimal       @db.Decimal(18, 4)
@@ -1150,7 +1150,7 @@ model WebhookEvent {
 model AuditLog {
   id           String   @id @default(uuid()) @db.Uuid
   actorId      String?  @db.Uuid
-  actor        User?    @relation("AuditActor", fields: [actorId], references: [id])
+  actor        User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
   actorRole    Role?
   action       String
   resourceType String
@@ -1201,7 +1201,7 @@ model TreasuryProduct {
 model TreasuryInvestment {
   id            String                   @id @default(uuid()) @db.Uuid
   userId        String                   @db.Uuid
-  user          User                     @relation(fields: [userId], references: [id])
+  user          User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   productId     String                   @db.Uuid
   product       TreasuryProduct          @relation(fields: [productId], references: [id])
   status        TreasuryInvestmentStatus @default(PENDING)
