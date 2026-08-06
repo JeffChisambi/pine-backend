@@ -96,6 +96,17 @@ export class NotificationController {
     return this.notificationService.markAllAsRead(user.id);
   }
 
+  @Delete()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Clear all notifications',
+    description: 'Removes every in-app notification from the inbox.',
+  })
+  @ApiResponse({ status: 200, description: 'All notifications cleared' })
+  async clearAll(@CurrentUser() user: AuthenticatedUser) {
+    return this.notificationService.clearAllNotifications(user.id);
+  }
+
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

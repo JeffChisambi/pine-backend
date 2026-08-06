@@ -467,6 +467,12 @@ export class NotificationService implements OnModuleInit {
     return { success: true };
   }
 
+  /** DELETE /notifications — clear the whole in-app inbox */
+  async clearAllNotifications(userId: string) {
+    const result = await this.repo.deleteAllNotifications(userId);
+    return { success: true, count: result.count };
+  }
+
   /** GET /notifications/preferences */
   async getPreferences(userId: string) {
     return this.preferenceService.getAllPreferences(userId);

@@ -102,6 +102,12 @@ export class NotificationRepository {
     });
   }
 
+  async deleteAllNotifications(userId: string) {
+    return this.prisma.notification.deleteMany({
+      where: { userId, channel: 'IN_APP' },
+    });
+  }
+
   // ── Templates ───────────────────────────────────────────────
 
   async findTemplateByKey(key: string) {

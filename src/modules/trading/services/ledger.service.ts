@@ -42,23 +42,45 @@ export class LedgerService {
     );
 
     try {
-      const wallet = await this.repo.findWalletByUserId(event.userId);
-      if (!wallet) {
-        this.logger.error({ userId: event.userId }, 'Wallet not found for ledger entry');
-        return;
-      }
-
       const grossValue = new Decimal(event.price).mul(new Decimal(event.quantity));
       const totalFees = new Decimal(event.totalFees);
       const totalCost = new Decimal(event.totalCost);
 
-      await this.repo.db.$transaction(async (tx) => {
+      await this.runWithRetry(event.orderId, async () =>
+      this.repo.db.$transaction(async (tx) => {
+        // Read the wallet INSIDE the transaction. The previous outside-read
+        // meant a stale `version` made the guarded update match zero rows and
+        // throw — the cash leg silently never happened while the holdings
+        // listener succeeded, leaving assets updated but the balance not.
+        const wallet = await tx.wallet.findFirst({ where: { userId: event.userId } });
+        if (!wallet) {
+          this.logger.error({ userId: event.userId }, 'Wallet not found for ledger entry');
+          return;
+        }
+
+        // Idempotency: if this order's cash transaction already exists, a
+        // replayed/duplicate event must not move money twice.
+        const existing = await tx.transaction.findFirst({
+          where: {
+            walletId: wallet.id,
+            relatedOrderId: event.orderId,
+            type: event.side === 'BUY' ? 'TRADE_BUY' : 'TRADE_SELL',
+          },
+          select: { id: true },
+        });
+        if (existing) {
+          this.logger.warn(
+            { orderId: event.orderId },
+            'Ledger entries already recorded for this order — skipping duplicate event',
+          );
+          return;
+        }
+
         if (event.side === 'BUY') {
           // BUY: debit user wallet (cash out)
           const newBalance = wallet.balance.sub(totalCost);
 
-          // Atomic decrement with optimistic locking (never a replacement —
-          // the wallet row was read outside this transaction).
+          // Atomic decrement; version read inside this same transaction.
           await tx.wallet.update({
             where: { id: wallet.id, version: wallet.version },
             data: {
@@ -139,7 +161,7 @@ export class LedgerService {
             ],
           });
         }
-      }, FINANCIAL_TRANSACTION_OPTIONS);
+      }, FINANCIAL_TRANSACTION_OPTIONS));
 
       this.logger.log(
         { orderId: event.orderId, side: event.side },
@@ -151,6 +173,33 @@ export class LedgerService {
         'Failed to record ledger entries — CRITICAL: financial inconsistency possible',
       );
       throw error; // Re-throw — ledger failures must not be silently swallowed
+    }
+  }
+
+  /**
+   * Serializable transactions abort on write-write conflict (P2034), and the
+   * version guard aborts if a concurrent writer bumped the wallet (P2025).
+   * Both are transient — re-running the transaction re-reads the wallet and
+   * succeeds. The in-transaction idempotency check makes retries safe.
+   */
+  private async runWithRetry(orderId: string, fn: () => Promise<unknown>): Promise<void> {
+    const RETRYABLE = new Set(['P2034', 'P2025']);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await fn();
+        return;
+      } catch (error: any) {
+        const code = error?.code as string | undefined;
+        if (attempt < 4 && code && RETRYABLE.has(code)) {
+          this.logger.warn(
+            { orderId, attempt, code },
+            'Ledger transaction conflict — retrying',
+          );
+          await new Promise((r) => setTimeout(r, 100 * attempt));
+          continue;
+        }
+        throw error;
+      }
     }
   }
 }

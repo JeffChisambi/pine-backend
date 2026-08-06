@@ -6,6 +6,7 @@ import {
   Min,
   IsInt,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 // ── Request DTOs ──────────────────────────────────────────────
@@ -75,12 +76,14 @@ export class OrderHistoryQueryDto {
 
   @ApiPropertyOptional({ example: 20, default: 20, minimum: 1 })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   limit?: number;
 
   @ApiPropertyOptional({ example: 0, default: 0, minimum: 0 })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   offset?: number;
@@ -89,12 +92,14 @@ export class OrderHistoryQueryDto {
 export class TradeHistoryQueryDto {
   @ApiPropertyOptional({ example: 20, default: 20 })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   limit?: number;
 
   @ApiPropertyOptional({ example: 0, default: 0 })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   offset?: number;
