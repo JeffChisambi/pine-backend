@@ -26,6 +26,11 @@ export class ReservationService {
 
   /**
    * Reserve funds for a pending order.
+   *
+   * Runs check-and-reserve in a single SERIALIZABLE transaction so two
+   * concurrent orders cannot both pass the availability check and
+   * collectively overdraw the wallet. Idempotent per order: an existing
+   * ACTIVE reservation for the same order is returned unchanged.
    */
   async reserveFunds(params: {
     userId: string;
@@ -33,43 +38,62 @@ export class ReservationService {
     amount: number;
     expiresInMinutes?: number;
   }): Promise<string> {
-    const wallet = await this.repo.findWalletByUserId(params.userId);
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
-
-    if (wallet.isFrozen) {
-      throw new BadRequestException('Wallet is frozen');
-    }
-
     const amountDecimal = new Decimal(params.amount);
-    const reserved = await this.repo.sumActiveReservations(wallet.id);
-    const available = wallet.balance.sub(reserved);
-
-    if (available.lt(amountDecimal)) {
-      throw new BadRequestException(
-        `Insufficient available funds. Available: ${available.toNumber()}, Required: ${params.amount}`,
-      );
-    }
-
     const expiresAt = params.expiresInMinutes
       ? new Date(Date.now() + params.expiresInMinutes * 60_000)
       : new Date(Date.now() + 24 * 60 * 60_000); // Default 24h
 
-    const reservation = await this.repo.createReservation({
-      walletId: wallet.id,
-      orderId: params.orderId,
-      amount: amountDecimal,
-      reason: `Order ${params.orderId}`,
-      expiresAt,
-    });
+    const reservationId = await this.repo.prismaClient.$transaction(
+      async (tx) => {
+        const wallet = await tx.wallet.findUnique({ where: { userId: params.userId } });
+        if (!wallet) {
+          throw new NotFoundException('Wallet not found');
+        }
+        if (wallet.isFrozen) {
+          throw new BadRequestException('Wallet is frozen');
+        }
+
+        // Idempotency: one ACTIVE reservation per order, ever.
+        const existing = await tx.walletReservation.findFirst({
+          where: { orderId: params.orderId, status: 'ACTIVE' },
+          select: { id: true },
+        });
+        if (existing) return existing.id;
+
+        const reservedAgg = await tx.walletReservation.aggregate({
+          where: { walletId: wallet.id, status: 'ACTIVE' },
+          _sum: { amount: true },
+        });
+        const available = wallet.balance.sub(reservedAgg._sum.amount ?? new Decimal(0));
+
+        if (available.lt(amountDecimal)) {
+          throw new BadRequestException(
+            `Insufficient available funds. Available: MWK ${available.toNumber().toLocaleString()}, ` +
+            `Required: MWK ${params.amount.toLocaleString()}`,
+          );
+        }
+
+        const reservation = await tx.walletReservation.create({
+          data: {
+            walletId: wallet.id,
+            orderId: params.orderId,
+            amount: amountDecimal,
+            status: 'ACTIVE',
+            reason: `Order ${params.orderId}`,
+            expiresAt,
+          },
+        });
+        return reservation.id;
+      },
+      { isolationLevel: 'Serializable' as any, maxWait: 5_000, timeout: 10_000 },
+    );
 
     this.logger.log(
       { userId: params.userId, orderId: params.orderId, amount: params.amount },
       'Funds reserved',
     );
 
-    return reservation.id;
+    return reservationId;
   }
 
   /**
@@ -130,17 +154,21 @@ export class ReservationService {
 
   // ── Event Handlers ──────────────────────────────────────────
 
-  /** Order cancelled → release reservation */
+  /** Order cancelled → refund the hold to available balance */
   @OnEvent('trading.order.cancelled')
   async onOrderCancelled(event: { orderId: string }) {
     await this.releaseReservation(event.orderId);
   }
 
-  /** Trade settled → consume reservation */
-  @OnEvent('trading.trade.settled')
-  async onTradeSettled(event: { orderId: string }) {
-    await this.consumeReservation(event.orderId);
+  /** Order rejected (validation failure, broker reject) → refund the hold */
+  @OnEvent('trading.order.rejected')
+  async onOrderRejected(event: { orderId: string }) {
+    await this.releaseReservation(event.orderId);
   }
+
+  // NOTE: consumption on settlement happens INSIDE the trading module's
+  // atomic settlement transaction (same commit as the cash debit), not via
+  // an event handler — the two can never diverge.
 
   // ── Cron: expire stale reservations ─────────────────────────
 

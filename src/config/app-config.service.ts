@@ -10,7 +10,6 @@ import type {
   MastercardGatewayConfig,
   ObservabilityConfig,
   OtpConfig,
-  PaychanguConfig,
   RateLimitConfig,
   RedisConfig,
   SecurityConfig,
@@ -71,10 +70,6 @@ export class AppConfigService {
 
   get sms(): SmsConfig {
     return this.configService.getOrThrow<SmsConfig>('sms');
-  }
-
-  get paychangu(): PaychanguConfig {
-    return this.configService.getOrThrow<PaychanguConfig>('paychangu');
   }
 
   get market(): MarketConfig {

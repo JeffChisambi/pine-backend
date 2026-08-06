@@ -10,8 +10,8 @@ import { ValidationException } from '../exceptions/app.exception';
  * control with decorators, or a loosely-typed query/CSV-import row.
  *
  * @example
- * @Post('webhooks/paychangu')
- * handle(@Body(new ZodValidationPipe(paychanguWebhookSchema)) body: PaychanguWebhookDto) { ... }
+ * @Post('webhooks/gateway')
+ * handle(@Body(new ZodValidationPipe(gatewayWebhookSchema)) body: GatewayWebhookDto) { ... }
  */
 export class ZodValidationPipe<T> implements PipeTransform {
   constructor(private readonly schema: ZodSchema<T>) {}

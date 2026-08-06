@@ -99,12 +99,6 @@ export interface SmsConfig {
   senderId: string;
 }
 
-export interface PaychanguConfig {
-  baseUrl: string;
-  publicKey: string;
-  secretKey: string;
-  webhookSecret: string;
-}
 
 export interface MarketConfig {
   dataSource: 'scraper' | 'api' | 'csv';

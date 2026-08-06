@@ -3,32 +3,25 @@ import { ConfigModule } from '../../config/config.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { TradingModule } from '../trading/trading.module';
 import { MastercardGatewayModule } from '../mastercard-gateway/mastercard-gateway.module';
-import { MastercardGatewayService } from '../mastercard-gateway/services/mastercard-gateway.service';
-import { PaychanguService } from './services/paychangu.service';
-import { BankCardService } from './services/bank-card.service';
 import { PaymentsController } from './controllers/payments.controller';
+import { CardPaymentService } from './services/card-payment.service';
+import { MockBankCardGatewayService } from './services/mock-bank-card.service';
 import { WalletService } from '../wallet/services/wallet.service';
 import { TradingService } from '../trading/services/trading.service';
 
 /**
- * PaymentsModule — payment gateway integrations.
+ * PaymentsModule — bank card deposits.
  *
- * Gateways:
- *   • PayChangu           — mobile money & card via hosted checkout webview
- *   • MastercardGateway   — direct bank card payments (Mastercard Gateway REST API)
+ * Layers:
+ *   PaymentsController → CardPaymentService (orchestration, idempotency,
+ *   failure mapping) → gateway:
+ *     • MastercardGatewayService — live MPGS integration; activates
+ *       automatically once MCGS_MERCHANT_ID + MCGS_API_PASSWORD are set.
+ *     • MockBankCardGatewayService — Test Transaction mode; same contract,
+ *       same error taxonomy, zero business-logic divergence.
  *
- * PayChangu flow:
- *   1. POST /payments/initiate → creates wallet tx + PayChangu checkout
- *   2. User pays in PayChangu checkout
- *   3. GET /payments/callback → verifies + processes payment → deep links to app
- *      - DEPOSIT    → credits wallet balance
- *      - BUY_SHARES → credits wallet, then submits buy order via TradingService
- *   4. GET /payments/verify/:txRef → mobile polls for status
- *
- * Bank Card (Mastercard Gateway) flow:
- *   1. POST /payments/card/initiate → charges card directly via Mastercard Gateway
- *   2. GET /payments/card/verify/:txRef → mobile polls for status
- *   3. POST /v1/payments/mcgs/webhook → gateway sends real-time status updates
+ * Adding another provider = implement the gateway contract + extend the
+ * resolver in CardPaymentService. Business logic stays untouched.
  */
 @Module({
   imports: [
@@ -39,21 +32,10 @@ import { TradingService } from '../trading/services/trading.service';
   ],
   controllers: [PaymentsController],
   providers: [
-    PaychanguService,
-    /**
-     * Wire MastercardGatewayService as the implementation behind the
-     * BankCardService injection token.  Anywhere that injects BankCardService
-     * will receive the Mastercard implementation transparently.
-     */
-    {
-      provide: BankCardService,
-      useExisting: MastercardGatewayService,
-    },
+    CardPaymentService,
+    MockBankCardGatewayService,
   ],
-  exports: [
-    PaychanguService,
-    BankCardService,
-  ],
+  exports: [CardPaymentService],
 })
 export class PaymentsModule implements OnModuleInit {
   constructor(

@@ -75,6 +75,11 @@ export class MastercardGatewayService implements IMastercardGateway, OnModuleIni
   private apiVersion: number;
   private isConfigured: boolean = false;
 
+  /** True once live MPGS credentials (merchantId + apiPassword) are configured. */
+  get isLive(): boolean {
+    return this.isConfigured;
+  }
+
   constructor(private readonly config: AppConfigService) {}
 
   onModuleInit(): void {

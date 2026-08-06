@@ -111,7 +111,18 @@ export class SettlementService {
         return null;
       }
 
-      // ── 1. Cash leg (atomic increment/decrement) ──────────────
+      // ── 1a. Consume the fund reservation (BUY) ────────────────
+      // The hold placed at order submission is consumed in the SAME commit
+      // as the cash debit: reserved → spent is one atomic step, so available
+      // balance never double-counts and never briefly frees the money.
+      if (event.side === 'BUY') {
+        await tx.walletReservation.updateMany({
+          where: { orderId: event.orderId, status: 'ACTIVE' },
+          data: { status: 'CONSUMED', consumedAt: new Date() },
+        });
+      }
+
+      // ── 1b. Cash leg (atomic increment/decrement) ─────────────
       const cashDelta = event.side === 'BUY' ? totalCost : grossValue.sub(totalFees);
       const newBalance =
         event.side === 'BUY'

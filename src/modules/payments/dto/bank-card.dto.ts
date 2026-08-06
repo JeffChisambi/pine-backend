@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -75,6 +76,29 @@ export class InitiateBankCardPaymentDto {
   @IsOptional()
   @IsNumber()
   quantity?: number;
+
+  /**
+   * Client-supplied idempotency key. The same key always maps to the same
+   * payment: replays return the current state and are never charged twice.
+   */
+  @ApiPropertyOptional({ description: 'Idempotency key for duplicate-submit protection' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{8,64}$/, { message: 'idempotencyKey must be 8–64 chars (alphanumeric, - or _)' })
+  idempotencyKey?: string;
+
+  /**
+   * Test Transaction mode: routes the payment through the mock gateway and
+   * simulates the requested outcome end-to-end. Ignored gateway-side in
+   * production flows — a test payment is always explicitly labeled.
+   */
+  @ApiPropertyOptional({
+    description: 'Run as a simulated test transaction with the given outcome',
+    enum: ['success', 'declined', 'insufficient_funds', 'expired_card', 'network_failure', 'timeout', 'duplicate'],
+  })
+  @IsOptional()
+  @IsIn(['success', 'declined', 'insufficient_funds', 'expired_card', 'network_failure', 'timeout', 'duplicate'])
+  testScenario?: 'success' | 'declined' | 'insufficient_funds' | 'expired_card' | 'network_failure' | 'timeout' | 'duplicate';
 }
 
 export class VerifyBankCardPaymentDto {

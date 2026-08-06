@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
 import { AuthModule } from '../auth/auth.module';
+import { WalletModule } from '../wallet/wallet.module';
 
 // Repository
 import { TradingRepository } from './repositories/trading.repository';
@@ -43,6 +44,9 @@ import { TradingController } from './controllers/trading.controller';
     DatabaseModule,
     ConfigModule,
     AuthModule,
+    // Fund reservations: cash is held the moment a BUY order is accepted and
+    // consumed/released by settlement/cancellation.
+    WalletModule,
   ],
   controllers: [TradingController],
   providers: [

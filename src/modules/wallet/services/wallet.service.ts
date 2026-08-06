@@ -145,6 +145,37 @@ export class WalletService {
     return { transactionId: tx.id, status: 'PENDING' };
   }
 
+  /**
+   * Current state of a deposit by its gateway txRef — DB is the source of
+   * truth for payment status polls (never the gateway's in-memory state).
+   */
+  async getDepositStatusByTxRef(userId: string, txRef: string) {
+    const walletId = await this.balanceService.ensureWallet(userId);
+    const tx = await this.repo.findTransactionByIdempotencyKey(walletId, txRef);
+    if (!tx) throw new NotFoundException('Payment not found');
+    return {
+      status: tx.status,
+      amount: Number(tx.amount),
+      currency: 'MWK',
+      updatedAt: (tx.processedAt ?? tx.createdAt).toISOString(),
+    };
+  }
+
+  /**
+   * Mark a PENDING deposit as FAILED (card declined, gateway error…).
+   * Idempotent: only PENDING rows transition; a completed deposit is never
+   * touched, so a late failure signal can not claw back credited funds.
+   */
+  async markDepositFailed(txRef: string, reason: string): Promise<void> {
+    const result = await this.repo.prismaClient.transaction.updateMany({
+      where: { idempotencyKey: txRef, type: 'DEPOSIT', status: 'PENDING' },
+      data: { status: 'FAILED' },
+    });
+    if (result.count > 0) {
+      this.logger.warn({ txRef, reason }, 'Deposit marked FAILED');
+    }
+  }
+
   // ── Withdrawal ──────────────────────────────────────────────
 
   /**

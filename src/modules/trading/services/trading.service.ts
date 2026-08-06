@@ -6,6 +6,7 @@ import { ValidationService } from './validation.service';
 import { RiskService } from './risk.service';
 import { ExecutionEngineService } from './execution-engine.service';
 import { TradingRepository } from '../repositories/trading.repository';
+import { ReservationService } from '../../wallet/services/reservation.service';
 import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
 import { OrderCreatedEvent, OrderCancelledEvent, OrderRejectedEvent } from '../events/trading.events';
 import {
@@ -41,6 +42,7 @@ export class TradingService {
     private readonly executionEngine: ExecutionEngineService,
     private readonly repo: TradingRepository,
     private readonly eventEmitter: EventEmitter2,
+    private readonly reservationService: ReservationService,
   ) {}
 
   /**
@@ -195,7 +197,28 @@ export class TradingService {
         metadata: { checks: ['daily_limit', 'single_order', 'concentration', 'velocity'] },
       });
 
-      // ── Step 4: Queue for broker execution ──────────────────
+      // ── Step 4: Reserve funds (BUY) ─────────────────────────
+      // The full cost is held against the wallet the moment the order is
+      // accepted: available balance drops immediately and the money cannot
+      // be spent on other orders. The hold is consumed atomically at
+      // settlement, or refunded automatically on cancel/reject/expiry.
+      if (dto.side === 'BUY') {
+        await this.reservationService.reserveFunds({
+          userId,
+          orderId: order.id,
+          amount: fees.totalCost.toNumber(),
+          expiresInMinutes: 7 * 24 * 60, // matches the queued-order lifetime
+        });
+
+        await this.repo.createTradeAudit({
+          orderId: order.id,
+          userId,
+          action: 'FUNDS_RESERVED',
+          metadata: { amount: fees.totalCost.toNumber(), currency: 'MWK' },
+        });
+      }
+
+      // ── Step 5: Queue for broker execution ──────────────────
       // Orders are NEVER executed automatically. Every validated order parks
       // at SUBMITTED and waits for the broker to execute it from the Kusata
       // dashboard — the broker is the exchange member who actually places

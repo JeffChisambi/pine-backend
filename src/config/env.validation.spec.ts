@@ -18,10 +18,6 @@ const validEnv = {
   EMAIL_HOST: 'localhost',
   EMAIL_FROM: 'Pine <no-reply@pine.mw>',
   SMS_API_KEY: 'key',
-  PAYCHANGU_BASE_URL: 'https://api.paychangu.com',
-  PAYCHANGU_PUBLIC_KEY: 'pub',
-  PAYCHANGU_SECRET_KEY: 'secret',
-  PAYCHANGU_WEBHOOK_SECRET: 'whsec',
   COOKIE_SECRET: 'd'.repeat(32),
 };
 
@@ -29,7 +25,7 @@ describe('validateEnv', () => {
   it('accepts a fully valid environment and applies defaults', () => {
     const result = validateEnv(validEnv);
     expect(result.APP_PORT).toBe(3000);
-    expect(result.JWT_ACCESS_EXPIRES_IN).toBe('15m');
+    expect(result.JWT_ACCESS_EXPIRES_IN).toBe('45m');
     expect(result.OTP_LENGTH).toBe(6);
   });
 

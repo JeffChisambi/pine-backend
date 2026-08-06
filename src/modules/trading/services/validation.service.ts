@@ -162,11 +162,22 @@ export class ValidationService {
 
   private async checkSufficientFunds(userId: string, totalCost: Decimal): Promise<void> {
     const wallet = await this.repo.findWalletByUserId(userId);
-    if (!wallet || wallet.balance.lt(totalCost)) {
-      const balance = wallet?.balance.toNumber() ?? 0;
+    if (!wallet) {
+      throw new BadRequestException('Wallet not found');
+    }
+    // AVAILABLE balance = total minus funds already reserved for other pending
+    // orders. Checking the raw balance let concurrent orders collectively
+    // overdraw the wallet.
+    const reserved = await this.repo.db.walletReservation.aggregate({
+      where: { walletId: wallet.id, status: 'ACTIVE' },
+      _sum: { amount: true },
+    });
+    const available = wallet.balance.sub(reserved._sum.amount ?? new Decimal(0));
+    if (available.lt(totalCost)) {
       throw new BadRequestException(
-        `Insufficient funds. Required: MWK ${totalCost.toNumber().toLocaleString()}, ` +
-        `Available: MWK ${balance.toLocaleString()}`,
+        `Insufficient available funds. Required: MWK ${totalCost.toNumber().toLocaleString()}, ` +
+        `Available: MWK ${available.toNumber().toLocaleString()} ` +
+        `(funds reserved for pending orders are excluded).`,
       );
     }
   }

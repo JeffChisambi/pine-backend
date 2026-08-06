@@ -111,13 +111,6 @@ export const smsConfig = registerAs('sms', () => ({
   senderId: process.env.SMS_SENDER_ID ?? 'PINE',
 }));
 
-export const paychanguConfig = registerAs('paychangu', () => ({
-  baseUrl: process.env.PAYCHANGU_BASE_URL,
-  publicKey: process.env.PAYCHANGU_PUBLIC_KEY,
-  secretKey: process.env.PAYCHANGU_SECRET_KEY,
-  webhookSecret: process.env.PAYCHANGU_WEBHOOK_SECRET,
-}));
-
 export const marketConfig = registerAs('market', () => ({
   dataSource: process.env.MSE_DATA_SOURCE ?? 'scraper',
   apiBaseUrl: process.env.MSE_API_BASE_URL,
@@ -158,7 +151,6 @@ export const allConfigs = [
   storageConfig,
   emailConfig,
   smsConfig,
-  paychanguConfig,
   marketConfig,
   observabilityConfig,
   mastercardGatewayConfig,

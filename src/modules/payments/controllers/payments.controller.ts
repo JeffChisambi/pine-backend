@@ -7,11 +7,6 @@ import {
   Logger,
   Param,
   Post,
-  Query,
-  Req,
-  Res,
-  Headers,
-  UnauthorizedException,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -19,426 +14,59 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Request, Response } from 'express';
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
-import { Public } from '../../../core/decorators/public.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
-import { AppConfigService } from '../../../config/app-config.service';
-import { PaychanguService } from '../services/paychangu.service';
-import { BankCardService } from '../services/bank-card.service';
-import { WalletService } from '../../wallet/services/wallet.service';
-import { InitiatePaymentDto } from '../dto/payment.dto';
+import { CardPaymentService } from '../services/card-payment.service';
 import { InitiateBankCardPaymentDto, BankCardPaymentResponse } from '../dto/bank-card.dto';
-import { randomUUID } from 'crypto';
 
 /**
- * PaymentsController — handles PayChangu payment flows.
+ * PaymentsController — bank card deposits.
  *
  * Flow:
- *  1. Mobile app → POST /payments/initiate (authenticated)
- *     - Creates a PENDING wallet transaction
- *     - Calls PayChangu API to get a checkout_url
- *     - Returns { checkoutUrl, txRef } to mobile
+ *   1. Mobile app → POST /payments/card/initiate (authenticated)
+ *      Creates a PENDING wallet deposit, charges the card through the
+ *      resolved gateway (Mastercard MPGS when configured; the mock gateway
+ *      in Test Transaction mode), and credits the wallet atomically on
+ *      success.
+ *   2. Mobile app → GET /payments/card/verify/:txRef (authenticated)
+ *      Polls the deposit's status; the database is the source of truth.
  *
- *  2. User pays in the PayChangu checkout (browser/webview)
- *
- *  3. PayChangu redirects → GET /payments/callback?tx_ref=...&status=...
- *     - Backend verifies payment with PayChangu
- *     - If successful, processes the deposit (credits wallet)
- *     - Redirects to mobile app via deep link: pine://payment/success?tx_ref=...
- *
- *  4. Mobile app → GET /payments/verify/:txRef (authenticated)
- *     - Returns the current status of the payment
+ * PCI-DSS: card details transit this endpoint solely to reach the gateway.
+ * They are never logged, stored, or echoed back (only brand + last4).
+ * TLS-only in production; tokenise client-side when the gateway's hosted
+ * session is enabled to reduce PCI scope further.
  */
 @ApiTags('payments')
 @Controller('payments')
 export class PaymentsController {
   private readonly logger = new Logger(PaymentsController.name);
 
-  constructor(
-    private readonly paychangu: PaychanguService,
-    private readonly bankCardService: BankCardService,
-    private readonly walletService: WalletService,
-    private readonly config: AppConfigService,
-  ) {}
+  constructor(private readonly cardPayments: CardPaymentService) {}
 
-  // ── Initiate Payment ─────────────────────────────────────
-
-  @Post('initiate')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Initiate a PayChangu checkout for deposit/purchase' })
-  @ApiResponse({ status: 201, description: 'Checkout session created' })
-  async initiatePayment(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() dto: InitiatePaymentDto,
-  ) {
-    const txRef = `PINE-${randomUUID()}`;
-    const purpose = dto.purpose || 'DEPOSIT';
-
-    const baseUrl = this.config.app.url;
-    const callbackUrl = `${baseUrl}/v1/payments/callback`;
-    const returnUrl = `${baseUrl}/v1/payments/return`;
-
-    this.logger.log({
-      userId: user.id,
-      amount: dto.amount,
-      currency: dto.currency,
-      purpose,
-      txRef,
-      callbackUrl,
-    }, 'Initiating payment');
-
-    // Create a pending wallet deposit transaction
-    const { transactionId } = await this.walletService.initiateDeposit({
-      userId: user.id,
-      amount: dto.amount,
-      idempotencyKey: txRef,
-      metadata: {
-        purpose,
-        stockSymbol: dto.stockSymbol,
-        quantity: dto.quantity,
-      },
-    });
-
-    // Call PayChangu to create checkout
-    const result = await this.paychangu.initiatePayment({
-      amount: dto.amount,
-      currency: dto.currency,
-      txRef,
-      email: user.email ?? undefined,
-      callbackUrl,
-      returnUrl,
-      meta: {
-        userId: user.id,
-        transactionId,
-        purpose,
-        stockSymbol: dto.stockSymbol,
-        quantity: dto.quantity,
-      },
-      customization: {
-        title: purpose === 'BUY_SHARES'
-          ? `Buy ${dto.quantity} ${dto.stockSymbol} shares`
-          : 'Pine Wallet Deposit',
-        description: `MWK ${dto.amount.toLocaleString()} payment via Pine`,
-      },
-    });
-
-    // PayChangu returns checkout_url at result.data.checkout_url.
-    // Guard against undefined in case the response shape changes.
-    const checkoutUrl = result.data?.checkout_url;
-    const txRefResolved = result.data?.data?.tx_ref ?? txRef;
-
-    if (!checkoutUrl) {
-      this.logger.error({ txRef, result }, 'PayChangu response missing checkout_url');
-      throw new Error('Payment gateway did not return a checkout URL. Please try again.');
-    }
-
-    return {
-      checkoutUrl,
-      txRef: txRefResolved,
-      transactionId,
-      status: 'PENDING',
-    };
-  }
-
-  // ── Callback (PayChangu redirects here after payment) ────
-
-  @Get('callback')
-  @Public()
-  @ApiOperation({ summary: 'PayChangu payment callback — verifies and processes payment' })
-  async handleCallback(
-    @Query('tx_ref') txRef: string,
-    @Query('status') status: string,
-    @Res() res: Response,
-  ) {
-    this.logger.log({ txRef, status }, 'PayChangu callback received');
-
-    const baseUrl = this.config.app.url;
-
-    try {
-      // Verify with PayChangu
-      const verification = await this.paychangu.verifyPayment(txRef);
-
-      if (verification.data?.status === 'success') {
-        // Process the payment by txRef — branches on metadata.purpose:
-        //   DEPOSIT    → credit wallet only
-        //   BUY_SHARES → credit wallet, then submit buy order
-        await this.walletService.processPaymentByTxRef(txRef);
-        this.logger.log({ txRef }, 'Payment verified and processed');
-
-        // Redirect back to the app via the HTTPS sentinel page
-        return res.redirect(`${baseUrl}/v1/payments/app-return?status=success&tx_ref=${txRef}`);
-      } else {
-        this.logger.warn({ txRef, payStatus: verification.data?.status }, 'Payment not successful');
-        return res.redirect(`${baseUrl}/v1/payments/app-return?status=failed&tx_ref=${txRef}`);
-      }
-    } catch (error) {
-      this.logger.error({ err: error, txRef }, 'Callback processing failed');
-      return res.redirect(
-        `${baseUrl}/v1/payments/app-return?status=failed&tx_ref=${txRef}&error=verification_failed`,
-      );
-    }
-  }
-
-  // ── Return URL (user cancelled or failed) ─────────────────
-
-  @Get('return')
-  @Public()
-  @ApiOperation({ summary: 'PayChangu return URL for cancelled/failed payments' })
-  async handleReturn(
-    @Query('tx_ref') txRef: string,
-    @Query('status') status: string,
-    @Res() res: Response,
-  ) {
-    this.logger.log({ txRef, status }, 'PayChangu return (cancelled/failed)');
-    const baseUrl = this.config.app.url;
-    return res.redirect(`${baseUrl}/v1/payments/app-return?status=cancelled&tx_ref=${txRef}`);
-  }
-
-  // ── App Return (HTTPS sentinel the mobile WebView intercepts) ─────────────
-
-  @Get('app-return')
-  @Public()
-  @ApiOperation({ summary: 'HTTPS landing page the mobile app WebView intercepts after payment' })
-  async handleAppReturn(
-    @Query('status') status: string,
-    @Query('tx_ref') txRef: string,
-    @Res() res: Response,
-  ) {
-    this.logger.log({ txRef, status }, 'App return page served');
-
-    // Minimal self-contained page. The mobile WebView matches this URL by path
-    // (/payments/app-return) and routes in-app before this is ever shown for long.
-    const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Returning to Pine…</title>
-<style>
-  html,body{height:100%;margin:0}
-  body{display:flex;flex-direction:column;align-items:center;justify-content:center;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-    background:#F9FAFB;color:#164951}
-  .spinner{width:40px;height:40px;border:4px solid rgba(22,73,81,.15);
-    border-top-color:#164951;border-radius:50%;animation:spin 1s linear infinite}
-  p{margin-top:20px;font-size:15px;color:#164951}
-  @keyframes spin{to{transform:rotate(360deg)}}
-</style>
-</head>
-<body>
-  <div class="spinner"></div>
-  <p>Returning to Pine…</p>
-</body>
-</html>`;
-
-    return res.status(HttpStatus.OK).type('html').send(html);
-  }
-
-  // ── Verify Payment (mobile app polls this) ────────────────
-
-  @Get('verify/:txRef')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Verify payment status' })
-  async verifyPayment(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('txRef') txRef: string,
-  ) {
-    this.logger.log({ userId: user.id, txRef }, 'Verifying payment');
-
-    const verification = await this.paychangu.verifyPayment(txRef);
-
-    return {
-      txRef,
-      status: verification.data?.status || 'unknown',
-      amount: verification.data?.amount,
-      currency: verification.data?.currency,
-      channel: verification.data?.authorization?.channel,
-      completedAt: verification.data?.authorization?.completed_at,
-    };
-  }
-
-  // ── Webhook (PayChangu server-to-server) ──────────────────────────────────
-
-  @Post('webhook')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'PayChangu webhook endpoint' })
-  async handleWebhook(
-    @Req() req: Request,
-    @Headers('verif-hash') verifHash: string | undefined,
-    @Body() body: any,
-  ) {
-    this.logger.log({ event: body?.event, txRef: body?.tx_ref }, 'Webhook received');
-
-    // Verify the HMAC-SHA512 signature PayChangu sends in the `verif-hash` header.
-    // Uses timing-safe comparison to prevent timing attacks.
-    const webhookSecret = this.config.paychangu.webhookSecret;
-    if (webhookSecret) {
-      if (!verifHash) {
-        this.logger.warn('Webhook rejected — missing verif-hash header');
-        throw new UnauthorizedException('Missing webhook signature');
-      }
-
-      // Use raw body for HMAC if available (requires rawBody: true in bootstrap),
-      // fall back to re-serialised JSON otherwise.
-      const rawBody: Buffer | undefined = (req as any).rawBody;
-      const payload = rawBody ? rawBody : Buffer.from(JSON.stringify(body));
-
-      const expected = createHmac('sha512', webhookSecret)
-        .update(payload)
-        .digest('hex');
-
-      let signatureValid = false;
-      try {
-        signatureValid = timingSafeEqual(
-          Buffer.from(expected, 'hex'),
-          Buffer.from(verifHash, 'hex'),
-        );
-      } catch {
-        // Buffer lengths differ — signature is invalid
-        signatureValid = false;
-      }
-
-      if (!signatureValid) {
-        this.logger.warn({ txRef: body?.tx_ref }, 'Webhook rejected — invalid signature');
-        throw new UnauthorizedException('Invalid webhook signature');
-      }
-    }
-
-    // Process confirmed payment events
-    if (body?.event === 'payment.success' && body?.tx_ref) {
-      try {
-        // Without a webhook secret the request is unauthenticated, so never
-        // trust the payload alone — confirm with PayChangu's API before
-        // crediting (same gate the browser callback uses).
-        if (!webhookSecret) {
-          this.logger.warn(
-            'PAYCHANGU_WEBHOOK_SECRET not set — verifying payment with PayChangu API before processing',
-          );
-          const verification = await this.paychangu.verifyPayment(body.tx_ref as string);
-          if (verification.data?.status !== 'success') {
-            this.logger.warn(
-              { txRef: body.tx_ref, status: verification.data?.status },
-              'Webhook rejected — PayChangu verification did not confirm success',
-            );
-            return { received: true };
-          }
-        }
-
-        await this.walletService.processPaymentByTxRef(body.tx_ref as string);
-        this.logger.log({ txRef: body.tx_ref }, 'Webhook: payment processed');
-      } catch (error) {
-        this.logger.error({ err: error, txRef: body.tx_ref }, 'Webhook: payment processing failed');
-      }
-    }
-
-    return { received: true };
-  }
-
-  // ── Bank Card: Initiate ───────────────────────────────────────────────────
-
-  /**
-   * POST /payments/card/initiate
-   *
-   * Initiates a bank card payment:
-   *   1. Creates a PENDING wallet deposit transaction
-   *   2. Forwards card details to BankCardService (skeleton — integrate processor)
-   *   3. Returns txRef + status to the mobile app
-   *
-   * ⚠️  PCI-DSS note: In production, tokenise card data client-side before
-   *      sending to this endpoint to reduce PCI scope.
-   */
   @Post('card/initiate')
   @HttpCode(HttpStatus.CREATED)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Initiate a bank card payment (skeleton — processor TODO)' })
-  @ApiResponse({ status: 201, description: 'Card charge initiated', type: BankCardPaymentResponse })
-  @ApiResponse({ status: 501, description: 'Bank card processor not yet configured' })
+  @ApiOperation({ summary: 'Charge a bank card and credit the wallet' })
+  @ApiResponse({ status: 201, description: 'Charge outcome (SUCCESS or FAILED)', type: BankCardPaymentResponse })
+  @ApiResponse({ status: 503, description: 'Live card gateway not yet enabled (use Test Transaction mode)' })
   async initiateCardPayment(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: InitiateBankCardPaymentDto,
   ): Promise<BankCardPaymentResponse> {
-    const txRef = `PINE-CARD-${randomUUID()}`;
-    const purpose = dto.purpose ?? 'wallet_deposit';
-
-    this.logger.log(
-      { userId: user.id, amount: dto.amount, currency: dto.currency, purpose, txRef },
-      'Initiating bank card payment',
+    return this.cardPayments.initiateCardPayment(
+      { id: user.id, email: user.email },
+      dto,
     );
-
-    // Step 1: Create a PENDING wallet deposit so the transaction is recorded
-    // regardless of whether the processor call succeeds.
-    const { transactionId } = await this.walletService.initiateDeposit({
-      userId: user.id,
-      amount: dto.amount,
-      idempotencyKey: txRef,
-    });
-
-    // Step 2: Forward to BankCardService (will throw NotImplementedException
-    // until a real processor is wired up).
-    const chargeResult = await this.bankCardService.chargeCard({
-      txRef,
-      amount: dto.amount,
-      currency: dto.currency,
-      cardholderName: dto.cardholderName,
-      cardNumber: dto.cardNumber,
-      expiryMonth: dto.expiryMonth,
-      expiryYear: dto.expiryYear,
-      cvv: dto.cvv,
-      email: user.email ?? undefined,
-      meta: {
-        userId: user.id,
-        transactionId,
-        purpose,
-        stockSymbol: dto.stockSymbol,
-        quantity: dto.quantity,
-      },
-    });
-
-    return {
-      txRef: chargeResult.txRef,
-      transactionId,
-      status: chargeResult.status,
-      amount: chargeResult.amount,
-      currency: chargeResult.currency as 'MWK' | 'USD',
-      message: chargeResult.message,
-      processorReference: chargeResult.processorReference,
-      last4: chargeResult.last4,
-      cardBrand: chargeResult.cardBrand,
-    };
   }
 
-  // ── Bank Card: Verify ─────────────────────────────────────────────────────
-
-  /**
-   * GET /payments/card/verify/:txRef
-   *
-   * Poll the bank card processor for the current status of a transaction.
-   * The mobile app calls this after initiating a card payment.
-   */
   @Get('card/verify/:txRef')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Verify a bank card payment status (skeleton — processor TODO)' })
+  @ApiOperation({ summary: 'Verify a bank card payment status' })
   @ApiResponse({ status: 200, description: 'Current payment status' })
   async verifyCardPayment(
     @CurrentUser() user: AuthenticatedUser,
     @Param('txRef') txRef: string,
   ) {
-    this.logger.log({ userId: user.id, txRef }, 'Verifying bank card payment');
-
-    const result = await this.bankCardService.verifyTransaction(txRef);
-
-    return {
-      txRef: result.txRef,
-      status: result.status,
-      amount: result.amount,
-      currency: result.currency,
-      processorReference: result.processorReference,
-      updatedAt: result.updatedAt,
-      failureReason: result.failureReason,
-    };
+    return this.cardPayments.verifyCardPayment(user.id, txRef);
   }
 }

@@ -90,12 +90,6 @@ export const envSchema = z.object({
   SMS_USERNAME: z.string().optional(),
   SMS_SENDER_ID: z.string().default('PINE'),
 
-  // Payments: PayChangu
-  PAYCHANGU_BASE_URL: z.string().url(),
-  PAYCHANGU_PUBLIC_KEY: z.string().min(1),
-  PAYCHANGU_SECRET_KEY: z.string().min(1),
-  PAYCHANGU_WEBHOOK_SECRET: z.string().min(1),
-
   // Market sync
   MSE_DATA_SOURCE: z.enum(['scraper', 'api', 'csv']).default('scraper'),
   MSE_API_BASE_URL: z.string().optional(),
