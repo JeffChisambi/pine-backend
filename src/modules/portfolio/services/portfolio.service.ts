@@ -101,7 +101,10 @@ export class PortfolioService {
    */
   async getPortfolioSummary(userId: string): Promise<PortfolioSummary> {
     // Single source of truth — the value is DERIVED on every read, never
-    // stored:  Portfolio Value = Available Cash + Σ(quantity × latest price)
+    // stored:  Portfolio Value = Σ(quantity × latest market price).
+    // Wallet cash is SEPARATE money (shown on the home screen) and is
+    // deliberately NOT part of the portfolio value; it is reported in
+    // cashBalance for reference only.
     const [holdings, cash] = await Promise.all([
       this.repo.findUserHoldings(userId),
       this.repo.getAvailableCash(userId),
@@ -110,7 +113,7 @@ export class PortfolioService {
 
     const summary = this.calculator.calculateSummary(holdings, cashBalance);
     const totalMarketValue = summary.totalMarketValue;
-    const portfolioValue = cashBalance.add(totalMarketValue);
+    const portfolioValue = totalMarketValue;
 
     const pnlPercent = summary.totalInvested.gt(0)
       ? summary.totalUnrealizedPnl.div(summary.totalInvested).mul(100).toNumber()

@@ -27,14 +27,12 @@ export class ValuationService {
    * Get current valuations for all holdings.
    */
   async getValuations(userId: string): Promise<HoldingDetail[]> {
-    const [holdings, cash] = await Promise.all([
-      this.repo.findUserHoldings(userId),
-      this.repo.getAvailableCash(userId),
-    ]);
+    const holdings = await this.repo.findUserHoldings(userId);
 
-    const cashBalance = cash.available;
-    const summary = this.calculator.calculateSummary(holdings, cashBalance);
-    const totalPortfolioValue = cashBalance.add(summary.totalMarketValue);
+    // Portfolio value = market value of holdings only (cash is separate
+    // money); weights therefore sum to 100% across owned assets.
+    const summary = this.calculator.calculateSummary(holdings, new Decimal(0));
+    const totalPortfolioValue = summary.totalMarketValue;
 
     return this.calculator.calculateHoldings(holdings as any, totalPortfolioValue);
   }
@@ -46,13 +44,9 @@ export class ValuationService {
     const holding = await this.repo.findUserHolding(userId, stockId);
     if (!holding || holding.quantity.lte(0)) return null;
 
-    const [holdings, cash] = await Promise.all([
-      this.repo.findUserHoldings(userId),
-      this.repo.getAvailableCash(userId),
-    ]);
-    const cashBalance = cash.available;
-    const summary = this.calculator.calculateSummary(holdings, cashBalance);
-    const totalPortfolioValue = cashBalance.add(summary.totalMarketValue);
+    const holdings = await this.repo.findUserHoldings(userId);
+    const summary = this.calculator.calculateSummary(holdings, new Decimal(0));
+    const totalPortfolioValue = summary.totalMarketValue;
 
     const details = this.calculator.calculateHoldings([holding] as any, totalPortfolioValue);
     return details[0] ?? null;
