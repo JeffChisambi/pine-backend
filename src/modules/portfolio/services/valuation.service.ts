@@ -27,10 +27,12 @@ export class ValuationService {
    * Get current valuations for all holdings.
    */
   async getValuations(userId: string): Promise<HoldingDetail[]> {
-    const holdings = await this.repo.findUserHoldings(userId);
-    const wallet = await this.repo.findWalletByUserId(userId);
+    const [holdings, cash] = await Promise.all([
+      this.repo.findUserHoldings(userId),
+      this.repo.getAvailableCash(userId),
+    ]);
 
-    const cashBalance = wallet?.balance ?? new Decimal(0);
+    const cashBalance = cash.available;
     const summary = this.calculator.calculateSummary(holdings, cashBalance);
     const totalPortfolioValue = cashBalance.add(summary.totalMarketValue);
 
@@ -44,9 +46,11 @@ export class ValuationService {
     const holding = await this.repo.findUserHolding(userId, stockId);
     if (!holding || holding.quantity.lte(0)) return null;
 
-    const wallet = await this.repo.findWalletByUserId(userId);
-    const holdings = await this.repo.findUserHoldings(userId);
-    const cashBalance = wallet?.balance ?? new Decimal(0);
+    const [holdings, cash] = await Promise.all([
+      this.repo.findUserHoldings(userId),
+      this.repo.getAvailableCash(userId),
+    ]);
+    const cashBalance = cash.available;
     const summary = this.calculator.calculateSummary(holdings, cashBalance);
     const totalPortfolioValue = cashBalance.add(summary.totalMarketValue);
 

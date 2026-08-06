@@ -82,6 +82,37 @@ export class PortfolioRepository {
     return this.prisma.wallet.findUnique({ where: { userId } });
   }
 
+  /**
+   * Available cash = wallet balance − active reservations − pending
+   * withdrawals. This is the cash component of the portfolio valuation:
+   * money already committed to open orders or outbound transfers is not
+   * part of the investor's spendable wealth.
+   */
+  async getAvailableCash(userId: string): Promise<{ total: Decimal; available: Decimal }> {
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) return { total: new Decimal(0), available: new Decimal(0) };
+
+    const [reservedAgg, pendingWithdrawalAgg] = await Promise.all([
+      this.prisma.walletReservation.aggregate({
+        where: { walletId: wallet.id, status: 'ACTIVE' },
+        _sum: { amount: true },
+      }),
+      this.prisma.transaction.aggregate({
+        where: {
+          walletId: wallet.id,
+          type: 'WITHDRAWAL',
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const reserved = reservedAgg._sum.amount ?? new Decimal(0);
+    const pendingOut = pendingWithdrawalAgg._sum.amount ?? new Decimal(0);
+    const available = Decimal.max(wallet.balance.sub(reserved).sub(pendingOut), new Decimal(0));
+    return { total: wallet.balance, available };
+  }
+
   // ── Snapshots ───────────────────────────────────────────────
 
   async upsertSnapshot(data: {

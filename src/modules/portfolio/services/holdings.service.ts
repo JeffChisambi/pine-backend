@@ -24,58 +24,8 @@ export class HoldingsService {
    * BUY:  Weighted average cost = (existing × avgCost + new × price) / (existing + new)
    * SELL: Average cost stays the same, quantity decreases
    */
-  async updateHoldingFromTrade(params: {
-    userId: string;
-    stockId: string;
-    side: 'BUY' | 'SELL';
-    quantity: number;
-    price: number;
-  }) {
-    const quantityDecimal = new Decimal(params.quantity);
-    const priceDecimal = new Decimal(params.price);
-
-    const existing = await this.repo.findUserHolding(params.userId, params.stockId);
-
-    let newAverageCost: Decimal;
-    let quantityDelta: Decimal;
-
-    if (params.side === 'BUY') {
-      quantityDelta = quantityDecimal;
-      if (existing && existing.quantity.gt(0)) {
-        // Weighted average cost
-        const existingTotal = existing.quantity.mul(existing.averageCost);
-        const newTotal = quantityDecimal.mul(priceDecimal);
-        const combinedQty = existing.quantity.add(quantityDecimal);
-        newAverageCost = existingTotal.add(newTotal).div(combinedQty);
-      } else {
-        newAverageCost = priceDecimal;
-      }
-    } else {
-      // SELL: reduce quantity, keep average cost
-      quantityDelta = quantityDecimal.neg();
-      newAverageCost = existing?.averageCost ?? priceDecimal;
-    }
-
-    const holding = await this.repo.upsertHolding(
-      params.userId,
-      params.stockId,
-      quantityDelta,
-      newAverageCost,
-    );
-
-    this.logger.log(
-      {
-        userId: params.userId,
-        stockId: params.stockId,
-        side: params.side,
-        newQty: holding.quantity.toString(),
-        avgCost: newAverageCost.toString(),
-      },
-      'Holding updated',
-    );
-
-    return holding;
-  }
+  // NOTE: holdings are mutated ONLY inside the trading module's atomic
+  // settlement transaction (SettlementService) — this service is read-only.
 
   /**
    * Get all holdings for a user (with stock data for display).

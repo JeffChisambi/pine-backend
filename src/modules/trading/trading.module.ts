@@ -13,7 +13,6 @@ import { ValidationService } from './services/validation.service';
 import { MarketService } from './services/market.service';
 import { RiskService } from './services/risk.service';
 import { ExecutionEngineService } from './services/execution-engine.service';
-import { LedgerService } from './services/ledger.service';
 import { SettlementService } from './services/settlement.service';
 import {
   BrokerGateway,
@@ -33,7 +32,7 @@ import { TradingController } from './controllers/trading.controller';
  *     → ValidationService  (pre-trade checks)
  *     → RiskService        (risk limits)
  *     → ExecutionEngine     (trade execution via BrokerGateway)
- *     → LedgerService      (double-entry bookkeeping, via events)
+ *     → SettlementService  (atomic: cash + ledger + holdings + settle)
  *     → SettlementService  (T+0 settlement, via events)
  *
  * BrokerGateway uses SandboxBrokerAdapter by default.
@@ -67,7 +66,6 @@ import { TradingController } from './controllers/trading.controller';
     ValidationService,
     RiskService,
     ExecutionEngineService,
-    LedgerService,
     SettlementService,
     TradingService,
   ],

@@ -4,7 +4,6 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PortfolioRepository } from '../repositories/portfolio.repository';
 import { PortfolioCalculator, PortfolioSummary } from './portfolio-calculator.service';
-import { HoldingsService } from './holdings.service';
 import { ValuationService } from './valuation.service';
 import { PerformanceService } from './performance.service';
 import { AllocationService } from './allocation.service';
@@ -38,7 +37,6 @@ export class PortfolioService {
   constructor(
     private readonly repo: PortfolioRepository,
     private readonly calculator: PortfolioCalculator,
-    private readonly holdingsService: HoldingsService,
     private readonly valuationService: ValuationService,
     private readonly performanceService: PerformanceService,
     private readonly allocationService: AllocationService,
@@ -67,24 +65,20 @@ export class PortfolioService {
       'Portfolio: handling settled trade',
     );
 
-    // 1. Update holdings
-    const holding = await this.holdingsService.updateHoldingFromTrade({
-      userId: event.userId,
-      stockId: event.stockId,
-      side: event.side,
-      quantity: event.quantity,
-      price: event.price,
-    });
+    // Holdings are updated ATOMICALLY with the cash leg inside the trading
+    // module's settlement transaction — by the time this event fires, the
+    // position already reflects the trade. This handler only reacts.
+    const holding = await this.repo.findUserHolding(event.userId, event.stockId);
 
-    // 2. Generate fresh snapshot
+    // Generate fresh snapshot
     await this.snapshotService.generateSnapshot(event.userId);
 
-    // 3. Publish portfolio updated event
+    // Publish portfolio updated event
     this.eventEmitter.emit(PORTFOLIO_UPDATED_EVENT, {
       userId: event.userId,
       stockId: event.stockId,
-      newQuantity: holding.quantity.toNumber(),
-      averageCost: holding.averageCost.toNumber(),
+      newQuantity: holding ? holding.quantity.toNumber() : 0,
+      averageCost: holding ? holding.averageCost.toNumber() : 0,
     });
 
     this.logger.log(
@@ -106,9 +100,13 @@ export class PortfolioService {
    * GET /portfolio — full portfolio overview.
    */
   async getPortfolioSummary(userId: string): Promise<PortfolioSummary> {
-    const holdings = await this.repo.findUserHoldings(userId);
-    const wallet = await this.repo.findWalletByUserId(userId);
-    const cashBalance = wallet?.balance ?? new Decimal(0);
+    // Single source of truth — the value is DERIVED on every read, never
+    // stored:  Portfolio Value = Available Cash + Σ(quantity × latest price)
+    const [holdings, cash] = await Promise.all([
+      this.repo.findUserHoldings(userId),
+      this.repo.getAvailableCash(userId),
+    ]);
+    const cashBalance = cash.available;
 
     const summary = this.calculator.calculateSummary(holdings, cashBalance);
     const totalMarketValue = summary.totalMarketValue;
