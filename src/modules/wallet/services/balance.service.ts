@@ -50,22 +50,26 @@ export class BalanceService {
   }
 
   /**
-   * Quick balance check (no reservations detail).
+   * Quick balance check. Returns the documented contract the mobile app
+   * consumes: total balance plus available/reserved breakdown. Missing
+   * availableBalance here previously made the app treat a deposit amount
+   * as the entire balance.
    */
   async getBalance(userId: string): Promise<{
     balance: number;
+    availableBalance: number;
+    reservedBalance: number;
     currency: string;
     isFrozen: boolean;
   }> {
-    const wallet = await this.repo.findWalletByUserId(userId);
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+    const summary = await this.getWalletSummary(userId);
 
     return {
-      balance: wallet.balance.toNumber(),
-      currency: wallet.currency,
-      isFrozen: wallet.isFrozen,
+      balance: summary.totalBalance,
+      availableBalance: summary.availableBalance,
+      reservedBalance: summary.reservedBalance,
+      currency: summary.currency,
+      isFrozen: summary.isFrozen,
     };
   }
 

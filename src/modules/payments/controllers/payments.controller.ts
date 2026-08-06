@@ -306,13 +306,28 @@ export class PaymentsController {
         this.logger.warn({ txRef: body?.tx_ref }, 'Webhook rejected — invalid signature');
         throw new UnauthorizedException('Invalid webhook signature');
       }
-    } else {
-      this.logger.warn('PAYCHANGU_WEBHOOK_SECRET not set — skipping signature verification');
     }
 
     // Process confirmed payment events
     if (body?.event === 'payment.success' && body?.tx_ref) {
       try {
+        // Without a webhook secret the request is unauthenticated, so never
+        // trust the payload alone — confirm with PayChangu's API before
+        // crediting (same gate the browser callback uses).
+        if (!webhookSecret) {
+          this.logger.warn(
+            'PAYCHANGU_WEBHOOK_SECRET not set — verifying payment with PayChangu API before processing',
+          );
+          const verification = await this.paychangu.verifyPayment(body.tx_ref as string);
+          if (verification.data?.status !== 'success') {
+            this.logger.warn(
+              { txRef: body.tx_ref, status: verification.data?.status },
+              'Webhook rejected — PayChangu verification did not confirm success',
+            );
+            return { received: true };
+          }
+        }
+
         await this.walletService.processPaymentByTxRef(body.tx_ref as string);
         this.logger.log({ txRef: body.tx_ref }, 'Webhook: payment processed');
       } catch (error) {

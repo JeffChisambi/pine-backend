@@ -136,10 +136,13 @@ export class DistributionEngine {
               },
             });
 
-            // Update wallet balance
+            // Update wallet balance — atomic increment, never a replacement.
             await tx.wallet.update({
               where: { id: wallet.id, version: wallet.version },
-              data: { balance: newBalance, version: { increment: 1 } },
+              data: {
+                balance: { increment: netAmount },
+                version: { increment: 1 },
+              },
             });
           }
 

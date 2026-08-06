@@ -255,10 +255,15 @@ export class WalletService {
         },
       });
 
-      // Update wallet balance (denormalized)
+      // Update wallet balance (denormalized). Atomic increment: the DB adds
+      // the deposit to the current balance — never a replacement — so the
+      // credited amount can never overwrite the balance.
       await tx.wallet.update({
         where: { id: wallet.id, version: wallet.version },
-        data: { balance: newBalance, version: { increment: 1 } },
+        data: {
+          balance: { increment: transaction.amount },
+          version: { increment: 1 },
+        },
       });
 
       // Mark transaction completed
@@ -429,10 +434,15 @@ export class WalletService {
         },
       });
 
-      // Update wallet balance (denormalized)
+      // Update wallet balance (denormalized). Atomic decrement mirrors the
+      // deposit path; the negative-balance guard above ran inside the same
+      // serializable transaction.
       await tx.wallet.update({
         where: { id: wallet.id, version: wallet.version },
-        data: { balance: newBalance, version: { increment: 1 } },
+        data: {
+          balance: { decrement: transaction.amount },
+          version: { increment: 1 },
+        },
       });
 
       // Mark transaction completed

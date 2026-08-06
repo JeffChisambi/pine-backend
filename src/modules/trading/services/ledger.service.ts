@@ -57,11 +57,12 @@ export class LedgerService {
           // BUY: debit user wallet (cash out)
           const newBalance = wallet.balance.sub(totalCost);
 
-          // Update wallet balance with optimistic locking
+          // Atomic decrement with optimistic locking (never a replacement —
+          // the wallet row was read outside this transaction).
           await tx.wallet.update({
             where: { id: wallet.id, version: wallet.version },
             data: {
-              balance: newBalance,
+              balance: { decrement: totalCost },
               version: { increment: 1 },
             },
           });
@@ -100,10 +101,11 @@ export class LedgerService {
           const netProceeds = grossValue.sub(totalFees);
           const newBalance = wallet.balance.add(netProceeds);
 
+          // Atomic increment with optimistic locking (never a replacement).
           await tx.wallet.update({
             where: { id: wallet.id, version: wallet.version },
             data: {
-              balance: newBalance,
+              balance: { increment: netProceeds },
               version: { increment: 1 },
             },
           });
