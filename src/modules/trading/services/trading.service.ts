@@ -170,43 +170,6 @@ export class TradingService {
         },
       });
 
-      // ── Market-hours check ──────────────────────────────────
-      // Unlike validation errors (wrong KYC, frozen wallet etc.), a closed
-      // market is NOT a reason to reject the order. We queue it at SUBMITTED
-      // so the broker can see and execute it from Kusata when the market opens.
-      const marketOpen = await this.validationService.checkIsMarketOpen();
-      if (!marketOpen) {
-        assertTransition(
-          OrderLifecycleStatus.VALIDATED,
-          OrderLifecycleStatus.SUBMITTED,
-        );
-        await this.repo.updateOrderStatus(order.id, OrderLifecycleStatus.SUBMITTED, {
-          submittedAt: new Date(),
-        });
-
-        await this.repo.createTradeAudit({
-          orderId: order.id,
-          userId,
-          action: 'ORDER_QUEUED_MARKET_CLOSED',
-          fromStatus: OrderLifecycleStatus.VALIDATED,
-          toStatus: OrderLifecycleStatus.SUBMITTED,
-          metadata: {
-            reason: 'Market closed — order queued for broker execution during next session',
-            estimatedPrice: estimatedPrice.toNumber(),
-          },
-        });
-
-        const durationMs = Date.now() - startTime;
-        this.logger.log(
-          { orderId: order.id, durationMs },
-          'Order queued — market is closed, pending broker execution',
-        );
-
-        const queuedOrder = await this.repo.findOrderById(order.id);
-        const queuedMessage = 'Your order has been queued and will be executed when the market opens (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).';
-        return this.buildContractResponse(queuedOrder, fees.totalCost, true, queuedMessage, estimatedPrice);
-      }
-
       // ── Step 3: Risk checks ─────────────────────────────────
       await this.riskService.check({
         userId,
@@ -223,26 +186,42 @@ export class TradingService {
         metadata: { checks: ['daily_limit', 'single_order', 'concentration', 'velocity'] },
       });
 
-      // ── Step 4: Execution ───────────────────────────────────
-      const result = await this.executionEngine.execute(order.id, estimatedPrice);
+      // ── Step 4: Queue for broker execution ──────────────────
+      // Orders are NEVER executed automatically. Every validated order parks
+      // at SUBMITTED and waits for the broker to execute it from the Kusata
+      // dashboard — the broker is the exchange member who actually places
+      // the trade on the MSE. Execution, settlement, cash and holdings only
+      // move when the broker confirms (executeQueuedOrder).
+      assertTransition(
+        OrderLifecycleStatus.VALIDATED,
+        OrderLifecycleStatus.SUBMITTED,
+      );
+      await this.repo.updateOrderStatus(order.id, OrderLifecycleStatus.SUBMITTED, {
+        submittedAt: new Date(),
+      });
+
+      await this.repo.createTradeAudit({
+        orderId: order.id,
+        userId,
+        action: 'ORDER_QUEUED_FOR_BROKER',
+        fromStatus: OrderLifecycleStatus.VALIDATED,
+        toStatus: OrderLifecycleStatus.SUBMITTED,
+        metadata: {
+          reason: 'Awaiting broker execution',
+          estimatedPrice: estimatedPrice.toNumber(),
+        },
+      });
 
       const durationMs = Date.now() - startTime;
       this.logger.log(
-        {
-          orderId: order.id,
-          status: result.status,
-          durationMs,
-        },
-        'Trading pipeline completed',
+        { orderId: order.id, durationMs },
+        'Order queued — awaiting broker execution',
       );
 
-      const execTotalCost = result.fees?.totalCost != null
-        ? new Decimal(result.fees.totalCost)
-        : null;
-      const execMessage = result.status === 'FILLED'
-        ? 'Your order has been placed.'
-        : 'Your order has been submitted.';
-      return this.buildContractResponse(result.order, execTotalCost, false, execMessage, estimatedPrice);
+      const queuedOrder = await this.repo.findOrderById(order.id);
+      const queuedMessage =
+        'Your order has been submitted to the broker and will be executed during market hours (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).';
+      return this.buildContractResponse(queuedOrder, fees.totalCost, true, queuedMessage, estimatedPrice);
     } catch (error) {
       // If any step fails, reject the order
       this.logger.error(
