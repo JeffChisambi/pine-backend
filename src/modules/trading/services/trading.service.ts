@@ -219,8 +219,12 @@ export class TradingService {
       );
 
       const queuedOrder = await this.repo.findOrderById(order.id);
-      const queuedMessage =
-        'Your order has been submitted to the broker and will be executed during market hours (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).';
+      // Same broker-gated flow either way — only the message differs so the
+      // user isn't told "waiting for market open" while the market IS open.
+      const marketOpen = await this.validationService.checkIsMarketOpen();
+      const queuedMessage = marketOpen
+        ? 'Your order has been submitted and is being processed by the broker.'
+        : 'Your order has been submitted and will be executed when the market opens (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).';
       return this.buildContractResponse(queuedOrder, fees.totalCost, true, queuedMessage, estimatedPrice);
     } catch (error) {
       // If any step fails, reject the order
