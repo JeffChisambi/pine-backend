@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Decimal } from '@prisma/client/runtime/library';
 import { OrderService } from './order.service';
@@ -146,6 +146,15 @@ export class TradingService {
         userKycStatus: liveKycStatus,
       });
 
+      // A sell whose fees exceed the proceeds would net the user a NEGATIVE
+      // amount (minimum broker commission on a tiny order). Reject it with a
+      // clear reason instead of settling a loss-making trade.
+      if (dto.side === 'SELL' && fees.totalCost.lte(0)) {
+        throw new BadRequestException(
+          `Order value is too small: trading fees (MK ${fees.totalFees.toFixed(2)}) exceed the sale proceeds (MK ${fees.grossValue.toFixed(2)}). Increase the quantity to sell.`,
+        );
+      }
+
       // Mark validated
       assertTransition(
         OrderLifecycleStatus.PENDING_VALIDATION,
@@ -219,13 +228,13 @@ export class TradingService {
       );
 
       const queuedOrder = await this.repo.findOrderById(order.id);
-      // Same broker-gated flow either way — only the message differs so the
-      // user isn't told "waiting for market open" while the market IS open.
+      // Same broker-gated flow either way — only the message/visuals differ so
+      // the user isn't told "waiting for market open" while the market IS open.
       const marketOpen = await this.validationService.checkIsMarketOpen();
       const queuedMessage = marketOpen
         ? 'Your order has been submitted and is being processed by the broker.'
         : 'Your order has been submitted and will be executed when the market opens (MSE: 10:00 AM — 2:00 PM CAT, Mon–Fri).';
-      return this.buildContractResponse(queuedOrder, fees.totalCost, true, queuedMessage, estimatedPrice);
+      return this.buildContractResponse(queuedOrder, fees.totalCost, true, queuedMessage, estimatedPrice, marketOpen);
     } catch (error) {
       // If any step fails, reject the order
       this.logger.error(
@@ -402,6 +411,7 @@ export class TradingService {
     queued: boolean,
     message: string,
     estimatedPrice?: Decimal,
+    marketOpen = false,
   ) {
     const qty = order?.quantity instanceof Decimal
       ? order.quantity
@@ -425,6 +435,7 @@ export class TradingService {
       totalAmount: grossValue.toFixed(2),
       status: queued ? 'QUEUED' : order?.status,
       queued,
+      marketOpen,
       message,
       fees: { totalCost: totalCostStr },
       createdAt: order?.createdAt,
