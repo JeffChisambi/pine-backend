@@ -49,6 +49,8 @@ export class IdentityService {
     email: string | null;
     firstName: string;
     lastName: string;
+    dateOfBirth: Date | null;
+    gender: string | null;
     role: string;
     kycStatus: string;
   }> {
@@ -101,6 +103,8 @@ export class IdentityService {
         email: true,
         firstName: true,
         lastName: true,
+        dateOfBirth: true,
+        gender: true,
         role: true,
         kycStatus: true,
       },
@@ -125,6 +129,8 @@ export class IdentityService {
     email: string | null;
     firstName: string;
     lastName: string;
+    dateOfBirth: Date | null;
+    gender: string | null;
     role: string;
     kycStatus: string;
     pinHash: string | null;
@@ -147,6 +153,8 @@ export class IdentityService {
         lastName: true,
         role: true,
         kycStatus: true,
+        dateOfBirth: true,
+        gender: true,
         passwordHash: true,
         pinHash: true,
         isActive: true,
@@ -182,6 +190,8 @@ export class IdentityService {
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
+      dateOfBirth: user.dateOfBirth,
+      gender: user.gender,
       role: user.role,
       kycStatus: user.kycStatus,
       pinHash: user.pinHash,
@@ -206,6 +216,8 @@ export class IdentityService {
         pinHash: true,
         pinFailedAttempts: true,
         pinLockedUntil: true,
+        dateOfBirth: true,
+        gender: true,
         avatarKey: true,
         isActive: true,
         createdAt: true,

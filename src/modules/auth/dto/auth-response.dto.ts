@@ -9,6 +9,8 @@ export class AuthUserDto {
   @ApiProperty() role: string;
   @ApiProperty() kycStatus: string;
   @ApiProperty() hasPinSet: boolean;
+  @ApiPropertyOptional() dateOfBirth: string | null;
+  @ApiPropertyOptional() gender: string | null;
   @ApiPropertyOptional() avatarUrl: string | null;
   @ApiPropertyOptional() isActive?: boolean;
   @ApiProperty() createdAt: string;
