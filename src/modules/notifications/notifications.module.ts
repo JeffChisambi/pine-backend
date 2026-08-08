@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
+import { AuthModule } from '../auth/auth.module';
 
 // Repository
 import { NotificationRepository } from './repositories/notification.repository';
@@ -46,6 +47,7 @@ import { NotificationController } from './controllers/notification.controller';
   imports: [
     DatabaseModule,
     ConfigModule,
+    AuthModule,
   ],
   controllers: [NotificationController],
   providers: [

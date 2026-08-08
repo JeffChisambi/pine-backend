@@ -24,7 +24,10 @@ import {
   MarkReadDto,
   UpdatePreferencesDto,
   NotificationQueryDto,
+  RegisterDeviceDto,
+  UnregisterDeviceDto,
 } from '../dto/notification.dto';
+import { DeviceService } from '../../auth/services/device.service';
 
 /**
  * Notification Controller — in-app notification inbox & preferences.
@@ -42,7 +45,10 @@ import {
 @ApiBearerAuth()
 @Controller('notifications')
 export class NotificationController {
-  constructor(private readonly notificationService: NotificationService) {}
+  constructor(
+    private readonly notificationService: NotificationService,
+    private readonly deviceService: DeviceService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -152,5 +158,37 @@ export class NotificationController {
       dto.category,
       { push: dto.push, email: dto.email, sms: dto.sms },
     );
+  }
+
+  // ── Push token registration ──────────────────────────────────
+
+  @Post('devices')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Register push token',
+    description: 'Saves the Expo push token for this device so the server can send push notifications.',
+  })
+  @ApiResponse({ status: 200, description: 'Token registered' })
+  async registerDevice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RegisterDeviceDto,
+  ) {
+    await this.deviceService.updatePushToken(user.deviceId, dto.token);
+    return { success: true };
+  }
+
+  @Delete('devices')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Unregister push token',
+    description: 'Removes the push token for the current device (e.g. on logout).',
+  })
+  @ApiResponse({ status: 200, description: 'Token removed' })
+  async unregisterDevice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UnregisterDeviceDto,
+  ) {
+    await this.deviceService.updatePushToken(user.deviceId, null);
+    return { success: true };
   }
 }

@@ -86,6 +86,7 @@ import { PinGuard } from './guards/pin.guard';
     SessionService,
     IdentityService,
     PasswordService,
+    DeviceService,
     PinGuard,
   ],
 })

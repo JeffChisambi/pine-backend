@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsString, IsOptional, IsBoolean, IsInt, Min } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsInt, IsEnum, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class MarkReadDto {
@@ -27,6 +27,32 @@ export class UpdatePreferencesDto {
   @IsOptional()
   @IsBoolean()
   sms?: boolean;
+}
+
+export class RegisterDeviceDto {
+  @ApiProperty({ description: 'Expo push token', example: 'ExponentPushToken[xxxx]' })
+  @IsString()
+  token: string;
+
+  @ApiProperty({ description: 'Device platform', example: 'android' })
+  @IsString()
+  platform: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deviceName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  appVersion?: string;
+}
+
+export class UnregisterDeviceDto {
+  @ApiProperty({ description: 'Expo push token to remove' })
+  @IsString()
+  token: string;
 }
 
 export class NotificationQueryDto {

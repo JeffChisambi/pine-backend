@@ -162,7 +162,7 @@ export class DeviceService {
    */
   async updatePushToken(
     deviceId: string,
-    pushToken: string,
+    pushToken: string | null,
   ): Promise<void> {
     await this.prisma.device.update({
       where: { id: deviceId },

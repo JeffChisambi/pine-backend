@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Expo, type ExpoPushMessage, type ExpoPushTicket } from 'expo-server-sdk';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { NotificationRepository } from '../repositories/notification.repository';
 
 /**
@@ -8,7 +10,7 @@ import { NotificationRepository } from '../repositories/notification.repository'
  * Only knows: Push, Email, SMS, In-App.
  *
  * Each channel is a pluggable provider:
- *   push  → FirebasePushProvider (future)
+ *   push  → Expo Push API (sends to FCM/APNs via Expo)
  *   email → SMTPProvider (future)
  *   sms   → SMSProvider (future)
  *   inApp → stored in DB (always works)
@@ -55,27 +57,96 @@ export class InAppProvider implements IChannelProvider {
   }
 }
 
-// ── Push Provider (Firebase stub) ─────────────────────────────
+// ── Push Provider (Expo Push API) ─────────────────────────────
 
 @Injectable()
 export class PushProvider implements IChannelProvider {
-  readonly name = 'firebase';
+  readonly name = 'expo_push';
   readonly channel = 'PUSH';
   private readonly logger = new Logger(PushProvider.name);
+  private readonly expo = new Expo();
+
+  constructor(private readonly prisma: PrismaService) {}
 
   async send(payload: DeliveryPayload): Promise<DeliveryResult> {
-    // TODO: Integrate Firebase Cloud Messaging
-    // const message = { notification: { title, body }, token: userFcmToken, data };
-    // const response = await admin.messaging().send(message);
-    this.logger.log(
-      { userId: payload.userId, title: payload.title },
-      'Push notification queued (Firebase not connected yet)',
-    );
+    const devices = await this.prisma.device.findMany({
+      where: {
+        userId: payload.userId,
+        isRevoked: false,
+        pushToken: { not: null },
+      },
+      select: { id: true, pushToken: true },
+    });
+
+    const tokens = devices
+      .map((d) => d.pushToken!)
+      .filter((t) => Expo.isExpoPushToken(t));
+
+    if (tokens.length === 0) {
+      this.logger.debug(
+        { userId: payload.userId },
+        'No valid push tokens — skipping push delivery',
+      );
+      return { success: true, provider: this.name };
+    }
+
+    const messages: ExpoPushMessage[] = tokens.map((token) => ({
+      to: token,
+      sound: 'default' as const,
+      title: payload.title,
+      body: payload.body,
+      data: payload.data,
+    }));
+
+    const chunks = this.expo.chunkPushNotifications(messages);
+    const ticketIds: string[] = [];
+    const staleTokens: string[] = [];
+
+    for (const chunk of chunks) {
+      try {
+        const tickets: ExpoPushTicket[] =
+          await this.expo.sendPushNotificationsAsync(chunk);
+
+        for (let i = 0; i < tickets.length; i++) {
+          const ticket = tickets[i];
+          if (ticket.status === 'ok') {
+            ticketIds.push(ticket.id);
+          } else {
+            if (
+              ticket.details?.error === 'DeviceNotRegistered' ||
+              ticket.details?.error === 'InvalidCredentials'
+            ) {
+              staleTokens.push((chunk[i] as any).to);
+            }
+            this.logger.warn(
+              { token: (chunk[i] as any).to, error: ticket.details },
+              'Push ticket error',
+            );
+          }
+        }
+      } catch (error) {
+        this.logger.error({ err: error }, 'Expo push chunk failed');
+      }
+    }
+
+    // Clean up stale tokens
+    if (staleTokens.length > 0) {
+      await this.prisma.device
+        .updateMany({
+          where: { pushToken: { in: staleTokens } },
+          data: { pushToken: null },
+        })
+        .catch(() => {});
+      this.logger.log(
+        { count: staleTokens.length },
+        'Cleared stale push tokens',
+      );
+    }
 
     return {
-      success: true,
+      success: ticketIds.length > 0,
       provider: this.name,
-      providerMsgId: `push-${Date.now()}`,
+      providerMsgId: ticketIds[0],
     };
   }
 }
