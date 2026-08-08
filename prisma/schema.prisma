@@ -1341,6 +1341,20 @@ model SupportTicket {
   @@map("support_tickets")
 }
 
+/// Broker-configurable mobile app brand theme. Single active row (id "default").
+/// `colors` is a JSON map of brand-token → hex string (primary, accent,
+/// background, card, text, mutedForeground, border, destructive). An empty /
+/// missing row means the app uses its built-in "Pine" default theme.
+model MobileTheme {
+  id          String   @id @default("default")
+  colors      Json
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("mobile_themes")
+}
+
 /// One message in a support thread. Append-only; never edited or deleted.
 model SupportMessage {
   id            String            @id @default(uuid()) @db.Uuid
