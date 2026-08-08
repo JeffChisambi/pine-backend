@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
+import { AuthModule } from '../auth/auth.module';
+import { AuditModule } from '../audit/audit.module';
+import { StorageModule } from '../../infrastructure/storage/storage.module';
 
 // Repository
 import { UsersRepository } from './repositories/users.repository';
@@ -9,6 +12,7 @@ import { UsersRepository } from './repositories/users.repository';
 import { ProfileService } from './services/profile.service';
 import { UserPreferenceService } from './services/preference.service';
 import { IdentityFacade } from './services/identity-facade.service';
+import { AccountService } from './services/account.service';
 
 // Controller
 import { UsersController } from './controllers/users.controller';
@@ -39,6 +43,9 @@ import { UsersController } from './controllers/users.controller';
   imports: [
     DatabaseModule,
     ConfigModule,
+    AuthModule,
+    AuditModule,
+    StorageModule,
   ],
   controllers: [UsersController],
   providers: [
@@ -46,6 +53,7 @@ import { UsersController } from './controllers/users.controller';
     ProfileService,
     UserPreferenceService,
     IdentityFacade,
+    AccountService,
   ],
   exports: [
     ProfileService,

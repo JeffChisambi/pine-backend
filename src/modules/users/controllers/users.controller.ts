@@ -1,11 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Patch,
   Put,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -15,10 +18,12 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
-import type { AuthenticatedUser } from '../../../core/types/request-context.types';
+import type { AuthenticatedUser, RequestWithUser } from '../../../core/types/request-context.types';
+import { PinGuard } from '../../auth/guards/pin.guard';
 import { ProfileService } from '../services/profile.service';
 import { UserPreferenceService } from '../services/preference.service';
 import { IdentityFacade } from '../services/identity-facade.service';
+import { AccountService } from '../services/account.service';
 import { UpdateProfileDto, UpdatePreferencesDto } from '../dto/users.dto';
 
 /**
@@ -47,6 +52,7 @@ export class UsersController {
     private readonly profileService: ProfileService,
     private readonly preferenceService: UserPreferenceService,
     private readonly identityFacade: IdentityFacade,
+    private readonly accountService: AccountService,
   ) {}
 
   // ── Profile ─────────────────────────────────────────────────
@@ -77,6 +83,28 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ) {
     return this.profileService.updateProfile(user.id, dto);
+  }
+
+  @Delete('me')
+  @UseGuards(PinGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Close (delete) my account',
+    description:
+      'Permanently deactivates the account and anonymizes personal data ' +
+      '(name, contact, KYC details and document images, avatar). Financial, ' +
+      'ledger and audit records are retained for compliance. PIN-verified: ' +
+      'requires a valid x-pin-token header. This cannot be undone from the app.',
+  })
+  @ApiResponse({ status: 200, description: 'Account closed and anonymized' })
+  async deleteAccount(
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.accountService.deleteOwnAccount(user.id, {
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 
   @Put('avatar')

@@ -257,6 +257,7 @@ model User {
   mfaConfig         MfaConfig?
   watchlistEntries      WatchlistEntry[]
   treasuryInvestments   TreasuryInvestment[]
+  supportTickets        SupportTicket[]
 
   @@index([role])
   @@index([kycStatus])
@@ -1280,4 +1281,82 @@ model NewsArticle {
   @@index([isPublished, publishedAt])
   @@index([category])
   @@map("news_articles")
+}
+
+// ============================================================
+// Customer Support (Help & Support / Report a problem)
+// ============================================================
+
+enum SupportTicketCategory {
+  DEPOSITS
+  WITHDRAWALS
+  TRADING
+  TREASURY
+  ACCOUNT
+  OTHER
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  CLOSED
+}
+
+enum SupportAuthorType {
+  USER
+  ADMIN
+  SYSTEM
+}
+
+/// A customer support conversation opened from the mobile "Report a problem"
+/// flow. Backed by an append-only thread of SupportMessage rows.
+model SupportTicket {
+  id            String                @id @default(uuid()) @db.Uuid
+  /// Human-friendly reference shown in the app, e.g. "PN-2291".
+  reference     String                @unique
+  userId        String                @db.Uuid
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      SupportTicketCategory  @default(OTHER)
+  subject       String
+  status        SupportTicketStatus    @default(OPEN)
+  /// Optional wallet Transaction this report relates to (deposit, trade, …).
+  relatedTransactionId String?         @db.Uuid
+  /// True when the newest message is from the customer and no staff member has
+  /// replied since — drives the dashboard "needs attention" badge.
+  awaitingAdmin Boolean               @default(true)
+  /// True when the newest message is from staff/system and the customer has not
+  /// opened the thread since — drives the mobile "unread" dot.
+  awaitingUser  Boolean               @default(false)
+  lastMessageAt DateTime              @default(now())
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  messages      SupportMessage[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([awaitingAdmin])
+  @@index([lastMessageAt])
+  @@map("support_tickets")
+}
+
+/// One message in a support thread. Append-only; never edited or deleted.
+model SupportMessage {
+  id            String            @id @default(uuid()) @db.Uuid
+  ticketId      String            @db.Uuid
+  ticket        SupportTicket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorType    SupportAuthorType
+  /// User id or admin id that wrote the message; null for SYSTEM entries.
+  authorId      String?           @db.Uuid
+  /// Denormalised display name of the author (e.g. "Chikondi").
+  authorName    String?
+  body          String
+  /// Storage key of an optional attachment (screenshot) in the 'reports' bucket.
+  attachmentKey String?
+  createdAt     DateTime          @default(now())
+
+  @@index([ticketId])
+  @@index([createdAt])
+  @@map("support_messages")
 }

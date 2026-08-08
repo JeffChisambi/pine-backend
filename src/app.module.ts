@@ -33,6 +33,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { WatchlistModule } from './modules/watchlist/watchlist.module';
 import { TreasuryModule } from './modules/treasury/treasury.module';
+import { SupportModule } from './modules/support/support.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { TreasuryModule } from './modules/treasury/treasury.module';
     AnalyticsModule,
     WatchlistModule,
     TreasuryModule,
+    SupportModule,
   ],
   providers: [
     // Applied globally, outermost-to-innermost as Nest resolves them:
