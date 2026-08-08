@@ -4,8 +4,11 @@ import { WalletModule } from '../wallet/wallet.module';
 import { TradingModule } from '../trading/trading.module';
 import { MastercardGatewayModule } from '../mastercard-gateway/mastercard-gateway.module';
 import { PaymentsController } from './controllers/payments.controller';
+import { SavedCardsController } from './controllers/saved-cards.controller';
 import { CardPaymentService } from './services/card-payment.service';
 import { MockBankCardGatewayService } from './services/mock-bank-card.service';
+import { SavedCardService } from './services/saved-card.service';
+import { CardEncryptionService } from './services/card-encryption.service';
 import { WalletService } from '../wallet/services/wallet.service';
 import { TradingService } from '../trading/services/trading.service';
 
@@ -30,12 +33,14 @@ import { TradingService } from '../trading/services/trading.service';
     TradingModule,
     MastercardGatewayModule,
   ],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, SavedCardsController],
   providers: [
     CardPaymentService,
     MockBankCardGatewayService,
+    SavedCardService,
+    CardEncryptionService,
   ],
-  exports: [CardPaymentService],
+  exports: [CardPaymentService, SavedCardService],
 })
 export class PaymentsModule implements OnModuleInit {
   constructor(

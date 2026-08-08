@@ -258,6 +258,7 @@ model User {
   watchlistEntries      WatchlistEntry[]
   treasuryInvestments   TreasuryInvestment[]
   supportTickets        SupportTicket[]
+  savedCards            SavedCard[]
 
   @@index([role])
   @@index([kycStatus])
@@ -620,6 +621,24 @@ model LinkedBank {
 
   @@index([userId])
   @@map("linked_banks")
+}
+
+model SavedCard {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @db.Uuid
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  last4               String   @db.VarChar(4)
+  cardBrand           String   @db.VarChar(20)
+  cardholderName      String
+  expiryMonth         String   @db.VarChar(2)
+  expiryYear          String   @db.VarChar(4)
+  cardNumberEncrypted String
+  isDefault           Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([userId])
+  @@map("saved_cards")
 }
 
 // ============================================================

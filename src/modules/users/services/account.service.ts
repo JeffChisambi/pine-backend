@@ -119,6 +119,7 @@ export class AccountService {
         },
       }),
       this.prisma.linkedBank.deleteMany({ where: { userId } }),
+      this.prisma.savedCard.deleteMany({ where: { userId } }),
     ]);
 
     // 5) Purge object storage (outside the DB transaction; failures are logged,

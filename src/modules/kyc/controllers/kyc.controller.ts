@@ -14,6 +14,9 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import * as crypto from 'crypto';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import { AppConfigService } from '../../../config/app-config.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -33,6 +36,7 @@ import {
   QueueName,
   DEFAULT_JOB_OPTIONS,
 } from '../../../core/constants/queue-names.constant';
+import { SubmitBankAccountDto } from '../dto/submit-bank-account.dto';
 
 /**
  * Customer-facing KYC endpoints. All routes are under /v1/kyc/.
@@ -44,13 +48,31 @@ import {
 @Controller('kyc')
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))  // M-10 fix
 export class KycController {
+  private readonly bankEncryptionKey: Buffer;
+
   constructor(
     private readonly workflowService: KycWorkflowService,
     @Inject(KYC_REPOSITORY)
     private readonly repository: IKycRepository,
     @InjectQueue(QueueName.KYC)                                       // H-3 fix
     private readonly kycQueue: Queue,
-  ) {}
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
+  ) {
+    this.bankEncryptionKey = crypto
+      .createHash('sha256')
+      .update(this.appConfig.security.pinEncryptionKey + ':bank')
+      .digest();
+  }
+
+  private encryptBankAccount(plaintext: string): string {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', this.bankEncryptionKey, iv);
+    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const tag = cipher.getAuthTag().toString('hex');
+    return `${iv.toString('hex')}:${tag}:${encrypted}`;
+  }
 
   @Post('start')
   @HttpCode(HttpStatus.CREATED)
@@ -309,5 +331,58 @@ export class KycController {
     );
 
     return { queued: true, applicationId };
+  }
+
+  /**
+   * Submit bank account details during the KYC flow.
+   * Upserts a LinkedBank record for the authenticated user.
+   */
+  @Post('bank-account')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Submit bank account for KYC verification' })
+  @ApiResponse({ status: 200, description: 'Bank account saved' })
+  async submitBankAccount(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SubmitBankAccountDto,
+  ) {
+    // Verify the application belongs to this user
+    const app = await this.prisma.kycApplication.findFirst({
+      where: { id: dto.applicationId, userId: user.id },
+    });
+    if (!app) throw new NotFoundException('KYC application not found');
+
+    // Mask all but last 4 digits
+    const masked = dto.accountNumber.replace(/.(?=.{4})/g, '*');
+
+    // Upsert LinkedBank for this user
+    const existing = await this.prisma.linkedBank.findFirst({
+      where: { userId: user.id, deletedAt: null },
+    });
+
+    if (existing) {
+      await this.prisma.linkedBank.update({
+        where: { id: existing.id },
+        data: {
+          bankName: dto.bankName,
+          accountName: dto.accountName,
+          accountNumberMasked: masked,
+          accountNumberEncrypted: this.encryptBankAccount(dto.accountNumber),
+          isPrimary: true,
+        },
+      });
+    } else {
+      await this.prisma.linkedBank.create({
+        data: {
+          userId: user.id,
+          bankName: dto.bankName,
+          accountName: dto.accountName,
+          accountNumberMasked: masked,
+          accountNumberEncrypted: this.encryptBankAccount(dto.accountNumber),
+          isPrimary: true,
+        },
+      });
+    }
+
+    return { success: true };
   }
 }

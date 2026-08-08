@@ -9,6 +9,7 @@ import { WalletService } from '../../wallet/services/wallet.service';
 import { MastercardGatewayService } from '../../mastercard-gateway/services/mastercard-gateway.service';
 import { MastercardGatewayException } from '../../mastercard-gateway/exceptions/mastercard-gateway.exception';
 import { MockBankCardGatewayService } from './mock-bank-card.service';
+import { SavedCardService } from './saved-card.service';
 import { InitiateBankCardPaymentDto, BankCardPaymentResponse, BankCardPaymentStatus } from '../dto/bank-card.dto';
 
 /**
@@ -39,12 +40,25 @@ export class CardPaymentService {
     private readonly walletService: WalletService,
     private readonly mpgs: MastercardGatewayService,
     private readonly mockGateway: MockBankCardGatewayService,
+    private readonly savedCardService: SavedCardService,
   ) {}
 
   async initiateCardPayment(
     user: { id: string; email?: string | null },
     dto: InitiateBankCardPaymentDto,
   ): Promise<BankCardPaymentResponse> {
+    // If paying with a saved card, merge decrypted card details into the DTO.
+    if (dto.savedCardId) {
+      const saved = await this.savedCardService.getDecryptedCard(
+        user.id,
+        dto.savedCardId,
+      );
+      dto.cardNumber = saved.cardNumber;
+      dto.cardholderName = saved.cardholderName;
+      dto.expiryMonth = saved.expiryMonth;
+      dto.expiryYear = saved.expiryYear;
+    }
+
     this.validateCard(dto);
 
     // TODO: Re-enable production guard once MPGS gateway APIs are integrated.
@@ -107,6 +121,23 @@ export class CardPaymentService {
       // 3) Credit the wallet through the standard, atomic, idempotent
       // deposit pipeline (also handles purpose=BUY_SHARES order submission).
       await this.walletService.processPaymentByTxRef(txRef);
+
+      // Best-effort: save card for future use if requested (don't fail the payment).
+      if (dto.saveCard && !dto.savedCardId) {
+        try {
+          await this.savedCardService.saveCard(user.id, {
+            cardNumber: dto.cardNumber,
+            cardholderName: dto.cardholderName,
+            expiryMonth: dto.expiryMonth,
+            expiryYear: dto.expiryYear,
+          });
+        } catch (saveErr) {
+          this.logger.warn(
+            { txRef, userId: user.id, error: (saveErr as Error).message },
+            'Failed to save card after successful payment (non-fatal)',
+          );
+        }
+      }
 
       this.logger.log(
         { txRef, userId: user.id, amount: dto.amount, last4: charge.last4, brand: charge.cardBrand, testMode },

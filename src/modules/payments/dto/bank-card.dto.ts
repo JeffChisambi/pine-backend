@@ -1,14 +1,17 @@
 import {
+  IsBoolean,
   IsEnum,
   IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -26,29 +29,33 @@ export class InitiateBankCardPaymentDto {
   @IsEnum(['MWK', 'USD'])
   currency: 'MWK' | 'USD';
 
-  /** Full name on card */
+  /** Full name on card — required when savedCardId is NOT provided */
   @ApiProperty({ description: 'Cardholder name as it appears on the card', example: 'JOHN DOE' })
+  @ValidateIf((o) => !o.savedCardId)
   @IsString()
   @IsNotEmpty()
   cardholderName: string;
 
   /**
    * Card number (digits only, 13–19 digits).
-   * In production this should be a tokenised card token, NOT a raw PAN.
+   * Required when savedCardId is NOT provided.
    */
   @ApiProperty({ description: 'Card number (digits only)', example: '4111111111111111' })
+  @ValidateIf((o) => !o.savedCardId)
   @IsString()
   @Matches(/^\d{13,19}$/, { message: 'cardNumber must be 13–19 digits' })
   cardNumber: string;
 
-  /** Expiry month — MM */
+  /** Expiry month — MM. Required when savedCardId is NOT provided. */
   @ApiProperty({ description: 'Expiry month (01–12)', example: '12' })
+  @ValidateIf((o) => !o.savedCardId)
   @IsString()
   @Matches(/^(0[1-9]|1[0-2])$/, { message: 'expiryMonth must be MM format (01–12)' })
   expiryMonth: string;
 
-  /** Expiry year — YY or YYYY */
+  /** Expiry year — YY or YYYY. Required when savedCardId is NOT provided. */
   @ApiProperty({ description: 'Expiry year (YY or YYYY)', example: '27' })
+  @ValidateIf((o) => !o.savedCardId)
   @IsString()
   @Matches(/^\d{2}(\d{2})?$/, { message: 'expiryYear must be YY or YYYY format' })
   expiryYear: string;
@@ -58,6 +65,18 @@ export class InitiateBankCardPaymentDto {
   @IsString()
   @Matches(/^\d{3,4}$/, { message: 'cvv must be 3–4 digits' })
   cvv: string;
+
+  /** Optional: use a previously saved card instead of raw card details */
+  @ApiPropertyOptional({ description: 'ID of a previously saved card to use' })
+  @IsOptional()
+  @IsUUID()
+  savedCardId?: string;
+
+  /** Optional: save the card for future payments (ignored when savedCardId is set) */
+  @ApiPropertyOptional({ description: 'Save this card for future payments', default: false })
+  @IsOptional()
+  @IsBoolean()
+  saveCard?: boolean;
 
   /** Optional: payment purpose tag */
   @ApiPropertyOptional({ description: 'Payment purpose', example: 'wallet_deposit' })
