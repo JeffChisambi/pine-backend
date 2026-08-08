@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { AppConfigService } from '../../../config/app-config.service';
 import { WalletService } from '../../wallet/services/wallet.service';
 import { MastercardGatewayService } from '../../mastercard-gateway/services/mastercard-gateway.service';
 import { MastercardGatewayException } from '../../mastercard-gateway/exceptions/mastercard-gateway.exception';
@@ -39,6 +41,7 @@ export class CardPaymentService {
     private readonly walletService: WalletService,
     private readonly mpgs: MastercardGatewayService,
     private readonly mockGateway: MockBankCardGatewayService,
+    private readonly config: AppConfigService,
   ) {}
 
   async initiateCardPayment(
@@ -47,7 +50,18 @@ export class CardPaymentService {
   ): Promise<BankCardPaymentResponse> {
     this.validateCard(dto);
 
-    const testMode = !!dto.testScenario;
+    // The mock gateway (Test Transaction mode) approves charges without any
+    // real settlement and then credits the wallet through the real deposit
+    // pipeline. That is a development-only affordance: honoring a
+    // client-supplied `testScenario` in production would let any
+    // authenticated user mint unlimited wallet balance with no real charge.
+    // Refuse it outside non-production, and never let the client pick the
+    // gateway in production.
+    if (dto.testScenario && this.config.app.isProduction) {
+      throw new ForbiddenException('Test payment scenarios are not permitted');
+    }
+
+    const testMode = !this.config.app.isProduction && !!dto.testScenario;
     const txRef = dto.idempotencyKey
       ? `PINE-CARD-${this.sanitizeKey(dto.idempotencyKey)}`
       : `PINE-CARD-${randomUUID()}`;

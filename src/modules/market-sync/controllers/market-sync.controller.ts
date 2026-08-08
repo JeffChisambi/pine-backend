@@ -7,30 +7,32 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { MarketSyncService } from '../services/market-sync.service';
 import { MarketSyncCronService } from '../services/market-sync-cron.service';
 import { MseHistorySyncService } from '../services/mse-history-sync.service';
 import { TriggerSyncDto } from '../dto/trigger-sync.dto';
 import type { SyncStatusResponseDto } from '../dto/sync-status-response.dto';
 import type { SyncHistoryResponseDto } from '../dto/sync-history-response.dto';
-import { Public } from '../../../core/decorators/public.decorator';
+import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
+import { Permission } from '../../auth/constants/permissions.constant';
 
 /**
  * Admin-facing endpoints for market data synchronization.
  *
- * In a fully implemented system, these would be protected by an
- * `@Roles(Role.SUPER_ADMIN, Role.MARKET_OPERATIONS)` guard (Phase 2).
- * For now they are unguarded to enable testing during Phase 4
- * development — the auth guard will be added when the AuthModule
- * is implemented.
+ * Protected by the global JwtAuthGuard (authentication) plus the
+ * PermissionsGuard: every route requires the `market.sync` permission,
+ * held only by SUPER_ADMIN and MARKET_OPERATIONS roles. These endpoints
+ * trigger expensive scrapes and can bypass the circuit breaker
+ * (`force: true`), so they must never be publicly reachable.
  *
  * All routes are under `/v1/admin/market-sync` via the global prefix
  * + versioning + this controller's path.
  */
 @ApiTags('admin', 'market-sync')
+@ApiBearerAuth()
 @Controller('admin/market-sync')
-@Public()
+@RequirePermissions(Permission.MARKET_SYNC)
 export class MarketSyncController {
   constructor(
     private readonly marketSyncService: MarketSyncService,

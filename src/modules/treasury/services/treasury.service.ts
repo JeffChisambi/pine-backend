@@ -69,6 +69,11 @@ export class TreasuryService {
     }
 
     const amountDecimal = new Decimal(amount);
+
+    if (!amountDecimal.isFinite() || amountDecimal.lte(0)) {
+      throw new BadRequestException('Investment amount must be a positive number');
+    }
+
     const minAmount = product.minAmount;
     const maxAmount = product.maxAmount;
 
@@ -91,23 +96,79 @@ export class TreasuryService {
       product.tenorDays,
     );
 
-    const investment = await this.prisma.treasuryInvestment.create({
-      data: {
-        userId,
-        productId,
-        status: 'PENDING',
-        amount: amountDecimal,
-        yieldPercent: product.yieldPercent,
-        earnings,
-        maturityValue,
-        maturityDate,
+    // Atomically verify the user actually has the funds, place a hold on the
+    // principal, and create the investment — all in ONE serializable
+    // transaction. Without this a user could create T-bill investments funded
+    // by nothing (balance never checked, never debited), corrupting financial
+    // state and creating an unpaid maturity obligation. The hold reuses the
+    // existing WalletReservation mechanism (same one buy-orders use), so the
+    // principal can't be double-spent via withdraw / buy / another invest.
+    const investment = await this.prisma.$transaction(
+      async (tx) => {
+        const wallet = await tx.wallet.findUnique({ where: { userId } });
+        if (!wallet) {
+          throw new BadRequestException(
+            'No wallet found. Fund your wallet before investing.',
+          );
+        }
+        if (wallet.isFrozen) {
+          throw new BadRequestException(
+            `Wallet is frozen: ${wallet.frozenReason ?? 'Contact support'}`,
+          );
+        }
+
+        const reservedAgg = await tx.walletReservation.aggregate({
+          where: { walletId: wallet.id, status: 'ACTIVE' },
+          _sum: { amount: true },
+        });
+        const available = wallet.balance.sub(
+          reservedAgg._sum.amount ?? new Decimal(0),
+        );
+
+        if (available.lt(amountDecimal)) {
+          throw new BadRequestException(
+            `Insufficient available funds. Available: ${product.currency} ` +
+              `${available.toNumber().toLocaleString()}, Required: ${product.currency} ` +
+              `${amountDecimal.toNumber().toLocaleString()}`,
+          );
+        }
+
+        const created = await tx.treasuryInvestment.create({
+          data: {
+            userId,
+            productId,
+            status: 'PENDING',
+            amount: amountDecimal,
+            yieldPercent: product.yieldPercent,
+            earnings,
+            maturityValue,
+            maturityDate,
+          },
+          include: { product: true },
+        });
+
+        // Hold the principal for the life of the T-bill. expiresAt is null so
+        // the 15-minute reservation-sweeper cron never auto-releases it; the
+        // redemption flow releases/consumes it at maturity.
+        await tx.walletReservation.create({
+          data: {
+            walletId: wallet.id,
+            orderId: created.id,
+            amount: amountDecimal,
+            status: 'ACTIVE',
+            reason: `Treasury investment ${created.id}`,
+            expiresAt: null,
+          },
+        });
+
+        return created;
       },
-      include: { product: true },
-    });
+      { isolationLevel: 'Serializable' as any, maxWait: 5_000, timeout: 10_000 },
+    );
 
     this.logger.log(
       { userId, investmentId: investment.id, productId, amount },
-      'Treasury investment created',
+      'Treasury investment created (principal held)',
     );
 
     return this.formatInvestment(investment);
