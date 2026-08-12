@@ -10,6 +10,7 @@ import type { RegisterDto } from '../dto/register.dto';
 import type { LoginDto } from '../dto/login.dto';
 import type { AuthResponseDto, AuthUserDto } from '../dto/auth-response.dto';
 import { ValidationException } from '../../../core/exceptions/app.exception';
+import { IS_STAFF_ROLE, Role } from '../../../core/constants/roles.constant';
 import { MailService } from '../../../infrastructure/mail/mail.service';
 
 /**
@@ -152,6 +153,16 @@ export class AuthService {
       dto.password,
       identifierType,
     );
+
+    // SECURITY: staff accounts (Super Admin, broker admins, officers) must
+    // authenticate through the admin surface, where MFA is mandatory.
+    // Allowing them here would hand out a staff-role token with no MFA,
+    // bypassing the admin login flow entirely.
+    if (IS_STAFF_ROLE(user.role as Role)) {
+      throw new ValidationException(
+        'Staff accounts must sign in through the admin dashboard.',
+      );
+    }
 
     // 2. Register/update device
     const deviceResult = await this.devices.registerOrUpdate({
@@ -460,6 +471,16 @@ export class AuthService {
       hasPinSet: !!user.pinHash,
       avatarUrl: null,
       isActive: user.isActive,
+      broker: user.broker
+        ? {
+            id: user.broker.id,
+            name: user.broker.name,
+            code: user.broker.code,
+            logoUrl: user.broker.logoUrl,
+            isActive: user.broker.isActive,
+          }
+        : null,
+      brokerSelectedAt: user.brokerSelectedAt?.toISOString() ?? null,
       createdAt: user.createdAt.toISOString(),
     };
   }

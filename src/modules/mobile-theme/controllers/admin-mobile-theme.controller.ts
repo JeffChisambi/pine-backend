@@ -37,14 +37,14 @@ export class AdminMobileThemeController {
   ) {}
 
   @Get()
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @ApiOperation({ summary: 'Get the mobile theme (active + defaults)' })
   async get() {
     return this.service.getForAdmin();
   }
 
   @Put()
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Update the mobile brand theme' })
   async update(
@@ -66,7 +66,7 @@ export class AdminMobileThemeController {
   }
 
   @Post('reset')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset the mobile theme to the Pine default' })
   async reset(

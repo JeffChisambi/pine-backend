@@ -11,6 +11,8 @@ import { MastercardGatewayException } from '../../mastercard-gateway/exceptions/
 import { MockBankCardGatewayService } from './mock-bank-card.service';
 import { SavedCardService } from './saved-card.service';
 import { InitiateBankCardPaymentDto, BankCardPaymentResponse, BankCardPaymentStatus } from '../dto/bank-card.dto';
+import { BrokerPaymentConfigService } from '../../brokers/services/broker-payment-config.service';
+import { AppConfigService } from '../../../config/app-config.service';
 
 /**
  * CardPaymentService — orchestrates the bank card deposit lifecycle.
@@ -41,6 +43,8 @@ export class CardPaymentService {
     private readonly mpgs: MastercardGatewayService,
     private readonly mockGateway: MockBankCardGatewayService,
     private readonly savedCardService: SavedCardService,
+    private readonly brokerPaymentConfig: BrokerPaymentConfigService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   async initiateCardPayment(
@@ -61,8 +65,12 @@ export class CardPaymentService {
 
     this.validateCard(dto);
 
-    // TODO: Re-enable production guard once MPGS gateway APIs are integrated.
-    // Until then the mock gateway is the only deposit path available.
+    // Production guard: Test Transaction mode is a client-controlled flag
+    // that charges the MOCK gateway but credits a REAL wallet. It must be
+    // unreachable outside development/test/staging environments.
+    if (dto.testScenario && this.appConfig.app.isProduction) {
+      throw new BadRequestException('Test transactions are not available.');
+    }
     const testMode = !!dto.testScenario;
     const txRef = dto.idempotencyKey
       ? `PINE-CARD-${this.sanitizeKey(dto.idempotencyKey)}`
@@ -96,8 +104,11 @@ export class CardPaymentService {
       return this.response(txRef, transactionId, 'FAILED', dto, 'This payment reference previously failed. Start a new payment.');
     }
 
-    // 2) Resolve the gateway.
-    const gateway = testMode ? this.mockGateway : this.liveGatewayOrThrow();
+    // 2) Resolve the gateway — ALWAYS from the investor's own broker's
+    // payment configuration (Pine never intermediates through a central
+    // account). Test mode uses the mock gateway but still requires a
+    // valid broker relationship (enforced in initiateDeposit above).
+    const gateway = testMode ? this.mockGateway : await this.brokerGatewayOrThrow(user.id);
 
     try {
       const charge = await gateway.chargeCard({
@@ -188,13 +199,26 @@ export class CardPaymentService {
 
   /* ── helpers ── */
 
-  private liveGatewayOrThrow(): MastercardGatewayService {
-    if (!this.mpgs.isLive) {
+  /**
+   * Build a gateway instance authenticated with the investor's broker's
+   * own merchant credentials. The broker is derived server-side from the
+   * authenticated user's persisted relationship; decrypted credentials
+   * exist only in memory for the duration of the charge.
+   */
+  private async brokerGatewayOrThrow(userId: string): Promise<MastercardGatewayService> {
+    const cfg = await this.brokerPaymentConfig.resolveGatewayConfigForUser(userId);
+    const gateway = this.mpgs.scopedTo({
+      merchantId: cfg.merchantId,
+      apiPassword: cfg.apiPassword,
+      baseUrl: cfg.baseUrl,
+      apiVersion: cfg.apiVersion,
+    });
+    if (!gateway.isLive) {
       throw new ServiceUnavailableException(
-        'Card payments are not yet enabled on this environment. Use Test Transaction mode, or contact support.',
+        'Card payments are not yet enabled for your broker. Use Test Transaction mode, or contact support.',
       );
     }
-    return this.mpgs;
+    return gateway;
   }
 
   /**

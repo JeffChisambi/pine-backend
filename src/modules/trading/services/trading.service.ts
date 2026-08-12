@@ -101,6 +101,26 @@ export class TradingService {
     // verified users can trade without having to log out and back in.
     const liveKycStatus = (await this.repo.getCurrentKycStatus(userId)) ?? userKycStatus;
 
+    // A valid broker relationship is required before any trade: orders are
+    // routed to (and executed by) the investor's selected broker. Derived
+    // from the persisted user record — never from client input.
+    const trader = await this.repo.prismaClient.user.findUnique({
+      where: { id: userId },
+      select: { role: true, brokerId: true, broker: { select: { isActive: true } } },
+    });
+    if (trader?.role === 'CUSTOMER') {
+      if (!trader.brokerId) {
+        throw new ValidationException(
+          'Select a broker in your profile before placing an order. (BROKER_REQUIRED)',
+        );
+      }
+      if (trader.broker && !trader.broker.isActive) {
+        throw new ValidationException(
+          'Your broker is currently unavailable. Contact support.',
+        );
+      }
+    }
+
     // ── Step 1: Create draft order ──────────────────────────
     this.logger.log(
       { userId, symbol: dto.stockSymbol, side: dto.side },

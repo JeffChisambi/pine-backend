@@ -98,28 +98,63 @@ export class SettlementService {
       }
 
       // ── Idempotency ───────────────────────────────────────────
+      // Keyed on the EXECUTION (tradeId), not the order: an order may have
+      // several partial executions, each settling exactly once, while a
+      // duplicated execution event can never double-post the cash leg.
       const cashType = event.side === 'BUY' ? 'TRADE_BUY' : 'TRADE_SELL';
+      const settleKey = `settle-${event.tradeId}`;
       const existing = await tx.transaction.findFirst({
-        where: { walletId: wallet.id, relatedOrderId: event.orderId, type: cashType },
+        where: { walletId: wallet.id, idempotencyKey: settleKey },
         select: { id: true },
       });
       if (existing) {
         this.logger.warn(
-          { orderId: event.orderId },
-          'Order already settled — skipping duplicate event',
+          { orderId: event.orderId, tradeId: event.tradeId },
+          'Execution already settled — skipping duplicate event',
         );
         return null;
       }
 
-      // ── 1a. Consume the fund reservation (BUY) ────────────────
-      // The hold placed at order submission is consumed in the SAME commit
-      // as the cash debit: reserved → spent is one atomic step, so available
-      // balance never double-counts and never briefly frees the money.
+      // ── 1a. Consume/reduce the fund reservation (BUY) ─────────
+      // The hold placed at order submission moves in the SAME commit as the
+      // cash debit: reserved → spent is one atomic step, so available balance
+      // never double-counts and never briefly frees the money.
+      //
+      // Partial executions: only the EXECUTED portion of the hold is
+      // consumed — the remainder stays reserved until the order is fully
+      // filled, cancelled, or otherwise resolved.
       if (event.side === 'BUY') {
-        await tx.walletReservation.updateMany({
-          where: { orderId: event.orderId, status: 'ACTIVE' },
-          data: { status: 'CONSUMED', consumedAt: new Date() },
+        const orderFill = await tx.order.findUnique({
+          where: { id: event.orderId },
+          select: { quantity: true, filledQuantity: true },
         });
+        const fullyFilled =
+          !orderFill || new Decimal(orderFill.filledQuantity).gte(new Decimal(orderFill.quantity));
+
+        if (fullyFilled) {
+          await tx.walletReservation.updateMany({
+            where: { orderId: event.orderId, status: 'ACTIVE' },
+            data: { status: 'CONSUMED', consumedAt: new Date() },
+          });
+        } else {
+          const activeRes = await tx.walletReservation.findFirst({
+            where: { orderId: event.orderId, status: 'ACTIVE' },
+          });
+          if (activeRes) {
+            const remaining = activeRes.amount.sub(totalCost);
+            if (remaining.lte(0)) {
+              await tx.walletReservation.update({
+                where: { id: activeRes.id },
+                data: { status: 'CONSUMED', consumedAt: new Date() },
+              });
+            } else {
+              await tx.walletReservation.update({
+                where: { id: activeRes.id },
+                data: { amount: remaining },
+              });
+            }
+          }
+        }
       }
 
       // ── 1b. Cash leg (atomic increment/decrement) ─────────────
@@ -152,6 +187,7 @@ export class SettlementService {
         type: cashType,
         amount: cashDelta,
         relatedOrderId: event.orderId,
+        idempotencyKey: settleKey,
         description:
           event.side === 'BUY'
             ? `Buy ${event.quantity} ${event.stockSymbol} @ MWK ${event.price}`
@@ -184,10 +220,26 @@ export class SettlementService {
         const newAvg = prevQty.gt(0)
           ? prevQty.mul(prevAvg).add(qty.mul(price)).div(newQty)
           : price;
+        const buyOrderBroker = await tx.order.findUnique({
+          where: { id: event.orderId },
+          select: { brokerId: true },
+        });
         await tx.holding.upsert({
           where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
-          create: { userId: event.userId, stockId: event.stockId, quantity: newQty, averageCost: newAvg },
-          update: { quantity: newQty, averageCost: newAvg },
+          create: {
+            userId: event.userId,
+            stockId: event.stockId,
+            quantity: newQty,
+            averageCost: newAvg,
+            brokerId: buyOrderBroker?.brokerId ?? null,
+          },
+          update: {
+            quantity: newQty,
+            averageCost: newAvg,
+            // Backfill broker ownership on legacy holdings created before
+            // the multi-broker migration.
+            brokerId: buyOrderBroker?.brokerId ?? undefined,
+          },
         });
       } else {
         const prevQty = holding?.quantity ?? new Decimal(0);
@@ -198,10 +250,23 @@ export class SettlementService {
             'Sell settles more shares than held — clamping to zero',
           );
         }
+        const sellOrderBroker = await tx.order.findUnique({
+          where: { id: event.orderId },
+          select: { brokerId: true },
+        });
         await tx.holding.upsert({
           where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
-          create: { userId: event.userId, stockId: event.stockId, quantity: newQty, averageCost: price },
-          update: { quantity: newQty },
+          create: {
+            userId: event.userId,
+            stockId: event.stockId,
+            quantity: newQty,
+            averageCost: price,
+            brokerId: sellOrderBroker?.brokerId ?? null,
+          },
+          update: {
+            quantity: newQty,
+            brokerId: sellOrderBroker?.brokerId ?? undefined,
+          },
         });
       }
 

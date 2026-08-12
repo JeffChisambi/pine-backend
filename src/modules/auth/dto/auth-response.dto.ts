@@ -13,6 +13,16 @@ export class AuthUserDto {
   @ApiPropertyOptional() gender: string | null;
   @ApiPropertyOptional() avatarUrl: string | null;
   @ApiPropertyOptional() isActive?: boolean;
+  /** The investor's selected broker (core account relationship). */
+  @ApiPropertyOptional()
+  broker?: {
+    id: string;
+    name: string;
+    code: string;
+    logoUrl: string | null;
+    isActive: boolean;
+  } | null;
+  @ApiPropertyOptional() brokerSelectedAt?: string | null;
   @ApiProperty() createdAt: string;
 }
 

@@ -19,6 +19,7 @@ import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser, RequestWithUser } from '../../../core/types/request-context.types';
 import { AuditLogService } from '../../audit/services/audit-log.service';
 import { SupportService } from '../services/support.service';
+import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 import {
   ListSupportTicketsQueryDto,
   ReplySupportTicketDto,
@@ -42,27 +43,31 @@ export class AdminSupportController {
   constructor(
     private readonly supportService: SupportService,
     private readonly auditLogService: AuditLogService,
+    private readonly brokerScope: BrokerScopeService,
   ) {}
 
   @Get()
   @RequirePermissions(Permission.ADMIN_ACCESS)
   @ApiOperation({ summary: 'List support tickets' })
-  async list(@Query() query: ListSupportTicketsQueryDto) {
-    return this.supportService.listAdmin(query);
+  async list(@Query() query: ListSupportTicketsQueryDto, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.supportService.listAdmin(query, scope);
   }
 
   @Get('stats')
   @RequirePermissions(Permission.ADMIN_ACCESS)
   @ApiOperation({ summary: 'Support inbox counts' })
-  async stats() {
-    return this.supportService.stats();
+  async stats(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.supportService.stats(scope);
   }
 
   @Get(':id')
   @RequirePermissions(Permission.ADMIN_ACCESS)
   @ApiOperation({ summary: 'Get a support ticket thread' })
-  async thread(@Param('id') id: string) {
-    return this.supportService.getAdminThread(id);
+  async thread(@Param('id') id: string, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.supportService.getAdminThread(id, scope);
   }
 
   @Post(':id/messages')
@@ -75,7 +80,8 @@ export class AdminSupportController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    const thread = await this.supportService.adminReply(admin.id, id, dto);
+    const scope = await this.brokerScope.resolveScope(admin);
+    const thread = await this.supportService.adminReply(admin.id, id, dto, scope);
     await this.auditLogService.log({
       actorId: admin.id,
       actorRole: admin.role,
@@ -99,7 +105,8 @@ export class AdminSupportController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    const thread = await this.supportService.updateStatus(admin.id, id, dto.status);
+    const scope = await this.brokerScope.resolveScope(admin);
+    const thread = await this.supportService.updateStatus(admin.id, id, dto.status, scope);
     await this.auditLogService.log({
       actorId: admin.id,
       actorRole: admin.role,

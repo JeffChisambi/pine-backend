@@ -15,6 +15,11 @@ export class TradingRepository {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Escape hatch for services needing raw client access (read-only lookups). */
+  get prismaClient(): PrismaService {
+    return this.prisma;
+  }
+
   /**
    * Read the user's CURRENT KYC status straight from the database.
    * The JWT carries a `kyc` claim, but it is a snapshot from login time —
@@ -51,9 +56,16 @@ export class TradingRepository {
     idempotencyKey?: string;
     expiresAt?: Date;
   }) {
+    // Broker ownership is stamped server-side from the investor's
+    // persisted broker relationship — never accepted from the client.
+    const user = await this.prisma.user.findUnique({
+      where: { id: data.userId },
+      select: { brokerId: true },
+    });
     return this.prisma.order.create({
       data: {
         userId: data.userId,
+        brokerId: user?.brokerId ?? null,
         stockId: data.stockId,
         side: data.side,
         type: data.type,
@@ -128,6 +140,11 @@ export class TradingRepository {
   /**
    * Find orders submitted to broker that are pending acceptance.
    * Used by the broker dashboard API.
+   */
+  /**
+   * WARNING: UNSCOPED — returns every broker's SUBMITTED orders.
+   * Currently unused. Any future caller MUST filter by the caller's
+   * broker scope (user: { brokerId }) like AdminRepository.listOrders.
    */
   async findPendingBrokerOrders(limit = 50) {
     return this.prisma.order.findMany({
@@ -278,6 +295,9 @@ export class TradingRepository {
       amount: Decimal;
       relatedOrderId: string;
       description: string;
+      /** Unique per execution event (e.g. settle-{tradeId}) so duplicate
+       *  execution events can never double-post the cash leg. */
+      idempotencyKey?: string;
       entries: Array<{
         walletId?: string;
         accountType: string;
@@ -287,13 +307,21 @@ export class TradingRepository {
       }>;
     },
   ) {
+    // Stamp broker ownership from the order (server-derived).
+    const order = await tx.order.findUnique({
+      where: { id: data.relatedOrderId },
+      select: { brokerId: true },
+    });
+
     const transaction = await tx.transaction.create({
       data: {
         walletId: data.walletId,
+        brokerId: order?.brokerId ?? null,
         type: data.type,
         status: 'COMPLETED',
         amount: data.amount,
         relatedOrderId: data.relatedOrderId,
+        idempotencyKey: data.idempotencyKey,
         description: data.description,
         processedAt: new Date(),
       },

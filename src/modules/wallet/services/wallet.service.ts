@@ -101,6 +101,26 @@ export class WalletService {
     idempotencyKey?: string;
     metadata?: Record<string, any>;
   }): Promise<{ transactionId: string; status: string }> {
+    // A valid broker relationship is REQUIRED before any deposit: funds
+    // always land in the investor's selected broker's account, so a
+    // deposit without a broker has no destination. The broker is read
+    // from the authenticated user's persisted relationship — never from
+    // the request.
+    const depositor = await this.repo.prismaClient.user.findUnique({
+      where: { id: params.userId },
+      select: { role: true, brokerId: true, broker: { select: { isActive: true } } },
+    });
+    if (depositor?.role === 'CUSTOMER') {
+      if (!depositor.brokerId) {
+        throw new BadRequestException(
+          'Select a broker in your profile before making a deposit. (BROKER_REQUIRED)',
+        );
+      }
+      if (depositor.broker && !depositor.broker.isActive) {
+        throw new BadRequestException('Your broker is currently unavailable. Contact support.');
+      }
+    }
+
     // Ensure wallet exists (auto-create on first deposit)
     const walletId = await this.balanceService.ensureWallet(params.userId);
     const wallet = await this.repo.findWalletById(walletId);

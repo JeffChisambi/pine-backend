@@ -5,6 +5,7 @@ import { StorageModule } from '../../infrastructure/storage/storage.module';
 import { SupportController } from './controllers/support.controller';
 import { AdminSupportController } from './controllers/admin-support.controller';
 import { SupportService } from './services/support.service';
+import { BrokersModule } from '../brokers/brokers.module';
 
 /**
  * SupportModule — customer Help & Support ("Report a problem") + staff inbox.
@@ -13,7 +14,7 @@ import { SupportService } from './services/support.service';
  *   Admin:     /v1/admin/support/*
  */
 @Module({
-  imports: [DatabaseModule, AuditModule, StorageModule],
+  imports: [DatabaseModule, AuditModule, StorageModule, BrokersModule],
   controllers: [SupportController, AdminSupportController],
   providers: [SupportService],
   exports: [SupportService],

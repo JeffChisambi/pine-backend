@@ -27,7 +27,7 @@ import { CreateNewsDto, ListNewsQueryDto, UpdateNewsDto } from '../dto/news.dto'
 import { ValidationException } from '../../../core/exceptions/app.exception';
 
 /**
- * Admin (dashboard) news management. Reuses ADMIN_ACCESS — every staff role
+ * Admin (dashboard) news management. Requires PLATFORM_ADMIN — Super Admin only (platform-wide content)
  * that can reach the dashboard can manage news — and audits every mutation,
  * matching the admin-notifications / admin-users convention.
  */
@@ -42,7 +42,7 @@ export class AdminNewsController {
   ) {}
 
   @Get()
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @ApiOperation({ summary: 'List all news articles (incl. drafts) for the CMS' })
   async list(@Query() query: ListNewsQueryDto) {
     return this.newsService.listAdmin(query);
@@ -53,7 +53,7 @@ export class AdminNewsController {
   // (GET /v1/news/images/:name) with immutable cache headers.
 
   @Post('upload-image')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data')
@@ -82,14 +82,14 @@ export class AdminNewsController {
   }
 
   @Get(':id')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @ApiOperation({ summary: 'Get a single news article for editing' })
   async get(@Param('id') id: string) {
     return this.newsService.getAdmin(id);
   }
 
   @Post()
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a news article' })
   async create(
@@ -112,7 +112,7 @@ export class AdminNewsController {
   }
 
   @Patch(':id')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Update a news article' })
   async update(
@@ -136,7 +136,7 @@ export class AdminNewsController {
   }
 
   @Delete(':id')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete a news article' })
   async remove(

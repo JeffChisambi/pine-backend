@@ -30,6 +30,9 @@ export class UsersRepository {
         kycStatus: true,
         avatarKey: true,
         isActive: true,
+        brokerId: true,
+        brokerSelectedAt: true,
+        broker: { select: { id: true, name: true, code: true, logoUrl: true, isActive: true } },
         createdAt: true,
         updatedAt: true,
       },
@@ -144,6 +147,11 @@ export class UsersRepository {
 
   // ── Admin ───────────────────────────────────────────────────
 
+  /**
+   * WARNING: UNSCOPED — returns every user on the platform. Currently
+   * unused. If ever wired into an admin route, it MUST take a broker
+   * scope (see AdminRepository.listUsers) or be restricted to SUPER_ADMIN.
+   */
   async findAll(limit = 50, offset = 0) {
     const [users, total] = await Promise.all([
       this.prisma.user.findMany({

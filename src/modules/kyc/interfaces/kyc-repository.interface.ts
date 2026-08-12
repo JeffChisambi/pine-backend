@@ -190,6 +190,8 @@ export interface IKycRepository {
     page: number;
     limit: number;
     status?: string;
+    /** Broker-scoped isolation: restrict to applications of this broker's users. */
+    brokerId?: string;
   }): Promise<{
     applications: KycApplicationRecord[];
     total: number;
@@ -198,7 +200,7 @@ export interface IKycRepository {
   }>;
 
   /** Aggregate counts per KycStatus for the dashboard stats cards. */
-  getCountsByStatus(): Promise<Record<string, number>>;
+  getCountsByStatus(brokerId?: string): Promise<Record<string, number>>;
 
   recordReview(data: {
     applicationId: string;

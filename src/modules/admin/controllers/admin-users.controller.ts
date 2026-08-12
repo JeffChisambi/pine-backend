@@ -22,6 +22,7 @@ import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { SessionService } from '../../auth/services/session.service';
 import { ListUsersQueryDto, UpdateUserStatusDto } from '../dto/admin.dto';
 import { ResourceNotFoundException, ValidationException } from '../../../core/exceptions/app.exception';
+import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 
 @ApiTags('admin', 'users')
 @ApiBearerAuth()
@@ -32,21 +33,26 @@ export class AdminUsersController {
     private readonly auditLogService: AuditLogService,
     private readonly prisma: PrismaService,
     private readonly sessionService: SessionService,
+    private readonly brokerScope: BrokerScopeService,
   ) {}
 
   @Get()
   @RequirePermissions(Permission.USERS_READ)
-  @ApiOperation({ summary: 'List all users with filters' })
+  @ApiOperation({ summary: 'List users (broker admins see only their own investors)' })
   @ApiResponse({ status: 200, description: 'Paginated user list' })
-  async listUsers(@Query() query: ListUsersQueryDto) {
-    return this.adminRepo.listUsers({
-      search: query.search,
-      status: query.status,
-      kycStatus: query.kycStatus,
-      role: query.role,
-      page: query.page,
-      limit: query.limit,
-    });
+  async listUsers(@Query() query: ListUsersQueryDto, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.adminRepo.listUsers(
+      {
+        search: query.search,
+        status: query.status,
+        kycStatus: query.kycStatus,
+        role: query.role,
+        page: query.page,
+        limit: query.limit,
+      },
+      scope,
+    );
   }
 
   @Get(':id')
@@ -56,8 +62,9 @@ export class AdminUsersController {
     description: 'Profile + wallet + KYC + devices + sessions + holdings in one call.',
   })
   @ApiResponse({ status: 200, description: 'User workspace' })
-  async getUserWorkspace(@Param('id') userId: string) {
-    const user = await this.adminRepo.getUserWorkspace(userId);
+  async getUserWorkspace(@Param('id') userId: string, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    const user = await this.adminRepo.getUserWorkspace(userId, scope);
     if (!user) {
       throw new ResourceNotFoundException('User', userId);
     }
@@ -75,6 +82,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new ResourceNotFoundException('User', userId);
@@ -127,7 +137,9 @@ export class AdminUsersController {
   @Get(':id/devices')
   @RequirePermissions(Permission.USERS_READ)
   @ApiOperation({ summary: 'List user devices' })
-  async getUserDevices(@Param('id') userId: string) {
+  async getUserDevices(@Param('id') userId: string, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
     const devices = await this.prisma.device.findMany({
       where: { userId },
       orderBy: { lastSeenAt: 'desc' },
@@ -138,7 +150,9 @@ export class AdminUsersController {
   @Get(':id/sessions')
   @RequirePermissions(Permission.USERS_READ)
   @ApiOperation({ summary: 'List user active sessions' })
-  async getUserSessions(@Param('id') userId: string) {
+  async getUserSessions(@Param('id') userId: string, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
     const sessions = await this.prisma.session.findMany({
       where: { userId, isRevoked: false, expiresAt: { gt: new Date() } },
       orderBy: { lastUsedAt: 'desc' },
@@ -155,6 +169,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const sessions = await this.prisma.session.findMany({
       where: { userId, isRevoked: false },
     });
@@ -187,6 +204,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new ResourceNotFoundException('User', userId);
 
@@ -236,6 +256,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new ResourceNotFoundException('User', userId);
 
@@ -280,6 +303,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new ResourceNotFoundException('User', userId);
     if (!body?.message || !body.message.trim()) {
@@ -328,6 +354,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const device = await this.prisma.device.findFirst({ where: { id: deviceId, userId } });
     if (!device) throw new ResourceNotFoundException('Device', deviceId);
 
@@ -368,6 +397,9 @@ export class AdminUsersController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    await this.brokerScope.assertUserInScope(scope, userId);
+
     const device = await this.prisma.device.findFirst({ where: { id: deviceId, userId } });
     if (!device) throw new ResourceNotFoundException('Device', deviceId);
 

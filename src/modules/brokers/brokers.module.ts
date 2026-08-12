@@ -1,0 +1,31 @@
+import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
+import { AuditModule } from '../audit/audit.module';
+import { BrokerService } from './services/broker.service';
+import { BrokerAdminService } from './services/broker-admin.service';
+import { BrokerPaymentConfigService } from './services/broker-payment-config.service';
+import { BrokerSecretsService } from './services/broker-secrets.service';
+import { BrokerScopeService } from './services/broker-scope.service';
+import { AdminBrokersController } from './controllers/admin-brokers.controller';
+import { BrokersController } from './controllers/brokers.controller';
+
+/**
+ * BrokersModule — multi-broker tenancy:
+ *   - Super Admin broker management (CRUD, admins, payment/API config)
+ *   - Mobile broker list + investor broker selection
+ *   - BrokerScopeService (server-side broker-scoped authorization)
+ *   - BrokerPaymentConfigService (per-broker gateway credential resolution)
+ */
+@Module({
+  imports: [AuthModule, AuditModule],
+  controllers: [AdminBrokersController, BrokersController],
+  providers: [
+    BrokerService,
+    BrokerAdminService,
+    BrokerPaymentConfigService,
+    BrokerSecretsService,
+    BrokerScopeService,
+  ],
+  exports: [BrokerScopeService, BrokerPaymentConfigService, BrokerAdminService, BrokerService],
+})
+export class BrokersModule {}

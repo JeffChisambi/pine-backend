@@ -48,9 +48,17 @@ export class KycRepository implements IKycRepository {
    * Previously created as PENDING, which polluted the broker queue immediately.
    */
   async createApplication(userId: string): Promise<KycApplicationRecord> {
+    // Stamp broker ownership from the user's persisted broker relationship
+    // so KYC data is broker-isolated from the moment it exists.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { brokerId: true },
+    });
+
     const app = await this.prisma.kycApplication.create({
       data: {
         userId,
+        brokerId: user?.brokerId ?? null,
         status: 'NOT_SUBMITTED',           // H-1 fix: broker queue-invisible until submitted
         ocrExtractedData: { _stage: 'CREATED' } as any,
       },
@@ -404,6 +412,11 @@ export class KycRepository implements IKycRepository {
 
   // ── Admin ──────────────────────────────────────────────────────────────────
 
+  /**
+   * WARNING: UNSCOPED — returns pending applications across ALL brokers.
+   * Currently unused by the admin surface. Any future caller MUST apply
+   * broker scope (user: { brokerId }) like getQueuePage.
+   */
   async getPendingApplications(
     limit: number,
     cursor?: string,
@@ -421,6 +434,8 @@ export class KycRepository implements IKycRepository {
     page: number;
     limit: number;
     status?: string;
+    /** Broker-scoped isolation: restrict to applications of this broker's users. */
+    brokerId?: string;
   }): Promise<{
     applications: KycApplicationRecord[];
     total: number;
@@ -446,6 +461,11 @@ export class KycRepository implements IKycRepository {
       if (validStatuses.includes(s)) {
         where.status = s;
       }
+    }
+    if (options.brokerId) {
+      // Server-derived broker scope — a broker admin only ever sees
+      // their own investors' applications.
+      where.user = { brokerId: options.brokerId };
     }
 
     const [apps, total] = await Promise.all([
@@ -479,9 +499,10 @@ export class KycRepository implements IKycRepository {
     };
   }
 
-  async getCountsByStatus(): Promise<Record<string, number>> {
+  async getCountsByStatus(brokerId?: string): Promise<Record<string, number>> {
     const groups = await this.prisma.kycApplication.groupBy({
       by: ['status'],
+      where: brokerId ? { user: { brokerId } } : undefined,
       _count: { id: true },
     });
 

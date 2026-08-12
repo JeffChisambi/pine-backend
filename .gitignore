@@ -34,3 +34,7 @@ prisma/generated/
 *.tsbuildinfo
 .turbo/
 tmp/
+
+# Local typecheck artifacts (generated; see tsconfig.typecheck.json)
+.tmp-prisma-client/
+prisma/schema.typecheck.prisma

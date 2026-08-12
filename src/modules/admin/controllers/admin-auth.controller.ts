@@ -17,6 +17,8 @@ import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { AdminAuthService } from '../services/admin-auth.service';
 import { MfaService } from '../services/mfa.service';
 import { AuditLogService } from '../../audit/services/audit-log.service';
+import { BrokerAdminService } from '../../brokers/services/broker-admin.service';
+import { ActivateBrokerAdminDto } from '../../brokers/dto/broker.dto';
 import {
   AdminLoginDto,
   MfaVerifyDto,
@@ -35,7 +37,27 @@ export class AdminAuthController {
     private readonly mfaService: MfaService,
     private readonly auditLogService: AuditLogService,
     private readonly prisma: PrismaService,
+    private readonly brokerAdminService: BrokerAdminService,
   ) {}
+
+  @Post('activate')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Activate an invited broker administrator account',
+    description:
+      'Consumes a one-time invitation token and sets the administrator\'s own ' +
+      'password. The account only becomes able to log in after activation; the ' +
+      'first login then enforces MFA enrollment + verification before any ' +
+      'dashboard access.',
+  })
+  @ApiResponse({ status: 200, description: 'Account activated — proceed to login' })
+  async activateBrokerAdmin(
+    @Body() dto: ActivateBrokerAdminDto,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.brokerAdminService.activate(dto.token, dto.password, req.ip);
+  }
 
   @Post('login')
   @Public()
@@ -212,15 +234,15 @@ export class AdminAuthController {
 
   // ── Helpers ──────────────────────────────────────────────────
 
+  /**
+   * SECURITY: the MFA token is an HMAC-signed, expiring credential minted
+   * only after a successful password check. It must be cryptographically
+   * VERIFIED here — merely decoding it would let an unauthenticated
+   * attacker forge `base64url("<userId>:x:y")` and enroll their own TOTP
+   * on any account without MFA (full pre-auth account takeover).
+   */
   private extractUserIdFromMfaToken(token: string): string {
-    try {
-      const decoded = Buffer.from(token, 'base64url').toString();
-      const [userId] = decoded.split(':');
-      if (!userId) throw new Error('Invalid token');
-      return userId;
-    } catch {
-      throw new Error('Invalid MFA token');
-    }
+    return this.adminAuthService.resolveMfaToken(token);
   }
 
   private async getUserEmail(userId: string) {

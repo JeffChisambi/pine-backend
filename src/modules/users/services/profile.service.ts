@@ -29,6 +29,15 @@ export interface UserProfile {
   isActive: boolean;
   profileCompletion: number;
   memberSince: string;
+  /** The investor's selected broker (core account relationship). */
+  broker: {
+    id: string;
+    name: string;
+    code: string;
+    logoUrl: string | null;
+    isActive: boolean;
+  } | null;
+  brokerSelectedAt: string | null;
 }
 
 @Injectable()
@@ -61,6 +70,16 @@ export class ProfileService {
       isActive: user.isActive,
       profileCompletion: this.calculateCompletion(user),
       memberSince: user.createdAt.toISOString().split('T')[0],
+      broker: user.broker
+        ? {
+            id: user.broker.id,
+            name: user.broker.name,
+            code: user.broker.code,
+            logoUrl: user.broker.logoUrl,
+            isActive: user.broker.isActive,
+          }
+        : null,
+      brokerSelectedAt: user.brokerSelectedAt?.toISOString() ?? null,
     };
   }
 

@@ -82,6 +82,29 @@ export class MastercardGatewayService implements IMastercardGateway, OnModuleIni
 
   constructor(private readonly config: AppConfigService) {}
 
+  /**
+   * Multi-broker support: build a gateway instance bound to a specific
+   * broker's credentials (resolved server-side from the investor's broker
+   * relationship + the broker's encrypted payment configuration). The
+   * returned instance shares all request/parsing logic but authenticates
+   * as THAT broker's merchant — investor deposits land directly in the
+   * broker's configured account, never a central Pine account.
+   */
+  scopedTo(cfg: {
+    merchantId: string;
+    apiPassword: string;
+    baseUrl: string;
+    apiVersion: number;
+  }): MastercardGatewayService {
+    const scoped = new MastercardGatewayService(this.config);
+    scoped.merchantId = cfg.merchantId;
+    scoped.apiPassword = cfg.apiPassword;
+    scoped.baseUrl = cfg.baseUrl;
+    scoped.apiVersion = cfg.apiVersion;
+    scoped.isConfigured = Boolean(cfg.merchantId && cfg.apiPassword);
+    return scoped;
+  }
+
   onModuleInit(): void {
     const mcgs = this.config.mastercardGateway;
     this.merchantId = mcgs.merchantId ?? '';

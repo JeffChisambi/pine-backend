@@ -17,6 +17,7 @@ import { AdminRepository } from '../repositories/admin.repository';
 import { AuditLogService } from '../../audit/services/audit-log.service';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { BroadcastNotificationDto } from '../dto/admin.dto';
+import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 
 @ApiTags('admin', 'notifications')
 @ApiBearerAuth()
@@ -26,11 +27,12 @@ export class AdminNotificationsController {
     private readonly adminRepo: AdminRepository,
     private readonly auditLogService: AuditLogService,
     private readonly prisma: PrismaService,
+    private readonly brokerScope: BrokerScopeService,
   ) {}
 
   @Get()
   @RequirePermissions(Permission.ADMIN_ACCESS)
-  @ApiOperation({ summary: 'List all notifications with filters' })
+  @ApiOperation({ summary: 'List notifications (broker admins: own broker only)' })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'channel', required: false, type: String })
   @ApiQuery({ name: 'category', required: false, type: String })
@@ -38,27 +40,33 @@ export class AdminNotificationsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Paginated notification list' })
   async listNotifications(
+    @CurrentUser() admin: AuthenticatedUser,
     @Query('status') status?: string,
     @Query('channel') channel?: string,
     @Query('category') category?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.adminRepo.listNotifications({
-      status,
-      channel,
-      category,
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 50,
-    });
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.adminRepo.listNotifications(
+      {
+        status,
+        channel,
+        category,
+        page: page ? parseInt(page, 10) : 1,
+        limit: limit ? parseInt(limit, 10) : 50,
+      },
+      scope,
+    );
   }
 
   @Get('stats')
   @RequirePermissions(Permission.ADMIN_ACCESS)
   @ApiOperation({ summary: 'Notification delivery statistics' })
   @ApiResponse({ status: 200, description: 'Stats by status and channel' })
-  async getStats() {
-    return this.adminRepo.getNotificationStats();
+  async getStats(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.adminRepo.getNotificationStats(scope);
   }
 
   @Post('broadcast')
@@ -74,9 +82,15 @@ export class AdminNotificationsController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    // Find target users
+    // Find target users. Broker admins may only broadcast to THEIR OWN
+    // investors — the scope comes from the server-side broker relationship,
+    // never from the request.
+    const scope = await this.brokerScope.resolveScope(admin);
     const where: Record<string, unknown> = { isActive: true };
-    if (dto.targetRole) {
+    if (scope) {
+      where.brokerId = scope;
+      where.role = 'CUSTOMER';
+    } else if (dto.targetRole) {
       where.role = dto.targetRole;
     }
 

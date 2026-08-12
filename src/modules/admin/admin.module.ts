@@ -5,6 +5,7 @@ import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
 import { KycModule } from '../kyc/kyc.module';
 import { TradingModule } from '../trading/trading.module';
+import { BrokersModule } from '../brokers/brokers.module';
 
 
 // Repository
@@ -57,6 +58,7 @@ import { AdminMeController } from './controllers/admin-me.controller';
     AuditModule,
     KycModule,
     TradingModule,
+    BrokersModule,
   ],
   controllers: [
     AdminAuthController,

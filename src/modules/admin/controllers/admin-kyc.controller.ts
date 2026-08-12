@@ -45,6 +45,7 @@ import {
   ValidationException,
 } from '../../../core/exceptions/app.exception';
 import { ErrorCode } from '../../../core/constants/error-codes.constant';
+import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 
 // ── Signed URL TTL for KYC document review ───────────────────────────────────
 // Per the Kusata API contract §7: image URLs must be valid for ≥ 1 hour so the
@@ -213,7 +214,31 @@ export class AdminKycController {
     private readonly csdFormService: CsdFormService,
     private readonly reconciliation: KycReconciliationService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly brokerScope: BrokerScopeService,
   ) {}
+
+  /**
+   * Load an application while enforcing broker isolation: a broker admin
+   * asking for another broker's application receives the same 404 as for
+   * a nonexistent id.
+   */
+  private async findScopedApplication(
+    applicationId: string,
+    admin: AuthenticatedUser,
+  ): Promise<{ id: string; userId: string; status: string }> {
+    const scope = await this.brokerScope.resolveScope(admin);
+    const app = await this.prisma.kycApplication.findFirst({
+      where: {
+        id: applicationId,
+        ...(scope ? { user: { brokerId: scope } } : {}),
+      },
+      select: { id: true, userId: true, status: true },
+    });
+    if (!app) {
+      throw new ResourceNotFoundException('KYC application', applicationId);
+    }
+    return app;
+  }
 
   // ── GET /admin/kyc/queue ───────────────────────────────────────────────────
 
@@ -235,17 +260,20 @@ export class AdminKycController {
   })
   @ApiResponse({ status: 200, description: 'Paginated list of KycApplicationRow objects.' })
   async getQueue(
+    @CurrentUser() admin: AuthenticatedUser,
     @Query('page') pageStr?: string,
     @Query('limit') limitStr?: string,
     @Query('status') status?: string,
   ) {
     const page = Math.max(1, parseInt(pageStr ?? '1', 10) || 1);
     const limit = Math.min(Math.max(1, parseInt(limitStr ?? '50', 10) || 50), 200);
+    const scope = await this.brokerScope.resolveScope(admin);
 
     const { applications, total, totalPages } = await this.kycRepo.getQueuePage({
       page,
       limit,
       status: status?.toUpperCase(),
+      brokerId: scope,
     });
 
     // getQueuePage returns KycApplicationRecord objects — re-map to KycApplicationRow
@@ -293,16 +321,19 @@ export class AdminKycController {
       'Returns aggregate counts for every KYC status. Drives tab badges and stats cards. Polled every 60 s by the frontend.',
   })
   @ApiResponse({ status: 200, description: 'KycCountsByStatus object.' })
-  async getCounts() {
+  async getCounts(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+
     // Application-level counts from kyc_applications
     const appGroups = await this.prisma.kycApplication.groupBy({
       by: ['status'],
+      where: scope ? { user: { brokerId: scope } } : undefined,
       _count: { id: true },
     });
 
     // NOT_SUBMITTED is best represented by users who have never started KYC
     const notSubmittedCount = await this.prisma.user.count({
-      where: { kycStatus: 'NOT_SUBMITTED' },
+      where: { kycStatus: 'NOT_SUBMITTED', ...(scope ? { brokerId: scope, role: 'CUSTOMER' } : {}) },
     });
 
     const counts: Record<string, number> = {
@@ -333,10 +364,18 @@ export class AdminKycController {
   @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
   @ApiResponse({ status: 200, description: 'KycApplicationDetail object.' })
   @ApiResponse({ status: 404, description: 'Application not found.' })
-  async getDetail(@Param('applicationId') applicationId: string) {
-    // Fetch application with user and documents joined
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
+  async getDetail(
+    @Param('applicationId') applicationId: string,
+    @CurrentUser() admin: AuthenticatedUser,
+  ) {
+    const scope = await this.brokerScope.resolveScope(admin);
+
+    // Fetch application with user and documents joined (broker-scoped)
+    const app = await this.prisma.kycApplication.findFirst({
+      where: {
+        id: applicationId,
+        ...(scope ? { user: { brokerId: scope } } : {}),
+      },
       include: {
         user: {
           select: {
@@ -484,13 +523,7 @@ export class AdminKycController {
     @Param('applicationId') applicationId: string,
     @CurrentUser() admin: AuthenticatedUser,
   ): Promise<StreamableFile> {
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-      select: { id: true },
-    });
-    if (!app) {
-      throw new ResourceNotFoundException('KYC application', applicationId);
-    }
+    await this.findScopedApplication(applicationId, admin);
 
     const pdf = await this.csdFormService.generateForApplication(applicationId);
 
@@ -516,12 +549,11 @@ export class AdminKycController {
   @RequirePermissions(Permission.KYC_REVIEW)
   @ApiOperation({ summary: 'Get resolved CSD form field values for editing' })
   @ApiParam({ name: 'applicationId', description: 'KYC application UUID' })
-  async getCsdData(@Param('applicationId') applicationId: string) {
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-      select: { id: true },
-    });
-    if (!app) throw new ResourceNotFoundException('KYC application', applicationId);
+  async getCsdData(
+    @Param('applicationId') applicationId: string,
+    @CurrentUser() admin: AuthenticatedUser,
+  ) {
+    await this.findScopedApplication(applicationId, admin);
     return { fields: await this.csdFormService.resolveFields(applicationId) };
   }
 
@@ -538,11 +570,7 @@ export class AdminKycController {
     @Body() body: { fields?: Record<string, string> },
     @CurrentUser() admin: AuthenticatedUser,
   ) {
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-      select: { id: true },
-    });
-    if (!app) throw new ResourceNotFoundException('KYC application', applicationId);
+    await this.findScopedApplication(applicationId, admin);
 
     const fields = await this.csdFormService.saveOverrides(
       applicationId,
@@ -577,13 +605,7 @@ export class AdminKycController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-      select: { id: true, userId: true, status: true },
-    });
-    if (!app) {
-      throw new ResourceNotFoundException('KYC application', applicationId);
-    }
+    const app = await this.findScopedApplication(applicationId, admin);
     if (TERMINAL_STATUSES.has(app.status)) {
       throw new ConflictException(
         'This application has already been reviewed and cannot be changed.',
@@ -663,13 +685,7 @@ export class AdminKycController {
       });
     }
 
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-      select: { id: true, userId: true, status: true },
-    });
-    if (!app) {
-      throw new ResourceNotFoundException('KYC application', applicationId);
-    }
+    const app = await this.findScopedApplication(applicationId, admin);
     if (TERMINAL_STATUSES.has(app.status)) {
       throw new ConflictException(
         'This application has already been reviewed and cannot be changed.',
@@ -744,13 +760,7 @@ export class AdminKycController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    const app = await this.prisma.kycApplication.findUnique({
-      where: { id: applicationId },
-      select: { id: true, userId: true, status: true },
-    });
-    if (!app) {
-      throw new ResourceNotFoundException('KYC application', applicationId);
-    }
+    const app = await this.findScopedApplication(applicationId, admin);
     if (TERMINAL_STATUSES.has(app.status)) {
       throw new ConflictException(
         'Cannot request documents for an application that has already been approved or rejected.',

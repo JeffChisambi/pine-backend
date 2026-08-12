@@ -2,8 +2,11 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
 import { Permission } from '../../auth/constants/permissions.constant';
+import { CurrentUser } from '../../../core/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../../../core/types/request-context.types';
 import { AdminRepository } from '../repositories/admin.repository';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 
 @ApiTags('admin', 'dashboard')
 @ApiBearerAuth()
@@ -12,30 +15,33 @@ export class AdminDashboardController {
   constructor(
     private readonly adminRepo: AdminRepository,
     private readonly prisma: PrismaService,
+    private readonly brokerScope: BrokerScopeService,
   ) {}
 
   @Get('stats')
   @RequirePermissions(Permission.ADMIN_ACCESS)
   @ApiOperation({
-    summary: 'Dashboard KPI statistics',
+    summary: 'Dashboard KPI statistics (broker admins: own broker only)',
     description: 'Returns key metrics: total users, pending KYC, today\'s trades/volume, etc.',
   })
   @ApiResponse({ status: 200, description: 'Dashboard stats' })
-  async getStats() {
-    return this.adminRepo.getDashboardStats();
+  async getStats(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.adminRepo.getDashboardStats(scope);
   }
 
   @Get('charts')
   @RequirePermissions(Permission.ADMIN_ACCESS)
   @ApiOperation({
-    summary: 'Dashboard chart data',
+    summary: 'Dashboard chart data (broker admins: own broker only)',
     description: 'Time-series data for volume, revenue, deposits/withdrawals over N days.',
   })
   @ApiQuery({ name: 'days', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Chart data array' })
-  async getChartData(@Query('days') days?: string) {
+  async getChartData(@CurrentUser() admin: AuthenticatedUser, @Query('days') days?: string) {
     const parsedDays = days ? parseInt(days, 10) : 14;
-    return this.adminRepo.getChartData(parsedDays);
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.adminRepo.getChartData(parsedDays, scope);
   }
 
   @Get('health')

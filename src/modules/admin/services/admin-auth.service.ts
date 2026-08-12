@@ -365,6 +365,15 @@ export class AdminAuthService {
 
   // ── MFA Token (short-lived, HMAC-signed) ─────────────────────
 
+  /**
+   * Verify an MFA token's HMAC signature + expiry and return the userId.
+   * Public entry point for controllers that need the token's subject —
+   * the signature check is NOT optional (see admin-auth.controller).
+   */
+  resolveMfaToken(token: string): string {
+    return this.verifyMfaToken(token);
+  }
+
   private generateMfaToken(userId: string): string {
     const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
     const payload = `${userId}:${expiresAt}`;

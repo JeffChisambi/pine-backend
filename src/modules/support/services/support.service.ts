@@ -167,10 +167,12 @@ export class SupportService {
 
   // ── Admin (dashboard) ─────────────────────────────────────────────────────
 
-  async listAdmin(query: ListSupportTicketsQueryDto) {
+  async listAdmin(query: ListSupportTicketsQueryDto, scopeBrokerId?: string) {
     const where: Prisma.SupportTicketWhereInput = {};
     if (query.status) where.status = query.status;
     if (query.awaitingAdmin) where.awaitingAdmin = true;
+    // Broker isolation: broker admins only see their own investors' tickets.
+    if (scopeBrokerId) where.user = { brokerId: scopeBrokerId };
 
     const limit = Math.min(query.limit ?? 30, 100);
     const page = query.page ?? 1;
@@ -207,9 +209,12 @@ export class SupportService {
     };
   }
 
-  async getAdminThread(ticketId: string) {
-    const ticket = await this.prisma.supportTicket.findUnique({
-      where: { id: ticketId },
+  async getAdminThread(ticketId: string, scopeBrokerId?: string) {
+    const ticket = await this.prisma.supportTicket.findFirst({
+      where: {
+        id: ticketId,
+        ...(scopeBrokerId ? { user: { brokerId: scopeBrokerId } } : {}),
+      },
       include: {
         messages: { orderBy: { createdAt: 'asc' } },
         user: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
@@ -231,8 +236,13 @@ export class SupportService {
     };
   }
 
-  async adminReply(adminId: string, ticketId: string, dto: ReplySupportTicketDto) {
-    const ticket = await this.prisma.supportTicket.findUnique({ where: { id: ticketId } });
+  async adminReply(adminId: string, ticketId: string, dto: ReplySupportTicketDto, scopeBrokerId?: string) {
+    const ticket = await this.prisma.supportTicket.findFirst({
+      where: {
+        id: ticketId,
+        ...(scopeBrokerId ? { user: { brokerId: scopeBrokerId } } : {}),
+      },
+    });
     if (!ticket) throw new ResourceNotFoundException('Support ticket', ticketId);
 
     const adminName = await this.resolveStaffName(adminId);
@@ -272,9 +282,14 @@ export class SupportService {
     return this.getAdminThread(ticket.id);
   }
 
-  async updateStatus(adminId: string, ticketId: string, status: SupportTicketStatus) {
+  async updateStatus(adminId: string, ticketId: string, status: SupportTicketStatus, scopeBrokerId?: string) {
     void adminId;
-    const ticket = await this.prisma.supportTicket.findUnique({ where: { id: ticketId } });
+    const ticket = await this.prisma.supportTicket.findFirst({
+      where: {
+        id: ticketId,
+        ...(scopeBrokerId ? { user: { brokerId: scopeBrokerId } } : {}),
+      },
+    });
     if (!ticket) throw new ResourceNotFoundException('Support ticket', ticketId);
 
     if (ticket.status === status) return this.getAdminThread(ticket.id);
@@ -308,11 +323,12 @@ export class SupportService {
   }
 
   /** Counts for the dashboard sidebar badge / overview. */
-  async stats() {
+  async stats(scopeBrokerId?: string) {
+    const brokerFilter = scopeBrokerId ? { user: { brokerId: scopeBrokerId } } : {};
     const [awaiting, open, inReview] = await Promise.all([
-      this.prisma.supportTicket.count({ where: { awaitingAdmin: true, status: { not: SupportTicketStatus.CLOSED } } }),
-      this.prisma.supportTicket.count({ where: { status: SupportTicketStatus.OPEN } }),
-      this.prisma.supportTicket.count({ where: { status: SupportTicketStatus.IN_REVIEW } }),
+      this.prisma.supportTicket.count({ where: { awaitingAdmin: true, status: { not: SupportTicketStatus.CLOSED }, ...brokerFilter } }),
+      this.prisma.supportTicket.count({ where: { status: SupportTicketStatus.OPEN, ...brokerFilter } }),
+      this.prisma.supportTicket.count({ where: { status: SupportTicketStatus.IN_REVIEW, ...brokerFilter } }),
     ]);
     return { awaitingAdmin: awaiting, open, inReview };
   }

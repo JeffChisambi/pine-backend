@@ -3,6 +3,7 @@ import { ConfigModule } from '../../config/config.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { TradingModule } from '../trading/trading.module';
 import { MastercardGatewayModule } from '../mastercard-gateway/mastercard-gateway.module';
+import { BrokersModule } from '../brokers/brokers.module';
 import { PaymentsController } from './controllers/payments.controller';
 import { SavedCardsController } from './controllers/saved-cards.controller';
 import { CardPaymentService } from './services/card-payment.service';
@@ -32,6 +33,7 @@ import { TradingService } from '../trading/services/trading.service';
     WalletModule,
     TradingModule,
     MastercardGatewayModule,
+    BrokersModule,
   ],
   controllers: [PaymentsController, SavedCardsController],
   providers: [

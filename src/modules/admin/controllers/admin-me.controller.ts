@@ -21,7 +21,9 @@ import { AuditLogService } from '../../audit/services/audit-log.service';
 import {
   ValidationException,
   ForbiddenException,
+  UnauthorizedException,
 } from '../../../core/exceptions/app.exception';
+import { ErrorCode } from '../../../core/constants/error-codes.constant';
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
@@ -157,7 +159,33 @@ export class AdminMeController {
 
   @Post('mfa/disable')
   @HttpCode(HttpStatus.OK)
-  async disableMfa(@CurrentUser() user: AuthenticatedUser) {
+  async disableMfa(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { code?: string },
+  ) {
+    // Re-authentication required: a stolen session token alone must not
+    // be enough to strip MFA from an account. Verify a current TOTP code
+    // (or recovery code) before disabling.
+    const code = body?.code?.trim();
+    if (!code) {
+      throw new UnauthorizedException(
+        'Enter your current authenticator code to disable MFA.',
+        ErrorCode.UNAUTHORIZED,
+      );
+    }
+    let valid = false;
+    try {
+      valid = await this.mfaService.verifyCode(user.id, code);
+    } catch {
+      valid = false;
+    }
+    if (!valid) {
+      valid = await this.mfaService.verifyRecoveryCode(user.id, code);
+    }
+    if (!valid) {
+      throw new UnauthorizedException('Invalid verification code', ErrorCode.UNAUTHORIZED);
+    }
+
     await this.mfaService.resetMfa(user.id);
 
     await this.auditLogService.log({

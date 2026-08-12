@@ -9,6 +9,7 @@ import { AuditLogService } from '../../audit/services/audit-log.service';
 import { TradingService } from '../../trading/services/trading.service';
 import { ListOrdersQueryDto } from '../dto/admin.dto';
 import { ResourceNotFoundException } from '../../../core/exceptions/app.exception';
+import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 
 @ApiTags('admin', 'trading')
 @ApiBearerAuth()
@@ -18,23 +19,28 @@ export class AdminTradingController {
     private readonly adminRepo: AdminRepository,
     private readonly auditLogService: AuditLogService,
     private readonly tradingService: TradingService,
+    private readonly brokerScope: BrokerScopeService,
   ) {}
 
   @Get('orders')
   @RequirePermissions(Permission.MARKET_READ)
-  @ApiOperation({ summary: 'List all trading orders with filters' })
+  @ApiOperation({ summary: 'List trading orders (broker admins: own broker only)' })
   @ApiResponse({ status: 200, description: 'Paginated order list' })
-  async listOrders(@Query() query: ListOrdersQueryDto) {
-    return this.adminRepo.listOrders({
-      status: query.status,
-      side: query.side,
-      userId: query.userId,
-      stockId: query.stockId,
-      dateFrom: query.dateFrom,
-      dateTo: query.dateTo,
-      page: query.page,
-      limit: query.limit,
-    });
+  async listOrders(@Query() query: ListOrdersQueryDto, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.adminRepo.listOrders(
+      {
+        status: query.status,
+        side: query.side,
+        userId: query.userId,
+        stockId: query.stockId,
+        dateFrom: query.dateFrom,
+        dateTo: query.dateTo,
+        page: query.page,
+        limit: query.limit,
+      },
+      scope,
+    );
   }
 
   @Get('orders/:id')
@@ -44,8 +50,9 @@ export class AdminTradingController {
     description: 'Returns the order with trades, executions, settlements, and audit trail.',
   })
   @ApiResponse({ status: 200, description: 'Order detail' })
-  async getOrderDetail(@Param('id') orderId: string) {
-    const order = await this.adminRepo.getOrderDetail(orderId);
+  async getOrderDetail(@Param('id') orderId: string, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    const order = await this.adminRepo.getOrderDetail(orderId, scope);
     if (!order) {
       throw new ResourceNotFoundException('Order', orderId);
     }
@@ -75,6 +82,15 @@ export class AdminTradingController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    // Broker admins may only execute orders belonging to THEIR broker.
+    const scope = await this.brokerScope.resolveScope(admin);
+    if (scope) {
+      const order = await this.adminRepo.getOrderDetail(orderId, scope);
+      if (!order) {
+        throw new ResourceNotFoundException('Order', orderId);
+      }
+    }
+
     const result = await this.tradingService.executeQueuedOrder(orderId, {
       adminId: admin.id,
       role: admin.role,

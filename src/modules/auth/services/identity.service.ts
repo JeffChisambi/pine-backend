@@ -220,6 +220,10 @@ export class IdentityService {
         gender: true,
         avatarKey: true,
         isActive: true,
+        brokerSelectedAt: true,
+        broker: {
+          select: { id: true, name: true, code: true, logoUrl: true, isActive: true },
+        },
         createdAt: true,
       },
     });

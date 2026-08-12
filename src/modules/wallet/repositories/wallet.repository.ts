@@ -25,8 +25,13 @@ export class WalletRepository {
   }
 
   async createWallet(userId: string, currency = 'MWK') {
+    // Stamp broker ownership from the user's persisted broker relationship.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { brokerId: true },
+    });
     return this.prisma.wallet.create({
-      data: { userId, currency, balance: 0 },
+      data: { userId, currency, balance: 0, brokerId: user?.brokerId ?? null },
     });
   }
 
@@ -63,10 +68,24 @@ export class WalletRepository {
     relatedPaymentId?: string;
     description?: string;
     metadata?: Record<string, any>;
+    brokerId?: string | null;
   }) {
+    // Broker ownership is stamped server-side from the wallet owner's
+    // broker relationship — never accepted from client input.
+    const brokerId =
+      data.brokerId !== undefined
+        ? data.brokerId
+        : (
+            await this.prisma.wallet.findUnique({
+              where: { id: data.walletId },
+              select: { user: { select: { brokerId: true } } },
+            })
+          )?.user.brokerId ?? null;
+
     return this.prisma.transaction.create({
       data: {
         walletId: data.walletId,
+        brokerId,
         type: data.type as any,
         amount: data.amount,
         currency: data.currency ?? 'MWK',

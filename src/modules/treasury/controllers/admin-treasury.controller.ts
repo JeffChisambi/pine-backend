@@ -13,7 +13,7 @@ import { CreateTreasuryProductDto, UpdateTreasuryProductDto } from '../dto/admin
 
 /**
  * Admin (dashboard) treasury-bill management + investment (order) oversight.
- * Reuses ADMIN_ACCESS and audits mutations, matching the news/admin-users
+ * Requires PLATFORM_ADMIN (Super Admin only) and audits mutations, matching the news
  * convention.
  */
 @ApiTags('admin', 'treasury')
@@ -27,14 +27,14 @@ export class AdminTreasuryController {
   ) {}
 
   @Get('products')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @ApiOperation({ summary: 'List all treasury products (incl. inactive)' })
   async listProducts() {
     return { products: await this.treasury.listAllProducts() };
   }
 
   @Post('products')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a treasury product (T-bill)' })
   async createProduct(
@@ -53,7 +53,7 @@ export class AdminTreasuryController {
   }
 
   @Patch('products/:id')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Update a treasury product' })
   async updateProduct(
@@ -72,7 +72,7 @@ export class AdminTreasuryController {
   }
 
   @Delete('products/:id')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete (or archive) a treasury product' })
   async deleteProduct(
@@ -91,7 +91,7 @@ export class AdminTreasuryController {
   }
 
   @Get('investments')
-  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
   @ApiOperation({ summary: 'List all treasury investments (orders) across users' })
   async listInvestments() {
     return { investments: await this.treasury.listAllInvestments() };

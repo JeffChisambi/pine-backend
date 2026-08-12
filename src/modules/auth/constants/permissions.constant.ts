@@ -39,6 +39,16 @@ export enum Permission {
 
   // Admin
   ADMIN_ACCESS = 'admin.access',
+
+  // Platform-wide administration (Super Admin only): mobile themes,
+  // news CMS, treasury catalogue, broadcast notifications, platform
+  // settings. A Broker Admin must never hold this permission — the
+  // backend enforces the separation regardless of frontend state.
+  PLATFORM_ADMIN = 'platform.admin',
+
+  // Broker tenant management (Super Admin only): create/edit brokers,
+  // broker admins, broker payment/API configuration.
+  BROKERS_MANAGE = 'brokers.manage',
 }
 
 /**
@@ -99,8 +109,13 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ADMIN_ACCESS,
   ],
 
-  // Brokers can VIEW queue and detail but cannot perform mutations
-  // (approve, reject, request-docs). KYC_APPROVE is intentionally omitted.
+  // BROKER = Broker Admin: operational access scoped to their own
+  // broker's investors only (enforced server-side by BrokerScopeService
+  // on every admin query). Deliberately omitted:
+  //   - KYC_APPROVE       (compliance decision stays with the platform)
+  //   - AUDIT_VIEW        (platform-wide audit is Super Admin only)
+  //   - PLATFORM_ADMIN    (themes, news, treasury, broadcasts)
+  //   - BROKERS_MANAGE    (tenant management)
   [Role.BROKER]: [
     Permission.USERS_READ,
     Permission.KYC_REVIEW,
@@ -110,7 +125,6 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.MARKET_READ,
     Permission.REPORTS_VIEW,
     Permission.REPORTS_EXPORT,
-    Permission.AUDIT_VIEW,
     Permission.ADMIN_ACCESS,
   ],
 
