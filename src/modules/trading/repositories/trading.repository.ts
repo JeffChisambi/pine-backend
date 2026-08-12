@@ -103,10 +103,12 @@ export class TradingRepository {
       side?: string;
       limit?: number;
       offset?: number;
+      excludeStatuses?: string[];
     } = {},
   ) {
     const where: any = { userId };
     if (filters.status) where.status = filters.status;
+    else if (filters.excludeStatuses?.length) where.status = { notIn: filters.excludeStatuses };
     if (filters.side) where.side = filters.side;
 
     const [orders, total] = await Promise.all([

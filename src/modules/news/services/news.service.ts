@@ -64,8 +64,35 @@ export class NewsService {
     // key = news/<timestamp>-<uuid>-<uuid>.<ext>; the public route addresses
     // it by basename (no slashes — traversal-safe by construction).
     const name = key.slice('news/'.length);
-    const base = this.config.app.url.replace(/\/$/, '');
-    return { imageUrl: `${base}/v1/news/images/${name}`, key };
+    return { imageUrl: `${this.apiBase()}/v1/news/images/${name}`, key };
+  }
+
+  /**
+   * APP_URL normalized for URL building: no trailing slash, and a trailing
+   * "/v1" is stripped so a misconfigured APP_URL=https://host/v1 cannot
+   * produce ".../v1/v1/news/images/…" URLs.
+   */
+  private apiBase(): string {
+    return this.config.app.url.replace(/\/$/, '').replace(/\/v1$/, '');
+  }
+
+  /**
+   * Normalize a stored image URL at READ time.
+   *
+   * Image URLs used to be frozen into the row at upload time from APP_URL —
+   * which on deployments where APP_URL was left at its localhost default
+   * produced permanently broken "http://localhost:3000/…" URLs on real
+   * devices. Rows can't be trusted, so the host is re-derived from the
+   * current APP_URL on every read: any URL that points at the app's own
+   * news-image route (absolute with any host, or relative) is rebuilt as
+   * `${APP_URL}/v1/news/images/<name>`. URLs that are NOT ours (externally
+   * scraped article images) are passed through untouched.
+   */
+  private publicImageUrl(stored: string | null): string | null {
+    if (!stored) return null;
+    const match = stored.match(/\/v1\/news\/images\/([^/?#\s]+)$/);
+    if (!match) return stored; // external image — leave as-is
+    return `${this.apiBase()}/v1/news/images/${match[1]}`;
   }
 
   /** Stream a stored news image for the public route. */
@@ -147,7 +174,10 @@ export class NewsService {
     ]);
 
     return {
-      articles,
+      articles: articles.map((a) => ({
+        ...a,
+        imageUrl: this.publicImageUrl(a.imageUrl),
+      })),
       total,
       page,
       limit,
@@ -158,7 +188,7 @@ export class NewsService {
   async getAdmin(id: string) {
     const article = await this.prisma.newsArticle.findUnique({ where: { id } });
     if (!article) throw new ResourceNotFoundException('News article', id);
-    return article;
+    return { ...article, imageUrl: this.publicImageUrl(article.imageUrl) };
   }
 
   async create(dto: CreateNewsDto, authorId: string) {
@@ -221,7 +251,7 @@ export class NewsService {
       body: a.body ?? [],
       time: this.formatDate(a.publishedAt),
       source: a.source,
-      image: a.imageUrl,
+      image: this.publicImageUrl(a.imageUrl),
       featured: a.featured,
     };
   }

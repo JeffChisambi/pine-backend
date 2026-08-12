@@ -398,29 +398,57 @@ export class TradingService {
 
 
   /**
-   * Get trade history — returns executed/settled orders only.
+   * Get trade history — ORDER-based, one row per order regardless of status.
+   *
+   * This intentionally reads the Order table, NOT the Trade table. A queued
+   * order (status SUBMITTED — e.g. placed while the market is closed) has no
+   * Trade rows until the broker executes it, so a Trade-based query silently
+   * dropped every pending order from the user's history. Order-based rows
+   * also can't duplicate on execution: the same order row simply transitions
+   * SUBMITTED → FILLED/SETTLED in place.
+   *
+   * DRAFT / PENDING_VALIDATION are excluded: they are transient in-flight
+   * states (or abandoned validation attempts) that were never accepted, and
+   * showing them would render phantom "Pending" rows forever.
    */
   async getTradeHistory(userId: string, limit = 20, offset = 0) {
-    const trades = await this.repo.findUserTrades(userId, limit, offset);
-    const orders = trades.map((t) => {
-      const grossValue = t.quantity.mul(t.price);
-      const totalCost = grossValue.add(t.fee);
+    const { orders: rows } = await this.repo.findUserOrders(userId, {
+      limit,
+      offset,
+      excludeStatuses: ['DRAFT', 'PENDING_VALIDATION'],
+    });
+
+    const orders = rows.map((o: any) => {
+      const executed = (o.trades?.length ?? 0) > 0;
+      // Executed orders report the actual fill price; queued orders fall back
+      // to the limit price (what the user agreed to pay) so the row still
+      // shows meaningful amounts while pending.
+      const price: Decimal =
+        o.averageFillPrice ?? o.limitPrice ?? new Decimal(0);
+      const grossValue = o.quantity.mul(price);
+      const fees = o.totalFees ?? new Decimal(0);
+      // totalCost is persisted at validation time (gross + fees); prefer it,
+      // reconstruct only if absent.
+      const totalCost: Decimal =
+        o.totalCost && o.totalCost.gt(0) ? o.totalCost : grossValue.add(fees);
+
       return {
-        id: t.orderId,
-        stockId: t.order.stockId,
-        symbol: t.order.stock.symbol,
-        side: t.order.side,
-        type: t.order.type,
-        quantity: t.quantity.toFixed(0),
-        price: t.price.toFixed(2),
-        totalAmount: grossValue.toFixed(2),
-        status: t.order.status,
-        queued: false,
+        id: o.id,
+        stockId: o.stockId,
+        symbol: o.stock.symbol,
+        side: o.side,
+        type: o.type,
+        quantity: o.quantity.toFixed(0),
+        price: price.toFixed(2),
+        totalAmount: totalCost.sub(fees).toFixed(2),
+        status: o.status,
+        queued: o.status === OrderLifecycleStatus.SUBMITTED,
         fees: { totalCost: totalCost.toFixed(2) },
-        createdAt: t.createdAt,
-        executedAt: t.settledAt ?? t.createdAt,
+        createdAt: o.createdAt,
+        executedAt: o.filledAt ?? o.settledAt ?? (executed ? o.updatedAt : null),
       };
     });
+
     return { orders, count: orders.length };
   }
 
