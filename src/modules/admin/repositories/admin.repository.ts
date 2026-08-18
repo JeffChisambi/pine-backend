@@ -220,6 +220,12 @@ export class AdminRepository {
 
     if (filters.role && !scopeBrokerId) {
       where.role = filters.role as Prisma.EnumRoleFilter;
+    } else if (!scopeBrokerId) {
+      // The users screen manages INVESTORS. Admin/broker/staff accounts are
+      // not customers — they have no wallet, AUM, or risk profile — and must
+      // never be listed (or acted on) as if they were. An explicit role
+      // filter above can still target them deliberately.
+      where.role = 'CUSTOMER';
     }
 
     const [users, total] = await Promise.all([
