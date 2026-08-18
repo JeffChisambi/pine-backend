@@ -398,15 +398,16 @@ export class MfaService {
   // ── QR Code ──────────────────────────────────────────────────
 
   /**
-   * Generate a simple QR code data URL. Uses a public API endpoint
-   * to generate the QR code image. In production, replace with
-   * a server-side QR library like `qrcode`.
-   *
-   * For now, returns the otpauth URI for the client to render.
+   * Render the otpauth URI as a PNG data URL, generated fully server-side
+   * so the OTP secret never leaves our infrastructure. The dashboard puts
+   * this straight into an <img src>.
    */
   private async generateQrDataUrl(otpauthUri: string): Promise<string> {
-    // Return the URI directly — the Kusata frontend will render the QR code
-    // using a client-side library. This avoids adding a server-side QR dependency.
-    return otpauthUri;
+    const QRCode = await import('qrcode');
+    return QRCode.toDataURL(otpauthUri, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 240,
+    });
   }
 }
