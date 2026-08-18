@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import { MailService } from '../../../infrastructure/mail/mail.service';
+import { AppConfigService } from '../../../config/app-config.service';
 import { PasswordService } from '../../auth/services/password.service';
 import { AuditLogService } from '../../audit/services/audit-log.service';
 import { Role } from '../../../core/constants/roles.constant';
@@ -36,7 +38,15 @@ export class BrokerAdminService {
     private readonly prisma: PrismaService,
     private readonly passwordService: PasswordService,
     private readonly auditLog: AuditLogService,
+    private readonly mail: MailService,
+    private readonly config: AppConfigService,
   ) {}
+
+  /** Activation link with the one-time token prefilled. */
+  private activationUrl(token: string): string {
+    const base = this.config.app.dashboardUrl.replace(/\/$/, '');
+    return `${base}/activate?token=${encodeURIComponent(token)}`;
+  }
 
   async inviteBrokerAdmin(
     brokerId: string,
@@ -107,6 +117,17 @@ export class BrokerAdminService {
 
     this.logger.log({ brokerId, adminUserId: user.id }, 'Broker admin invited');
 
+    // Email the invitee their activation link. Best-effort: the invitation
+    // is already created, and the token below remains the manual fallback.
+    const emailSent = await this.mail.sendBrokerInvitation({
+      to: dto.email,
+      firstName: dto.firstName,
+      brokerName: broker.name,
+      activationUrl: this.activationUrl(rawToken),
+      token: rawToken,
+      expiresAt,
+    });
+
     // The raw token is returned ONCE and never stored or logged.
     return {
       adminUserId: user.id,
@@ -114,9 +135,13 @@ export class BrokerAdminService {
       invitationId: invitation.id,
       invitationToken: rawToken,
       expiresAt: expiresAt.toISOString(),
-      instructions:
-        'Share this one-time invitation token securely with the broker administrator. ' +
-        'They will set their own password during activation and must enroll in MFA on first login.',
+      emailSent,
+      instructions: emailSent
+        ? `An invitation email with the activation link has been sent to ${dto.email}. ` +
+          'The token below is a fallback in case the email does not arrive.'
+        : 'The invitation email could not be sent — share this one-time invitation token ' +
+          'securely with the broker administrator. They will set their own password during ' +
+          'activation and must enroll in MFA on first login.',
     };
   }
 
@@ -166,7 +191,20 @@ export class BrokerAdminService {
       metadata: { brokerId },
     });
 
-    return { invitationToken: rawToken, expiresAt: expiresAt.toISOString() };
+    // Best-effort email with the fresh activation link (see invite above).
+    const broker = await this.prisma.broker.findUnique({ where: { id: brokerId } });
+    const emailSent = user.email
+      ? await this.mail.sendBrokerInvitation({
+          to: user.email,
+          firstName: user.firstName,
+          brokerName: broker?.name ?? 'your brokerage',
+          activationUrl: this.activationUrl(rawToken),
+          token: rawToken,
+          expiresAt,
+        })
+      : false;
+
+    return { invitationToken: rawToken, expiresAt: expiresAt.toISOString(), emailSent };
   }
 
   /**

@@ -13,6 +13,8 @@ export const appConfig = registerAs('app', () => ({
   env: process.env.NODE_ENV ?? 'development',
   port: parseInt(process.env.APP_PORT ?? '3000', 10),
   url: process.env.APP_URL ?? 'http://localhost:3000',
+  /** Broker dashboard origin — used in emails (e.g. invitation activation links). */
+  dashboardUrl: process.env.DASHBOARD_URL ?? 'https://broker.appine.online',
   apiPrefix: process.env.API_PREFIX ?? 'v1',
   timezone: process.env.APP_TIMEZONE ?? 'Africa/Blantyre',
   isProduction: process.env.NODE_ENV === 'production',

@@ -3,6 +3,8 @@ export interface AppConfig {
   env: 'development' | 'test' | 'staging' | 'production';
   port: number;
   url: string;
+  /** Broker dashboard origin — used in emails (invitation activation links). */
+  dashboardUrl: string;
   apiPrefix: string;
   timezone: string;
   isProduction: boolean;
