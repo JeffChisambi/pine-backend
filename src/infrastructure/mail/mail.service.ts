@@ -57,6 +57,7 @@ export class MailService {
     panel: '#F6F8F7',
     border: '#E5E7EB',
     logoUrl: 'https://appine.online/assets/pine-logo.png',
+    avatarUrl: 'https://appine.online/assets/pine-avatar.png',
     font: "-apple-system, 'Segoe UI', Roboto, Arial, Helvetica, sans-serif",
   };
 
@@ -101,7 +102,8 @@ export class MailService {
           </td>
         </tr>
         <tr>
-          <td align="center" style="padding:20px 30px 28px;">
+          <td align="center" style="padding:22px 30px 28px;">
+            <img src="${B.avatarUrl}" alt="" width="44" height="44" style="display:block; width:44px; height:44px; border-radius:22px; margin:0 auto 10px;" />
             <div style="font-family:${B.font}; font-size:13px; font-weight:700; color:${B.teal};">The Pine Team</div>
             <div style="font-family:${B.font}; font-size:12px; color:${B.muted}; margin-top:3px;">Investing in the Malawi Stock Exchange</div>
             <div style="font-family:${B.font}; font-size:12px; color:${B.muted}; margin-top:10px;">Blantyre, Malawi</div>
