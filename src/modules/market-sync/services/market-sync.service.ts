@@ -45,6 +45,9 @@ const CIRCUIT_OPEN_DURATION_SECONDS = 1800; // 30 minutes
 export class MarketSyncService {
   private readonly logger = new Logger(MarketSyncService.name);
 
+  /** stockId → trading-day key of the last price-move notification sent. */
+  private readonly priceMoveNotified = new Map<string, string>();
+
   constructor(
     @Inject(MARKET_DATA_SOURCE)
     private readonly dataSource: IMarketDataSource,
@@ -169,8 +172,39 @@ export class MarketSyncService {
           };
         });
 
+      // Snapshot the latest stored closes BEFORE persisting so real price
+      // movements (close changed) can be detected after the upsert.
+      const prevCloses = new Map(
+        (await this.repository.getLatestCloses(priceRecords.map((p) => p.stockId)))
+          .map((r) => [r.stockId, parseFloat(r.closePrice)]),
+      );
+
       // ── 4. Persist ────────────────────────────────────────────
       const upsertedCount = await this.repository.upsertStockPrices(priceRecords);
+
+      // ── 4b. Price-move notifications ──────────────────────────
+      // Emit one `market.price.moved` per stock whose close actually changed
+      // (throttled to once per stock per trading day — the sync runs every
+      // few minutes, and holders/watchers need a heads-up, not a ticker).
+      const todayKey = tradingDate.toISOString().slice(0, 10);
+      for (const rec of priceRecords) {
+        const prev = prevCloses.get(rec.stockId);
+        const close = parseFloat(rec.closePrice);
+        const changePct = parseFloat(rec.changePct ?? '0') || 0;
+        if (prev === undefined || !isFinite(close) || close === prev || changePct === 0) continue;
+        if (this.priceMoveNotified.get(rec.stockId) === todayKey) continue;
+        this.priceMoveNotified.set(rec.stockId, todayKey);
+
+        const stock = stocks.find((s) => s.id === rec.stockId);
+        if (!stock) continue;
+        this.eventEmitter.emit('market.price.moved', {
+          stockId: rec.stockId,
+          symbol: stock.symbol,
+          name: stock.name,
+          price: close,
+          changePct,
+        });
+      }
 
       // ── 5. Emit domain event ──────────────────────────────────
       const durationMs = Date.now() - startedAt.getTime();

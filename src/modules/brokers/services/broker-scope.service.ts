@@ -48,6 +48,27 @@ export class BrokerScopeService {
   }
 
   /**
+   * Assert the caller is BROKER staff acting inside their own broker scope.
+   *
+   * Platform admins (SUPER_ADMIN & other platform roles) are OBSERVERS of
+   * broker operations: they may view orders and KYC across all brokers but
+   * must never execute an order or decide a KYC application — those actions
+   * belong exclusively to the broker that owns the investor relationship.
+   * Returns the caller's broker id for scoping the mutation.
+   */
+  async requireBrokerActor(user: Pick<AuthenticatedUser, 'id' | 'role'>): Promise<string> {
+    if (user.role !== Role.BROKER) {
+      throw new ForbiddenException(
+        'Platform administrators have read-only access to broker operations. ' +
+          'Only the owning broker can perform this action.',
+      );
+    }
+    const scope = await this.resolveScope(user);
+    // resolveScope throws for broker users without a broker; scope is set here.
+    return scope as string;
+  }
+
+  /**
    * Assert that a target investor belongs to the resolved scope.
    * No-op for unscoped (platform) callers.
    */

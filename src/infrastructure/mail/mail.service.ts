@@ -43,6 +43,57 @@ export class MailService {
   }
 
   /**
+   * Professional email signature appended to every outbound message.
+   * Email-safe HTML: tables + inline styles only (no external images, so
+   * nothing is blocked by mail clients or flagged by spam filters).
+   */
+  private signatureHtml(): string {
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; max-width: 520px; margin-top: 32px; border-collapse: separate; border-spacing: 0; border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden;">
+        <tr>
+          <td style="padding: 18px 22px; background: #FFFFFF;">
+            <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%;">
+              <tr>
+                <td style="vertical-align: middle; width: 96px; border-right: 2px solid #45B369; padding-right: 18px;">
+                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 26px; font-weight: bold; color: #164951; letter-spacing: -0.5px;">Pine</div>
+                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 9px; letter-spacing: 2px; color: #45B369; font-weight: bold;">INVEST</div>
+                </td>
+                <td style="vertical-align: middle; padding-left: 18px;">
+                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: bold; color: #111827;">The Pine Team</div>
+                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #6B7280; margin-top: 2px;">Investing in the Malawi Stock Exchange</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 22px; background: #164951;">
+            <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%;">
+              <tr>
+                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #FFFFFF;">Blantyre, Malawi</td>
+                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #FFFFFF; text-align: center;">
+                  <a href="https://appine.online" style="color: #FFFFFF; text-decoration: none;">appine.online</a>
+                </td>
+                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #FFFFFF; text-align: right;">
+                  <a href="mailto:${this.from.replace(/^.*<|>$/g, '')}" style="color: #FFFFFF; text-decoration: none;">${this.from.replace(/^.*<|>$/g, '')}</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+      <p style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #9CA3AF; max-width: 520px; margin-top: 12px; line-height: 15px;">
+        This message and any attachments are confidential and intended solely for the addressee.
+        If you received it in error, please delete it and notify the sender.
+      </p>`;
+  }
+
+  private signatureText(): string {
+    const email = this.from.replace(/^.*<|>$/g, '');
+    return `\n\n—\nThe Pine Team\nInvesting in the Malawi Stock Exchange\nBlantyre, Malawi · https://appine.online · ${email}`;
+  }
+
+  /**
    * Send a verification code email. Never throws on delivery failure —
    * the OTP flow surfaces its own errors and the code stays retrievable
    * from dev logs; a mail outage must not 500 the auth endpoint.
@@ -51,7 +102,8 @@ export class MailService {
     const subject = 'Your Pine verification code';
     const text =
       `Your Pine verification code is: ${code}\n\n` +
-      `This code expires in 5 minutes. If you didn't request it, you can ignore this email.`;
+      `This code expires in 5 minutes. If you didn't request it, you can ignore this email.` +
+      this.signatureText();
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="color: #164951; margin-bottom: 4px;">Pine</h2>
@@ -60,6 +112,7 @@ export class MailService {
           <span style="font-size: 30px; font-weight: bold; letter-spacing: 8px; color: #164951;">${code}</span>
         </div>
         <p style="color: #6B7280; font-size: 13px;">This code expires in 5 minutes. If you didn't request it, you can safely ignore this email.</p>
+        ${this.signatureHtml()}
       </div>`;
 
     if (!this.transporter) {
@@ -103,7 +156,8 @@ export class MailService {
       `Activate your account and set your password here:\n${activationUrl}\n\n` +
       `If the link doesn't work, go to the activation page and paste this one-time invitation token:\n${token}\n\n` +
       `This invitation expires on ${expiryText}. After activating you'll be asked to set up two-factor authentication on first sign-in.\n\n` +
-      `If you weren't expecting this invitation, you can ignore this email.`;
+      `If you weren't expecting this invitation, you can ignore this email.` +
+      this.signatureText();
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px;">
         <h2 style="color: #164951; margin-bottom: 4px;">Pine</h2>
@@ -130,6 +184,7 @@ export class MailService {
         <p style="color: #9CA3AF; font-size: 12px; margin-top: 20px;">
           If you weren't expecting this invitation, you can safely ignore this email.
         </p>
+        ${this.signatureHtml()}
       </div>`;
 
     if (!this.transporter) {

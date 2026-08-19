@@ -62,6 +62,20 @@ export class MarketSyncRepository implements IMarketSyncRepository {
     return stocks;
   }
 
+  /**
+   * Latest stored close per stock — snapshot taken BEFORE an upsert so the
+   * sync can detect which stocks actually moved (close changed) afterwards.
+   */
+  async getLatestCloses(stockIds: string[]): Promise<Array<{ stockId: string; closePrice: string }>> {
+    const rows = await this.prisma.stockPrice.findMany({
+      where: { stockId: { in: stockIds } },
+      orderBy: { tradedAt: 'desc' },
+      distinct: ['stockId'],
+      select: { stockId: true, closePrice: true },
+    });
+    return rows.map((r) => ({ stockId: r.stockId, closePrice: r.closePrice.toString() }));
+  }
+
   // ──────────────────────────────────────────────────────────────
   // Price upserts
   // ──────────────────────────────────────────────────────────────

@@ -34,6 +34,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { WatchlistModule } from './modules/watchlist/watchlist.module';
 import { TreasuryModule } from './modules/treasury/treasury.module';
 import { SupportModule } from './modules/support/support.module';
+import { SystemErrorsModule } from './modules/system-errors/system-errors.module';
 import { MobileThemeModule } from './modules/mobile-theme/mobile-theme.module';
 import { BrokersModule } from './modules/brokers/brokers.module';
 
@@ -79,6 +80,7 @@ import { BrokersModule } from './modules/brokers/brokers.module';
     WatchlistModule,
     TreasuryModule,
     SupportModule,
+    SystemErrorsModule,
     MobileThemeModule,
     BrokersModule,
   ],

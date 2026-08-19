@@ -211,6 +211,55 @@ export class NotificationService implements OnModuleInit {
     });
   }
 
+  /**
+   * Market: a stock's price moved during the trading day. Fired by the
+   * market-sync pipeline (at most once per stock per day). Notifies every
+   * investor who HOLDS or WATCHES the stock — a platform-wide broadcast
+   * would be noise on a 16-stock exchange.
+   */
+  @OnEvent('market.price.moved')
+  async onPriceMoved(event: {
+    stockId: string;
+    symbol: string;
+    name: string;
+    price: number;
+    changePct: number;
+  }) {
+    const [holders, watchers] = await Promise.all([
+      this.prisma.holding.findMany({
+        where: { stockId: event.stockId, quantity: { gt: 0 } },
+        select: { userId: true },
+      }),
+      this.prisma.watchlistEntry.findMany({
+        where: { stockId: event.stockId },
+        select: { userId: true },
+      }),
+    ]);
+    const userIds = [...new Set([...holders, ...watchers].map((r) => r.userId))];
+    if (userIds.length === 0) return;
+
+    const up = event.changePct > 0;
+    await Promise.allSettled(
+      userIds.map((userId) =>
+        this.notify({
+          userId,
+          templateKey: 'market.price_moved',
+          variables: {
+            symbol: event.symbol,
+            name: event.name,
+            direction: up ? 'up' : 'down',
+            changePct: Math.abs(event.changePct).toFixed(2),
+            signedPct: `${up ? '+' : '-'}${Math.abs(event.changePct).toFixed(2)}`,
+            price: event.price.toLocaleString(),
+          },
+          category: 'MARKET',
+          priority: PRIORITY.INFORMATIONAL,
+          data: { stockId: event.stockId, symbol: event.symbol, screen: 'stock' },
+        }),
+      ),
+    );
+  }
+
   /** Trading: order rejected */
   @OnEvent('trading.order.rejected')
   async onOrderRejected(event: {

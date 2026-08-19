@@ -82,13 +82,13 @@ export class AdminTradingController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
-    // Broker admins may only execute orders belonging to THEIR broker.
-    const scope = await this.brokerScope.resolveScope(admin);
-    if (scope) {
-      const order = await this.adminRepo.getOrderDetail(orderId, scope);
-      if (!order) {
-        throw new ResourceNotFoundException('Order', orderId);
-      }
+    // Order execution belongs to the OWNING BROKER exclusively — platform
+    // admins observe but never act. Also confines the broker to their own
+    // orders (scoped lookup 404s on anything outside their book).
+    const scope = await this.brokerScope.requireBrokerActor(admin);
+    const order = await this.adminRepo.getOrderDetail(orderId, scope);
+    if (!order) {
+      throw new ResourceNotFoundException('Order', orderId);
     }
 
     const result = await this.tradingService.executeQueuedOrder(orderId, {

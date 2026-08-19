@@ -69,6 +69,8 @@ export interface KycApplicationRecord {
   phoneVerified?: boolean | null;
   /** First document type from the application documents array */
   documentType?: string | null;
+  /** Owning broker's display name — how platform admins see whose data this is. */
+  brokerName?: string | null;
 }
 
 export interface KycDocumentRecord {

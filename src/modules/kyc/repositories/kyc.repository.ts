@@ -483,6 +483,8 @@ export class KycRepository implements IKycRepository {
               emailVerifiedAt: true,
               phone: true,
               phoneVerifiedAt: true,
+              // Ownership label for platform admins observing cross-broker.
+              broker: { select: { id: true, name: true } },
             },
           },
           documents: { select: { type: true } },
@@ -685,6 +687,7 @@ export class KycRepository implements IKycRepository {
       phone: app.user?.phone ?? null,
       phoneVerified: app.user != null ? app.user.phoneVerifiedAt != null : null,
       documentType: Array.isArray(app.documents) ? (app.documents[0]?.type ?? null) : null,
+      brokerName: app.user?.broker?.name ?? null,
     };
   }
 

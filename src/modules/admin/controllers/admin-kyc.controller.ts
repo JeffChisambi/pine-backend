@@ -305,7 +305,11 @@ export class AdminKycController {
         riskFlags: rec.riskFlags,
         documents: rec.documentType ? [{ type: rec.documentType }] : [],
       };
-      return buildApplicationRow(syntheticApp, syntheticUser);
+      return {
+        ...buildApplicationRow(syntheticApp, syntheticUser),
+        // Ownership label — how platform admins see whose investor this is.
+        brokerName: rec.brokerName ?? null,
+      };
     });
 
     return {
@@ -394,6 +398,7 @@ export class AdminKycController {
             phoneVerifiedAt: true,
             dateOfBirth: true,
             gender: true,
+            broker: { select: { id: true, name: true } },
           },
         },
         documents: true,
@@ -428,10 +433,11 @@ export class AdminKycController {
       }),
     );
 
-    const applicationRow = buildApplicationRow(
-      { ...app, documents: app.documents },
-      app.user,
-    );
+    const applicationRow = {
+      ...buildApplicationRow({ ...app, documents: app.documents }, app.user),
+      // Ownership label — how platform admins see whose investor this is.
+      brokerName: (app.user as any)?.broker?.name ?? null,
+    };
 
     // Extract OCR data from the AI pipeline's JSON blob into the flat KycOcrData shape
     const ocrExtractedData = extractOcrData(app.ocrExtractedData);
@@ -611,6 +617,8 @@ export class AdminKycController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    // KYC decisions belong to the OWNING BROKER — platform admins observe only.
+    await this.brokerScope.requireBrokerActor(admin);
     const app = await this.findScopedApplication(applicationId, admin);
     if (isHumanReviewed(app)) {
       throw new ConflictException(
@@ -691,6 +699,8 @@ export class AdminKycController {
       });
     }
 
+    // KYC decisions belong to the OWNING BROKER — platform admins observe only.
+    await this.brokerScope.requireBrokerActor(admin);
     const app = await this.findScopedApplication(applicationId, admin);
     if (isHumanReviewed(app)) {
       throw new ConflictException(
@@ -766,6 +776,8 @@ export class AdminKycController {
     @CurrentUser() admin: AuthenticatedUser,
     @Req() req: RequestWithUser,
   ) {
+    // KYC decisions belong to the OWNING BROKER — platform admins observe only.
+    await this.brokerScope.requireBrokerActor(admin);
     const app = await this.findScopedApplication(applicationId, admin);
     if (TERMINAL_STATUSES.has(app.status)) {
       throw new ConflictException(

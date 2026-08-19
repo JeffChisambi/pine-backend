@@ -392,7 +392,14 @@ export class AdminRepository {
       this.prisma.order.findMany({
         where,
         include: {
-          user: { select: { id: true, firstName: true, lastName: true } },
+          // broker.name shows platform admins WHO OWNS each order — admins
+          // observe cross-broker but never act on another broker's book.
+          user: {
+            select: {
+              id: true, firstName: true, lastName: true,
+              broker: { select: { id: true, name: true } },
+            },
+          },
           stock: { select: { symbol: true, name: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -418,7 +425,12 @@ export class AdminRepository {
         ...(scopeBrokerId ? { user: { brokerId: scopeBrokerId } } : {}),
       },
       include: {
-        user: { select: { id: true, firstName: true, lastName: true, phone: true } },
+        user: {
+          select: {
+            id: true, firstName: true, lastName: true, phone: true,
+            broker: { select: { id: true, name: true } },
+          },
+        },
         stock: { select: { symbol: true, name: true, sector: true } },
         trades: { include: { settlement: true } },
         executions: { orderBy: { executedAt: 'asc' } },

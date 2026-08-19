@@ -1,7 +1,8 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import type { Response } from 'express';
 import { PinoLogger } from 'nestjs-pino';
 import { AppConfigService } from '../../config/app-config.service';
+import { SystemErrorService } from '../../modules/system-errors/services/system-error.service';
 import { ErrorCode } from '../constants/error-codes.constant';
 import type { ApiErrorResponse } from '../types/api-response.types';
 import type { RequestWithContext } from '../types/request-context.types';
@@ -28,6 +29,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   constructor(
     private readonly logger: PinoLogger,
     private readonly config: AppConfigService,
+    // Optional so tests/minimal bootstraps that don't import the module
+    // still construct the filter. capture() itself never throws.
+    @Optional() private readonly systemErrors?: SystemErrorService,
   ) {
     this.logger.setContext(GlobalExceptionFilter.name);
   }
@@ -45,6 +49,19 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         { err: exception, requestId, path: request.url, method: request.method },
         'Unhandled exception',
       );
+      // Surface in the admin System Errors console. Fire-and-forget: error
+      // capture must never delay or fail the error response itself.
+      void this.systemErrors?.capture({
+        source: 'BACKEND',
+        // A typed AppException reaching 5xx is a known failure path (HIGH);
+        // an unknown exception is a genuine bug (CRITICAL).
+        severity: exception instanceof HttpException ? 'HIGH' : 'CRITICAL',
+        message: exception instanceof Error ? exception.message : String(exception),
+        stack: exception instanceof Error ? (exception.stack ?? null) : null,
+        location: `${request.method} ${request.url?.split('?')[0] ?? ''}`,
+        context: { requestId },
+        userId: (request as any).user?.id ?? null,
+      });
     } else {
       this.logger.warn(
         { requestId, path: request.url, method: request.method, code, status },

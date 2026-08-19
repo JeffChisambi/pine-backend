@@ -84,6 +84,10 @@ const DEFAULT_TEMPLATES: Record<string, { subject?: string; body: string }> = {
     subject: 'Dividend Declared: {{symbol}}',
     body: '{{symbol}} has declared a dividend of MWK {{amount}} per share. Record date: {{recordDate}}.',
   },
+  'market.price_moved': {
+    subject: '{{symbol}} {{direction}} {{changePct}}%',
+    body: '{{name}} ({{symbol}}) moved {{signedPct}}% to MWK {{price}} today.',
+  },
 
   // ── Portfolio ───────────────────────────────────────────
   'portfolio.daily_summary': {

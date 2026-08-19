@@ -1552,3 +1552,54 @@ model SupportMessage {
   @@index([createdAt])
   @@map("support_messages")
 }
+
+// ─── System error monitoring ─────────────────────────────────────────────────
+
+enum ErrorSource {
+  MOBILE_APP
+  BROKER_DASHBOARD
+  ADMIN_DASHBOARD
+  BACKEND
+}
+
+enum ErrorSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ErrorStatus {
+  OPEN
+  RESOLVED
+}
+
+/// A captured error from anywhere in the platform (mobile app, dashboards,
+/// or the backend itself), surfaced in the admin System Errors console so
+/// issues are visible before users report them.
+model SystemErrorEvent {
+  id          String        @id @default(uuid()) @db.Uuid
+  source      ErrorSource
+  severity    ErrorSeverity
+  status      ErrorStatus   @default(OPEN)
+  message     String
+  stack       String?
+  /// Where it happened: a route, screen name, or endpoint path.
+  location    String?
+  /// Free-form structured context (device, app version, request id, ...).
+  context     Json?
+  /// The signed-in user at the time, if any.
+  userId      String?       @db.Uuid
+  /// Same error signature seen again → count bumps instead of a new row.
+  occurrences Int           @default(1)
+  firstSeenAt DateTime      @default(now())
+  lastSeenAt  DateTime      @default(now())
+  resolvedAt  DateTime?
+  resolvedById String?      @db.Uuid
+
+  @@index([source])
+  @@index([severity])
+  @@index([status])
+  @@index([lastSeenAt])
+  @@map("system_error_events")
+}

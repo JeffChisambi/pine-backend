@@ -22,6 +22,9 @@ export interface IMarketSyncRepository {
    */
   getAllActiveStocks(): Promise<StockRecord[]>;
 
+  /** Latest stored close per stock (pre-upsert snapshot for move detection). */
+  getLatestCloses(stockIds: string[]): Promise<Array<{ stockId: string; closePrice: string }>>;
+
   /**
    * Batch upserts stock prices for a given trading date.
    * Uses the `(stockId, tradedAt)` unique constraint for
