@@ -67,8 +67,14 @@ export class CardPaymentService {
 
     // Production guard: Test Transaction mode is a client-controlled flag
     // that charges the MOCK gateway but credits a REAL wallet. It must be
-    // unreachable outside development/test/staging environments.
-    if (dto.testScenario && this.appConfig.app.isProduction) {
+    // unreachable outside development/test/staging environments — except
+    // during pre-launch testing, when ALLOW_TEST_TRANSACTIONS=true opts in
+    // explicitly (remove that env var at real launch).
+    if (
+      dto.testScenario &&
+      this.appConfig.app.isProduction &&
+      !this.appConfig.app.allowTestTransactions
+    ) {
       throw new BadRequestException('Test transactions are not available.');
     }
     const testMode = !!dto.testScenario;

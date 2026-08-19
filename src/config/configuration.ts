@@ -15,6 +15,12 @@ export const appConfig = registerAs('app', () => ({
   url: process.env.APP_URL ?? 'http://localhost:3000',
   /** Broker dashboard origin — used in emails (e.g. invitation activation links). */
   dashboardUrl: process.env.DASHBOARD_URL ?? 'https://broker.appine.online',
+  /**
+   * Pre-launch escape hatch: allow Test Transactions (mock card gateway)
+   * even when NODE_ENV=production. MUST be removed/false at real launch —
+   * the mock gateway credits real wallets without charging a card.
+   */
+  allowTestTransactions: process.env.ALLOW_TEST_TRANSACTIONS === 'true',
   apiPrefix: process.env.API_PREFIX ?? 'v1',
   timezone: process.env.APP_TIMEZONE ?? 'Africa/Blantyre',
   isProduction: process.env.NODE_ENV === 'production',

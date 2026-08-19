@@ -5,6 +5,8 @@ export interface AppConfig {
   url: string;
   /** Broker dashboard origin — used in emails (invitation activation links). */
   dashboardUrl: string;
+  /** Pre-launch: permit Test Transactions in production (ALLOW_TEST_TRANSACTIONS=true). */
+  allowTestTransactions: boolean;
   apiPrefix: string;
   timezone: string;
   isProduction: boolean;
