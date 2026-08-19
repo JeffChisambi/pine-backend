@@ -50,6 +50,13 @@ export class SavedCardService {
       expiryYear: string;
     },
   ) {
+    // Never store an invalid PAN: digits-only, 13–19 long, Luhn-valid.
+    const pan = data.cardNumber.replace(/\s/g, '');
+    if (!/^\d{13,19}$/.test(pan) || !this.luhnValid(pan)) {
+      throw new BadRequestException('Card number is not valid.');
+    }
+    data = { ...data, cardNumber: pan };
+
     // Max 5 cards per user
     const count = await this.prisma.savedCard.count({ where: { userId } });
     if (count >= 5) {
@@ -82,7 +89,8 @@ export class SavedCardService {
     }
 
     const cardBrand = this.detectBrand(data.cardNumber);
-    const cardNumberEncrypted = this.encryption.encrypt(data.cardNumber);
+    // PAN encrypted with AES-256-GCM, AAD-bound to the owning user.
+    const cardNumberEncrypted = this.encryption.encrypt(data.cardNumber, userId);
     const isDefault = count === 0; // First card becomes default
 
     return this.prisma.savedCard.create({
@@ -150,7 +158,7 @@ export class SavedCardService {
     });
     if (!card) throw new NotFoundException('Saved card not found');
 
-    const cardNumber = this.encryption.decrypt(card.cardNumberEncrypted);
+    const cardNumber = this.encryption.decrypt(card.cardNumberEncrypted, userId);
     return {
       cardNumber,
       cardholderName: card.cardholderName,
@@ -166,5 +174,21 @@ export class SavedCardService {
     if (/^4/.test(num)) return 'VISA';
     if (/^5[1-5]/.test(num) || /^2[2-7]/.test(num)) return 'MASTERCARD';
     return 'UNKNOWN';
+  }
+
+  /** Luhn checksum — rejects mistyped/garbage PANs before they're stored. */
+  private luhnValid(pan: string): boolean {
+    let sum = 0;
+    let double = false;
+    for (let i = pan.length - 1; i >= 0; i--) {
+      let d = pan.charCodeAt(i) - 48;
+      if (double) {
+        d *= 2;
+        if (d > 9) d -= 9;
+      }
+      sum += d;
+      double = !double;
+    }
+    return sum % 10 === 0;
   }
 }
