@@ -14,6 +14,7 @@ export interface MsePricePoint {
 const SYMBOL_TO_ISIN: Record<string, string> = {
   AIRTEL:   'MWAIRT001156',
   BHL:      'MWBHL0010029',
+  CHL:      'MWCHL0010175', // Continental Holdings plc — listed 10 Aug 2026
   FDHB:     'MWFDHB001166',
   FMBCH:    'MWFMB0010138',
   ICON:     'MWICON001146',

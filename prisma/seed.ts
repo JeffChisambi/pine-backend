@@ -16,6 +16,7 @@ const prisma = new PrismaClient();
 const MSE_STOCKS = [
   { symbol: 'AIRTEL',   name: 'Airtel Malawi plc',               sector: 'Telecommunications', listedShares: BigInt('2000000000')  },
   { symbol: 'BHL',      name: 'Blantyre Hotels Ltd',              sector: 'Hospitality',         listedShares: BigInt('26906250')    },
+  { symbol: 'CHL',      name: 'Continental Holdings plc',         sector: 'Conglomerate',        listedShares: BigInt('3013234416')  },
   { symbol: 'FDHB',     name: 'FDH Bank plc',                     sector: 'Banking',             listedShares: BigInt('1220000000')  },
   { symbol: 'FMBCH',    name: 'FMB Capital Holdings plc',         sector: 'Banking',             listedShares: BigInt('1163239860')  },
   { symbol: 'ICON',     name: 'ICON Properties plc',              sector: 'Real Estate',         listedShares: BigInt('270000000')   },
