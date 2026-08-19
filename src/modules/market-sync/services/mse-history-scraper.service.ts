@@ -179,12 +179,17 @@ export class MseHistoryScraperService {
   /**
    * Fetch history for a single company using an existing Playwright page.
    *
-   * Uses page.request.post() — Playwright's APIRequestContext — which runs
-   * HTTP requests from Node.js but uses the browser's cookie jar. This
-   * bypasses the GoDaddy WAF bot detection that blocks in-page jQuery XHR.
+   * Uses an IN-PAGE fetch() via page.evaluate(), carrying the page's Laravel
+   * CSRF token. The GoDaddy WAF in front of mse.co.mw fingerprints the TLS
+   * client: plain Node HTTP (including Playwright's APIRequestContext /
+   * page.request.post) is rejected with 403, while requests issued from
+   * inside the real browser page pass. (This is the inverse of the WAF's
+   * behaviour when this scraper was first written — both transports have
+   * been needed at different times, so if 403s ever return, try the other.)
    *
    * Endpoint: POST https://mse.co.mw/company/{ISIN}/{months}
-   * Response: HTML snippet with <canvas data-bs-chart='{ Chart.js config JSON }'>
+   * Response: HTML snippet containing the Chart.js config (inline
+   * `labels: [...]` / x-y pairs / data-bs-chart — parseChartHtml handles all).
    */
   private async fetchCompanyHistory(
     page: Page,
@@ -198,6 +203,13 @@ export class MseHistoryScraperService {
     await page.goto(companyUrl, { waitUntil: 'domcontentloaded', timeout: 40_000 });
     await page.waitForTimeout(1500);
 
+    // Laravel CSRF token from the page's meta tag — required by the AJAX route.
+    const csrfToken = await page.evaluate(
+      () =>
+        (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement | null)
+          ?.content ?? null,
+    );
+
     // Determine periods to try: requested period first, fall back to 1M
     const periodsToTry = months === 1 ? [1] : [months, 1];
 
@@ -205,27 +217,29 @@ export class MseHistoryScraperService {
       const ajaxUrl = `https://mse.co.mw/company/${isin}/${period}`;
 
       try {
-        this.logger.debug(`${symbol}: POST ${ajaxUrl}`);
+        this.logger.debug(`${symbol}: in-page POST ${ajaxUrl}`);
 
-        // page.request.post() uses the browser's cookie jar from Node.js side
-        const response = await page.request.post(ajaxUrl, {
-          headers: {
-            'X-Requested-With': 'XMLHttpRequest',
-            Accept: 'text/html, */*; q=0.01',
-            Referer: companyUrl,
-            'Content-Type': 'application/x-www-form-urlencoded',
+        // fetch() from INSIDE the page: browser TLS fingerprint + cookies.
+        const { status, body: html } = await page.evaluate(
+          async ({ url, token }) => {
+            const r = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'text/html, */*; q=0.01',
+                ...(token ? { 'X-CSRF-TOKEN': token } : {}),
+              },
+            });
+            return { status: r.status, body: await r.text() };
           },
-          failOnStatusCode: false,
-        });
+          { url: ajaxUrl, token: csrfToken },
+        );
 
-        const status = response.status();
-
-        if (!response.ok()) {
+        if (status < 200 || status >= 300) {
           this.logger.warn(`${symbol}: period=${period} returned HTTP ${status}`);
           continue;
         }
 
-        const html = await response.text();
         this.logger.debug(`${symbol}: period=${period} response: ${html.length} chars`);
 
         if (html.trim().length < 50) {
