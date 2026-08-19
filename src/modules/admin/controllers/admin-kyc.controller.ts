@@ -52,8 +52,14 @@ import { BrokerScopeService } from '../../brokers/services/broker-scope.service'
 // admin can open images after the detail page has already loaded.
 const KYC_SIGNED_URL_TTL_SECONDS = 3600; // 1 hour
 
-// ── Terminal statuses that cannot be mutated ─────────────────────────────────
+// ── Terminal statuses ─────────────────────────────────────────────────────────
+// A decision is only FINAL when a HUMAN made it (reviewedById set). The AI
+// pipeline auto-approves/rejects with no reviewer — brokers must be able to
+// override those (e.g. a false rejection from a failed face match).
 const TERMINAL_STATUSES = new Set(['APPROVED', 'REJECTED']);
+function isHumanReviewed(app: { status: string; reviewedById: string | null }): boolean {
+  return TERMINAL_STATUSES.has(app.status) && app.reviewedById != null;
+}
 
 // ── Statuses from which request-docs is allowed ──────────────────────────────
 const REQUEST_DOCS_ALLOWED = new Set(['PENDING', 'MANUAL_REVIEW', 'ADDITIONAL_DOCS']);
@@ -606,9 +612,9 @@ export class AdminKycController {
     @Req() req: RequestWithUser,
   ) {
     const app = await this.findScopedApplication(applicationId, admin);
-    if (TERMINAL_STATUSES.has(app.status)) {
+    if (isHumanReviewed(app)) {
       throw new ConflictException(
-        'This application has already been reviewed and cannot be changed.',
+        'This application has already been reviewed by a person and cannot be changed.',
         ErrorCode.KYC_ALREADY_REVIEWED,
       );
     }
@@ -686,9 +692,9 @@ export class AdminKycController {
     }
 
     const app = await this.findScopedApplication(applicationId, admin);
-    if (TERMINAL_STATUSES.has(app.status)) {
+    if (isHumanReviewed(app)) {
       throw new ConflictException(
-        'This application has already been reviewed and cannot be changed.',
+        'This application has already been reviewed by a person and cannot be changed.',
         ErrorCode.KYC_ALREADY_REVIEWED,
       );
     }
