@@ -231,14 +231,14 @@ export class AdminKycController {
   private async findScopedApplication(
     applicationId: string,
     admin: AuthenticatedUser,
-  ): Promise<{ id: string; userId: string; status: string }> {
+  ): Promise<{ id: string; userId: string; status: string; reviewedById: string | null }> {
     const scope = await this.brokerScope.resolveScope(admin);
     const app = await this.prisma.kycApplication.findFirst({
       where: {
         id: applicationId,
         ...(scope ? { user: { brokerId: scope } } : {}),
       },
-      select: { id: true, userId: true, status: true },
+      select: { id: true, userId: true, status: true, reviewedById: true },
     });
     if (!app) {
       throw new ResourceNotFoundException('KYC application', applicationId);
