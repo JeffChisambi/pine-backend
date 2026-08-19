@@ -42,54 +42,100 @@ export class MailService {
     }
   }
 
+  // ── Branded email layout ────────────────────────────────────────────────────
+  // Mobile-first, email-safe: a single centered column (no multi-column rows —
+  // those collapse on narrow mail clients), tables + inline styles only, and
+  // the real logo served from our own domain over HTTPS.
+
+  private static readonly BRAND = {
+    teal: '#164951',
+    green: '#45B369',
+    ink: '#1F2937',
+    muted: '#6B7280',
+    faint: '#9CA3AF',
+    page: '#EDF2F0',
+    panel: '#F6F8F7',
+    border: '#E5E7EB',
+    logoUrl: 'https://appine.online/assets/pine-logo.png',
+    font: "-apple-system, 'Segoe UI', Roboto, Arial, Helvetica, sans-serif",
+  };
+
+  private fromAddress(): string {
+    return this.from.replace(/^.*<|>$/g, '');
+  }
+
   /**
-   * Professional email signature appended to every outbound message.
-   * Email-safe HTML: tables + inline styles only (no external images, so
-   * nothing is blocked by mail clients or flagged by spam filters).
+   * Wrap body content in the branded shell: soft page background, white
+   * rounded card with a dark-teal logo masthead and green accent rule, and a
+   * stacked (never columnar) footer that survives every mobile mail client.
    */
-  private signatureHtml(): string {
-    return `
-      <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; max-width: 520px; margin-top: 32px; border-collapse: separate; border-spacing: 0; border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden;">
+  private renderShell(preheader: string, bodyHtml: string): string {
+    const B = MailService.BRAND;
+    return `<!doctype html>
+<html>
+<body style="margin:0; padding:0; background:${B.page};">
+  <!-- Preheader: inbox preview text, invisible in the body -->
+  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">${preheader}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${B.page}; padding:32px 12px;">
+    <tr><td align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:460px; background:#FFFFFF; border-radius:16px; overflow:hidden; border:1px solid ${B.border};">
+        <!-- Masthead -->
         <tr>
-          <td style="padding: 18px 22px; background: #FFFFFF;">
-            <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%;">
-              <tr>
-                <td style="vertical-align: middle; width: 96px; border-right: 2px solid #45B369; padding-right: 18px;">
-                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 26px; font-weight: bold; color: #164951; letter-spacing: -0.5px;">Pine</div>
-                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 9px; letter-spacing: 2px; color: #45B369; font-weight: bold;">INVEST</div>
-                </td>
-                <td style="vertical-align: middle; padding-left: 18px;">
-                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: bold; color: #111827;">The Pine Team</div>
-                  <div style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #6B7280; margin-top: 2px;">Investing in the Malawi Stock Exchange</div>
-                </td>
-              </tr>
-            </table>
+          <td align="center" style="background:${B.teal}; padding:30px 24px 26px;">
+            <img src="${B.logoUrl}" alt="Pine" width="52" style="display:block; width:52px; height:auto;" />
+            <div style="font-family:${B.font}; font-size:24px; font-weight:800; color:#FFFFFF; letter-spacing:0.5px; margin-top:12px;">Pine</div>
+            <div style="font-family:${B.font}; font-size:10px; font-weight:700; color:${B.green}; letter-spacing:3px; margin-top:3px;">MALAWI STOCK EXCHANGE</div>
+          </td>
+        </tr>
+        <tr><td style="height:4px; background:${B.green}; font-size:0; line-height:0;">&nbsp;</td></tr>
+        <!-- Body -->
+        <tr>
+          <td style="padding:34px 30px 30px;">
+            ${bodyHtml}
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="padding:0 30px;">
+            <div style="border-top:1px solid ${B.border}; font-size:0; line-height:0;">&nbsp;</div>
           </td>
         </tr>
         <tr>
-          <td style="padding: 10px 22px; background: #164951;">
-            <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%;">
-              <tr>
-                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #FFFFFF;">Blantyre, Malawi</td>
-                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #FFFFFF; text-align: center;">
-                  <a href="https://appine.online" style="color: #FFFFFF; text-decoration: none;">appine.online</a>
-                </td>
-                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #FFFFFF; text-align: right;">
-                  <a href="mailto:${this.from.replace(/^.*<|>$/g, '')}" style="color: #FFFFFF; text-decoration: none;">${this.from.replace(/^.*<|>$/g, '')}</a>
-                </td>
-              </tr>
-            </table>
+          <td align="center" style="padding:20px 30px 28px;">
+            <div style="font-family:${B.font}; font-size:13px; font-weight:700; color:${B.teal};">The Pine Team</div>
+            <div style="font-family:${B.font}; font-size:12px; color:${B.muted}; margin-top:3px;">Investing in the Malawi Stock Exchange</div>
+            <div style="font-family:${B.font}; font-size:12px; color:${B.muted}; margin-top:10px;">Blantyre, Malawi</div>
+            <div style="font-family:${B.font}; font-size:12px; margin-top:4px;">
+              <a href="https://appine.online" style="color:${B.green}; text-decoration:none; font-weight:600;">appine.online</a>
+              <span style="color:${B.faint};">&nbsp;&nbsp;·&nbsp;&nbsp;</span>
+              <a href="mailto:${this.fromAddress()}" style="color:${B.green}; text-decoration:none; font-weight:600;">${this.fromAddress()}</a>
+            </div>
           </td>
         </tr>
       </table>
-      <p style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #9CA3AF; max-width: 520px; margin-top: 12px; line-height: 15px;">
-        This message and any attachments are confidential and intended solely for the addressee.
+      <div style="font-family:${B.font}; font-size:11px; color:${B.faint}; line-height:16px; max-width:460px; margin-top:16px; text-align:center;">
+        This message is confidential and intended solely for the addressee.<br/>
         If you received it in error, please delete it and notify the sender.
-      </p>`;
+      </div>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+  }
+
+  /** Big rounded call-to-action button (bulletproof single-cell table). */
+  private renderCta(label: string, url: string): string {
+    const B = MailService.BRAND;
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:26px 0;">
+        <tr><td align="center">
+          <a href="${url}" style="display:block; background:${B.green}; color:#FFFFFF; font-family:${B.font}; font-size:16px; font-weight:700; text-decoration:none; text-align:center; padding:16px 20px; border-radius:12px;">${label}</a>
+        </td></tr>
+      </table>`;
   }
 
   private signatureText(): string {
-    const email = this.from.replace(/^.*<|>$/g, '');
+    const email = this.fromAddress();
     return `\n\n—\nThe Pine Team\nInvesting in the Malawi Stock Exchange\nBlantyre, Malawi · https://appine.online · ${email}`;
   }
 
@@ -104,16 +150,24 @@ export class MailService {
       `Your Pine verification code is: ${code}\n\n` +
       `This code expires in 5 minutes. If you didn't request it, you can ignore this email.` +
       this.signatureText();
-    const html = `
-      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="color: #164951; margin-bottom: 4px;">Pine</h2>
-        <p style="color: #374151; font-size: 15px;">Use this code to verify your email address:</p>
-        <div style="background: #F0FDF4; border: 1px solid #86EFAC; border-radius: 10px; padding: 18px; text-align: center; margin: 16px 0;">
-          <span style="font-size: 30px; font-weight: bold; letter-spacing: 8px; color: #164951;">${code}</span>
-        </div>
-        <p style="color: #6B7280; font-size: 13px;">This code expires in 5 minutes. If you didn't request it, you can safely ignore this email.</p>
-        ${this.signatureHtml()}
-      </div>`;
+    const B = MailService.BRAND;
+    const html = this.renderShell(
+      `Your Pine verification code is ${code}`,
+      `
+      <div style="font-family:${B.font}; font-size:20px; font-weight:800; color:${B.ink};">Verify your email</div>
+      <p style="font-family:${B.font}; font-size:15px; line-height:24px; color:${B.ink}; margin:14px 0 0;">
+        Use this code to confirm your email address and continue setting up your Pine account:
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:24px 0;">
+        <tr><td align="center" style="background:${B.panel}; border:1px solid ${B.border}; border-radius:12px; padding:22px;">
+          <span style="font-family:'Courier New', Courier, monospace; font-size:34px; font-weight:800; letter-spacing:10px; color:${B.teal};">${code}</span>
+        </td></tr>
+      </table>
+      <p style="font-family:${B.font}; font-size:13px; line-height:20px; color:${B.muted}; margin:0;">
+        This code expires in <strong style="color:${B.ink};">5 minutes</strong>.
+        If you didn't request it, you can safely ignore this email.
+      </p>`,
+    );
 
     if (!this.transporter) {
       this.logger.warn({ to, code }, '📧 DEV ONLY — email not sent (no SMTP host); code logged');
@@ -158,34 +212,45 @@ export class MailService {
       `This invitation expires on ${expiryText}. After activating you'll be asked to set up two-factor authentication on first sign-in.\n\n` +
       `If you weren't expecting this invitation, you can ignore this email.` +
       this.signatureText();
-    const html = `
-      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px;">
-        <h2 style="color: #164951; margin-bottom: 4px;">Pine</h2>
-        <p style="color: #374151; font-size: 15px;">Hi ${firstName},</p>
-        <p style="color: #374151; font-size: 15px;">
-          You've been invited to administer <strong>${brokerName}</strong> on the Pine broker dashboard.
-        </p>
-        <div style="text-align: center; margin: 24px 0;">
-          <a href="${activationUrl}"
-             style="background: #164951; color: #ffffff; text-decoration: none; padding: 13px 28px; border-radius: 10px; font-size: 15px; font-weight: bold; display: inline-block;">
-            Activate your account
-          </a>
-        </div>
-        <p style="color: #6B7280; font-size: 13px;">
-          If the button doesn't work, open the activation page and paste this one-time invitation token:
-        </p>
-        <div style="background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 12px; margin: 8px 0 16px; word-break: break-all;">
-          <code style="font-size: 13px; color: #111827;">${token}</code>
-        </div>
-        <p style="color: #6B7280; font-size: 13px;">
-          This invitation expires on <strong>${expiryText}</strong>. You'll set your own password during
-          activation, and two-factor authentication is required on first sign-in.
-        </p>
-        <p style="color: #9CA3AF; font-size: 12px; margin-top: 20px;">
-          If you weren't expecting this invitation, you can safely ignore this email.
-        </p>
-        ${this.signatureHtml()}
-      </div>`;
+    const B = MailService.BRAND;
+    const html = this.renderShell(
+      `Activate your ${brokerName} administrator account on Pine`,
+      `
+      <div style="font-family:${B.font}; font-size:20px; font-weight:800; color:${B.ink};">You're invited, ${firstName}</div>
+      <p style="font-family:${B.font}; font-size:15px; line-height:24px; color:${B.ink}; margin:14px 0 0;">
+        You've been invited to administer
+        <strong style="color:${B.teal};">${brokerName}</strong>
+        on the Pine broker dashboard — managing investors, orders, and KYC on the Malawi Stock Exchange.
+      </p>
+      ${this.renderCta('Activate your account', activationUrl)}
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 20px;">
+        <tr><td style="background:${B.panel}; border:1px solid ${B.border}; border-radius:12px; padding:16px 18px;">
+          <div style="font-family:${B.font}; font-size:10px; font-weight:700; letter-spacing:1.5px; color:${B.muted};">ONE-TIME INVITATION TOKEN</div>
+          <div style="font-family:'Courier New', Courier, monospace; font-size:13px; color:${B.ink}; word-break:break-all; margin-top:8px; line-height:19px;">${token}</div>
+          <div style="font-family:${B.font}; font-size:11px; color:${B.faint}; margin-top:8px;">Only needed if the button doesn't work — paste it on the activation page.</div>
+        </td></tr>
+      </table>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td style="padding:0 0 8px;">
+            <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">⏳&nbsp; Invitation expires on <strong style="color:${B.ink};">${expiryText}</strong></span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 0 8px;">
+            <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">🔑&nbsp; You'll choose your own password during activation</span>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">🛡&nbsp; Two-factor authentication is set up on first sign-in</span>
+          </td>
+        </tr>
+      </table>
+      <p style="font-family:${B.font}; font-size:12px; line-height:18px; color:${B.faint}; margin:22px 0 0;">
+        If you weren't expecting this invitation, you can safely ignore this email.
+      </p>`,
+    );
 
     if (!this.transporter) {
       this.logger.warn({ to }, '📧 email not sent (no SMTP host) — invitation token available in the admin UI');
