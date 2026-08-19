@@ -96,6 +96,11 @@ export class PushProvider implements IChannelProvider {
       title: payload.title,
       body: payload.body,
       data: payload.data,
+      // Heads-up pop-up delivery: 'high' wakes the device promptly, and the
+      // 'alerts' Android channel is created client-side with MAX importance
+      // (banner + sound) — the tray-only 'default' channel stays for legacy.
+      priority: 'high' as const,
+      channelId: 'alerts',
     }));
 
     const chunks = this.expo.chunkPushNotifications(messages);

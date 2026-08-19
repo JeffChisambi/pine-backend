@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
+import { NotificationService } from '../../notifications/services/notification.service';
 import {
   ResourceNotFoundException,
   ValidationException,
@@ -49,6 +50,7 @@ export class SupportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly notifications: NotificationService,
   ) {}
 
   // ── Customer (mobile) ─────────────────────────────────────────────────────
@@ -395,19 +397,16 @@ export class SupportService {
     ticket: { id: string; reference: string },
   ) {
     try {
-      await this.prisma.notification.create({
-        data: {
-          userId,
-          channel: 'IN_APP',
-          type: 'INFORMATIONAL',
-          priority: 2,
-          category: 'SYSTEM',
-          title,
-          body,
-          status: 'SENT',
-          sentAt: new Date(),
-          data: { type: 'SUPPORT_UPDATE', ticketId: ticket.id, reference: ticket.reference },
-        },
+      // Full delivery pipeline (IN_APP inbox + PUSH pop-up per the user's
+      // preferences) — a direct prisma insert here used to create the inbox
+      // row only, so support replies never reached the phone as a push.
+      await this.notifications.notify({
+        userId,
+        templateKey: 'support.update',
+        variables: { title, body },
+        category: 'SYSTEM',
+        priority: 2,
+        data: { type: 'SUPPORT_UPDATE', ticketId: ticket.id, reference: ticket.reference },
       });
     } catch (err) {
       // Never let a notification failure break the support flow.

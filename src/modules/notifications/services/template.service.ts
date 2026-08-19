@@ -95,6 +95,13 @@ const DEFAULT_TEMPLATES: Record<string, { subject?: string; body: string }> = {
     body: 'Your portfolio value: MWK {{portfolioValue}}. Today\'s change: {{dailyChange}} ({{dailyChangePct}}%).',
   },
 
+  // ── Support ─────────────────────────────────────────────
+  // Pass-through template: the support module composes its own copy.
+  'support.update': {
+    subject: '{{title}}',
+    body: '{{body}}',
+  },
+
   // ── System ──────────────────────────────────────────────
   'system.welcome': {
     subject: 'Welcome to Pine',
