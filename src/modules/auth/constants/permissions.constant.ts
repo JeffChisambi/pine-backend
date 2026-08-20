@@ -111,14 +111,16 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
 
   // BROKER = Broker Admin: operational access scoped to their own
   // broker's investors only (enforced server-side by BrokerScopeService
-  // on every admin query). Deliberately omitted:
-  //   - KYC_APPROVE       (compliance decision stays with the platform)
+  // on every admin query). KYC decisions and order execution belong to
+  // the OWNING BROKER — platform admins observe but never act (see
+  // BrokerScopeService.requireBrokerActor). Deliberately omitted:
   //   - AUDIT_VIEW        (platform-wide audit is Super Admin only)
   //   - PLATFORM_ADMIN    (themes, news, treasury, broadcasts)
   //   - BROKERS_MANAGE    (tenant management)
   [Role.BROKER]: [
     Permission.USERS_READ,
     Permission.KYC_REVIEW,
+    Permission.KYC_APPROVE,
     Permission.WALLET_READ,
     Permission.TRADE_EXECUTE,
     Permission.TRADE_CANCEL,
