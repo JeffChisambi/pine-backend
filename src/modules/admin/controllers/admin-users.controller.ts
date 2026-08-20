@@ -68,7 +68,22 @@ export class AdminUsersController {
     if (!user) {
       throw new ResourceNotFoundException('User', userId);
     }
-    return user;
+    // Brokers legitimately need the investor's FULL bank account number —
+    // it goes on the CSD trading-account opening form. Expose it explicitly
+    // as `accountNumber` instead of leaking the raw storage column.
+    return {
+      ...user,
+      linkedBanks: (user.linkedBanks ?? []).map((b: any) => ({
+        id: b.id,
+        bankName: b.bankName,
+        accountName: b.accountName,
+        accountNumber: b.accountNumberEncrypted ?? b.accountNumberMasked,
+        accountNumberMasked: b.accountNumberMasked,
+        isPrimary: b.isPrimary,
+        isVerified: b.isVerified,
+        createdAt: b.createdAt,
+      })),
+    };
   }
 
   @Patch(':id/status')
