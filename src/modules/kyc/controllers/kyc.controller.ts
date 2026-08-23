@@ -21,6 +21,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { BankAccountCryptoService } from '../services/bank-account-crypto.service';
 import { KycWorkflowService } from '../services/kyc-workflow.service';
 import type {
   KycStatusResponseDto,
@@ -48,8 +49,6 @@ import { SubmitBankAccountDto } from '../dto/submit-bank-account.dto';
 @Controller('kyc')
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))  // M-10 fix
 export class KycController {
-  private readonly bankEncryptionKey: Buffer;
-
   constructor(
     private readonly workflowService: KycWorkflowService,
     @Inject(KYC_REPOSITORY)
@@ -58,21 +57,8 @@ export class KycController {
     private readonly kycQueue: Queue,
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-  ) {
-    this.bankEncryptionKey = crypto
-      .createHash('sha256')
-      .update(this.appConfig.security.pinEncryptionKey + ':bank')
-      .digest();
-  }
-
-  private encryptBankAccount(plaintext: string): string {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-gcm', this.bankEncryptionKey, iv);
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const tag = cipher.getAuthTag().toString('hex');
-    return `${iv.toString('hex')}:${tag}:${encrypted}`;
-  }
+    private readonly bankCrypto: BankAccountCryptoService,
+  ) {}
 
   @Post('start')
   @HttpCode(HttpStatus.CREATED)
@@ -366,7 +352,7 @@ export class KycController {
           bankName: dto.bankName,
           accountName: dto.accountName,
           accountNumberMasked: masked,
-          accountNumberEncrypted: this.encryptBankAccount(dto.accountNumber),
+          accountNumberEncrypted: this.bankCrypto.encrypt(dto.accountNumber),
           isPrimary: true,
         },
       });
@@ -377,7 +363,7 @@ export class KycController {
           bankName: dto.bankName,
           accountName: dto.accountName,
           accountNumberMasked: masked,
-          accountNumberEncrypted: this.encryptBankAccount(dto.accountNumber),
+          accountNumberEncrypted: this.bankCrypto.encrypt(dto.accountNumber),
           isPrimary: true,
         },
       });

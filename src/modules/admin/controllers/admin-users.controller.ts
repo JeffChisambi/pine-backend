@@ -24,6 +24,7 @@ import { ListUsersQueryDto, UpdateUserStatusDto } from '../dto/admin.dto';
 import { ResourceNotFoundException, ValidationException } from '../../../core/exceptions/app.exception';
 import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
 import { AdminFinanceService } from '../services/admin-finance.service';
+import { BankAccountCryptoService } from '../../kyc/services/bank-account-crypto.service';
 
 @ApiTags('admin', 'users')
 @ApiBearerAuth()
@@ -36,6 +37,7 @@ export class AdminUsersController {
     private readonly sessionService: SessionService,
     private readonly brokerScope: BrokerScopeService,
     private readonly finance: AdminFinanceService,
+    private readonly bankCrypto: BankAccountCryptoService,
   ) {}
 
   @Get()
@@ -91,8 +93,9 @@ export class AdminUsersController {
     // it never derives its own.
     const financialSummary = await this.finance.investorSummary(userId);
     // Brokers legitimately need the investor's FULL bank account number —
-    // it goes on the CSD trading-account opening form. Expose it explicitly
-    // as `accountNumber` instead of leaking the raw storage column.
+    // it goes on the CSD trading-account opening form. The stored value is
+    // AES-256-GCM ciphertext; decrypt it server-side here (falling back to
+    // the masked form if decryption fails) instead of leaking ciphertext.
     return {
       ...user,
       financialSummary,
@@ -100,7 +103,8 @@ export class AdminUsersController {
         id: b.id,
         bankName: b.bankName,
         accountName: b.accountName,
-        accountNumber: b.accountNumberEncrypted ?? b.accountNumberMasked,
+        accountNumber:
+          this.bankCrypto.decrypt(b.accountNumberEncrypted) ?? b.accountNumberMasked,
         accountNumberMasked: b.accountNumberMasked,
         isPrimary: b.isPrimary,
         isVerified: b.isVerified,

@@ -27,6 +27,7 @@ import { KycProcessor } from './processors/kyc.processor';
 import { SharpProvider } from './image/sharp.provider';
 import { TesseractProvider } from './ocr/tesseract.provider';
 import { InsightFaceProvider } from './face/insightface.provider';
+import { BankAccountCryptoService } from './services/bank-account-crypto.service';
 import { FaceMatchingService } from './face/face-matching.service';
 
 // Fraud + Confidence
@@ -86,6 +87,9 @@ import { KycRepository } from './repositories/kyc.repository';
     // ── Face Matching ───────────────────────────────────────────
     FaceMatchingService,
 
+    // ── Bank account encryption (shared with admin surface) ─────
+    BankAccountCryptoService,
+
     // ── Fraud Detection ─────────────────────────────────────────
     FraudDetectionService,
     ConfidenceEngine,
@@ -102,6 +106,6 @@ import { KycRepository } from './repositories/kyc.repository';
     // ── BullMQ Processor (H-3 fix: async pipeline) ──────────────
     KycProcessor,
   ],
-  exports: [KycWorkflowService, CsdFormService, KycReconciliationService, KYC_REPOSITORY],
+  exports: [KycWorkflowService, CsdFormService, KycReconciliationService, KYC_REPOSITORY, BankAccountCryptoService],
 })
 export class KycModule {}
