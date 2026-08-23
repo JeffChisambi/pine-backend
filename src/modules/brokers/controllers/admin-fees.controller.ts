@@ -183,7 +183,9 @@ export class AdminFeesController {
             `Tier ${i + 1}: only the last tier may be open-ended.`,
           );
         }
-        if (next.minAmount <= t.maxAmount) {
+        // Ranges are half-open [min, max): the next tier may START exactly
+        // where this one ends ("0–100,000" then "100,000+" is contiguous).
+        if (next.minAmount < t.maxAmount) {
           throw new ValidationException(
             `Tiers ${i + 1} and ${i + 2} overlap — ranges must not intersect.`,
           );

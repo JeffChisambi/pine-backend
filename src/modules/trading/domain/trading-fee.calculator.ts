@@ -56,9 +56,12 @@ export function commissionForGross(
   if (!enabled) return new Decimal(0);
   const schedule = tiers.length > 0 ? tiers : DEFAULT_COMMISSION_TIERS;
   const gross = grossValue.toNumber();
+  // Ranges are half-open [min, max): a "0–100,000" tier followed by a
+  // "100,000+" tier is contiguous — a gross of exactly 100,000 falls in
+  // the SECOND tier. Matches how brokers naturally express schedules.
   const tier =
     schedule.find(
-      (t) => gross >= t.minAmount && (t.maxAmount == null || gross <= t.maxAmount),
+      (t) => gross >= t.minAmount && (t.maxAmount == null || gross < t.maxAmount),
     ) ?? schedule[schedule.length - 1];
 
   let commission = grossValue.mul(new Decimal(tier.ratePct).div(100));

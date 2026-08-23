@@ -92,7 +92,7 @@ const TIER2 = { minAmount: 100_000, maxAmount: null, ratePct: 1.5, minFee: 500 }
 const SEC = 0.001, MSE = 0.001;    // statutory
 
 const commissionFor = (gross) => {
-  const t = gross <= TIER1.maxAmount ? TIER1 : TIER2;
+  const t = gross < TIER1.maxAmount ? TIER1 : TIER2; // half-open [min, max)
   return Math.max(gross * (t.ratePct / 100), t.minFee ?? 0);
 };
 
