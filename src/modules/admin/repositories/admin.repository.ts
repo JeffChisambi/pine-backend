@@ -49,7 +49,10 @@ export class AdminRepository {
       this.prisma.order.aggregate({
         where: {
           createdAt: { gte: today },
-          status: { in: ['FILLED', 'COMPLETED'] },
+          // Executed orders settle FILLED → SETTLED within seconds (T+0), so
+          // counting only FILLED made today's volume read 0 the moment a
+          // trade settled. Include every executed terminal state.
+          status: { in: ['FILLED', 'PARTIALLY_FILLED', 'SETTLED', 'COMPLETED'] },
           ...byUserBroker,
         },
         _sum: { totalCost: true },
