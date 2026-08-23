@@ -27,29 +27,63 @@ export interface TradingFees {
   totalCost: Decimal;
 }
 
-const BROKER_COMMISSION_RATE = new Decimal('0.017');  // 1.70%
-const SEC_LEVY_RATE = new Decimal('0.001');           // 0.10%
-const MSE_LEVY_RATE = new Decimal('0.001');           // 0.10%
+const SEC_LEVY_RATE = new Decimal('0.001');           // 0.10% — statutory
+const MSE_LEVY_RATE = new Decimal('0.001');           // 0.10% — statutory
 const WITHHOLDING_TAX_RATE = new Decimal('0.00');     // 0% for now — set by RBFM policy
 
-/**
- * Minimum commission in MWK. Even if the calculated commission is
- * below this floor, the broker charges this minimum.
- */
-const MIN_BROKER_COMMISSION = new Decimal('500');
+/** One broker commission tier: rate applies when gross ∈ [minAmount, maxAmount]. */
+export interface CommissionTier {
+  minAmount: number;
+  /** null/undefined = open-ended top tier */
+  maxAmount?: number | null;
+  /** percent, e.g. 1.7 = 1.7% */
+  ratePct: number;
+  /** optional minimum commission (MWK) within this tier */
+  minFee?: number;
+}
+
+/** Platform default schedule — the historical flat 1.7% with an MWK 500 floor. */
+export const DEFAULT_COMMISSION_TIERS: CommissionTier[] = [
+  { minAmount: 0, maxAmount: null, ratePct: 1.7, minFee: 500 },
+];
+
+/** Resolve the commission for a gross value against a tier schedule. */
+export function commissionForGross(
+  grossValue: Decimal,
+  tiers: CommissionTier[],
+  enabled = true,
+): Decimal {
+  if (!enabled) return new Decimal(0);
+  const schedule = tiers.length > 0 ? tiers : DEFAULT_COMMISSION_TIERS;
+  const gross = grossValue.toNumber();
+  const tier =
+    schedule.find(
+      (t) => gross >= t.minAmount && (t.maxAmount == null || gross <= t.maxAmount),
+    ) ?? schedule[schedule.length - 1];
+
+  let commission = grossValue.mul(new Decimal(tier.ratePct).div(100));
+  if (tier.minFee != null && commission.lt(tier.minFee)) {
+    commission = new Decimal(tier.minFee);
+  }
+  return commission;
+}
 
 export function calculateTradingFees(
   price: Decimal,
   quantity: Decimal,
   side: 'BUY' | 'SELL',
+  commissionSchedule: { tiers: CommissionTier[]; enabled: boolean } = {
+    tiers: DEFAULT_COMMISSION_TIERS,
+    enabled: true,
+  },
 ): TradingFees {
   const grossValue = price.mul(quantity);
 
-  let brokerCommission = grossValue.mul(BROKER_COMMISSION_RATE);
-  // Apply minimum commission floor
-  if (brokerCommission.lt(MIN_BROKER_COMMISSION)) {
-    brokerCommission = MIN_BROKER_COMMISSION;
-  }
+  const brokerCommission = commissionForGross(
+    grossValue,
+    commissionSchedule.tiers,
+    commissionSchedule.enabled,
+  );
 
   const secLevy = grossValue.mul(SEC_LEVY_RATE);
   const mseLevy = grossValue.mul(MSE_LEVY_RATE);

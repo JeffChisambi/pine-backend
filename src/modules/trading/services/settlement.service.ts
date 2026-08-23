@@ -217,9 +217,10 @@ export class SettlementService {
         const prevQty = holding?.quantity ?? new Decimal(0);
         const prevAvg = holding?.averageCost ?? new Decimal(0);
         const newQty = prevQty.add(qty);
-        const newAvg = prevQty.gt(0)
-          ? prevQty.mul(prevAvg).add(qty.mul(price)).div(newQty)
-          : price;
+        // Cost basis includes fees: what the buyer ACTUALLY paid per share
+        // (gross + commission + levies) — so P&L on the position reflects
+        // true cost, not just the exchange price.
+        const newAvg = prevQty.mul(prevAvg).add(totalCost).div(newQty);
         const buyOrderBroker = await tx.order.findUnique({
           where: { id: event.orderId },
           select: { brokerId: true },
@@ -243,27 +244,24 @@ export class SettlementService {
         });
       } else {
         const prevQty = holding?.quantity ?? new Decimal(0);
-        const newQty = Decimal.max(prevQty.sub(qty), new Decimal(0));
+        // INTEGRITY: never settle a sell of more shares than the user holds.
+        // Aborting the transaction rolls back the cash credit too — a
+        // phantom sell must not pay out. (Validation blocks this upstream;
+        // this is the last line of defense.)
         if (!holding || prevQty.lt(qty)) {
-          this.logger.error(
-            { orderId: event.orderId, prevQty: prevQty.toString(), sellQty: qty.toString() },
-            'Sell settles more shares than held — clamping to zero',
+          throw new Error(
+            `Sell settlement aborted for order ${event.orderId}: ` +
+            `selling ${qty.toString()} but holding ${prevQty.toString()} shares`,
           );
         }
+        const newQty = prevQty.sub(qty);
         const sellOrderBroker = await tx.order.findUnique({
           where: { id: event.orderId },
           select: { brokerId: true },
         });
-        await tx.holding.upsert({
+        await tx.holding.update({
           where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
-          create: {
-            userId: event.userId,
-            stockId: event.stockId,
-            quantity: newQty,
-            averageCost: price,
-            brokerId: sellOrderBroker?.brokerId ?? null,
-          },
-          update: {
+          data: {
             quantity: newQty,
             brokerId: sellOrderBroker?.brokerId ?? undefined,
           },

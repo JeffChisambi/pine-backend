@@ -7,6 +7,7 @@ import { WalletCalculator } from './wallet-calculator.service';
 import { BalanceService } from './balance.service';
 import { ReservationService } from './reservation.service';
 import { StatementService } from './statement.service';
+import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 import { FINANCIAL_TRANSACTION_OPTIONS } from '../../../infrastructure/database/prisma.service';
 import type { TradingService } from '../../trading/services/trading.service';
 
@@ -48,6 +49,7 @@ export class WalletService {
     private readonly reservationService: ReservationService,
     private readonly statementService: StatementService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly feePolicy: FeePolicyService,
   ) {}
 
   /** Called by PaymentsModule to wire the TradingService without circular DI. */
@@ -88,6 +90,24 @@ export class WalletService {
   }
 
   // ── Deposit ─────────────────────────────────────────────────
+
+  /**
+   * GET /wallet/deposit/preview — fee breakdown before paying.
+   * Uses the same FeePolicyService the deposit itself will use.
+   */
+  async previewDeposit(userId: string, amount: number) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Deposit amount must be positive');
+    }
+    const policy = await this.feePolicy.forUser(userId);
+    const breakdown = this.feePolicy.depositBreakdown(policy, new Decimal(amount));
+    return {
+      grossAmount: breakdown.grossAmount.toNumber(),
+      processingFee: breakdown.processingFee.toNumber(),
+      netAmount: breakdown.netAmount.toNumber(),
+      feeDescription: breakdown.description ?? null,
+    };
+  }
 
   /**
    * POST /wallet/deposit — initiate a deposit.
@@ -134,8 +154,24 @@ export class WalletService {
       throw new BadRequestException('Deposit amount must be positive');
     }
 
-    // Check daily deposit limit
-    // TODO: Sum today's completed deposits and validate against dailyDepositLimit
+    // Daily deposit limit — enforced against today's completed deposits.
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayDeposits = await this.repo.prismaClient.transaction.aggregate({
+      where: {
+        walletId: wallet.id,
+        type: 'DEPOSIT',
+        status: 'COMPLETED',
+        createdAt: { gte: todayStart },
+      },
+      _sum: { amount: true },
+    });
+    const todaysTotal = (todayDeposits._sum.amount ?? new Decimal(0)).add(params.amount);
+    if (todaysTotal.gt(wallet.dailyDepositLimit)) {
+      throw new BadRequestException(
+        `Daily deposit limit of MWK ${wallet.dailyDepositLimit.toNumber().toLocaleString()} exceeded.`,
+      );
+    }
 
     // Idempotency check
     if (params.idempotencyKey) {
@@ -148,17 +184,41 @@ export class WalletService {
       }
     }
 
+    // Deposit processing fee — the broker's configured schedule (Fees &
+    // Charges). The payer is charged GROSS; the wallet is credited NET; the
+    // fee is a PAYMENT COST recorded on the transaction for reconciliation.
+    // Transaction.amount = NET (what moves into the wallet), the breakdown
+    // lives in metadata + ledger legs.
+    const policy = await this.feePolicy.forUser(params.userId);
+    const breakdown = this.feePolicy.depositBreakdown(policy, new Decimal(params.amount));
+
     const tx = await this.repo.createTransaction({
       walletId: wallet.id,
       type: 'DEPOSIT',
-      amount: new Decimal(params.amount),
+      amount: breakdown.netAmount,
       idempotencyKey: params.idempotencyKey,
-      description: `Deposit of MWK ${params.amount.toLocaleString()}`,
-      metadata: params.metadata,
+      description:
+        breakdown.processingFee.gt(0)
+          ? `Deposit of MWK ${breakdown.grossAmount.toNumber().toLocaleString()} ` +
+            `(processing fee MWK ${breakdown.processingFee.toNumber().toLocaleString()})`
+          : `Deposit of MWK ${params.amount.toLocaleString()}`,
+      metadata: {
+        ...(params.metadata ?? {}),
+        grossAmount: breakdown.grossAmount.toString(),
+        processingFee: breakdown.processingFee.toString(),
+        netAmount: breakdown.netAmount.toString(),
+        ...(breakdown.description ? { feeDescription: breakdown.description } : {}),
+      },
     });
 
     this.logger.log(
-      { userId: params.userId, amount: params.amount, txId: tx.id, metadata: params.metadata },
+      {
+        userId: params.userId,
+        gross: breakdown.grossAmount.toString(),
+        fee: breakdown.processingFee.toString(),
+        net: breakdown.netAmount.toString(),
+        txId: tx.id,
+      },
       'Deposit initiated',
     );
 
@@ -222,13 +282,29 @@ export class WalletService {
       throw new BadRequestException('Withdrawal amount must be positive');
     }
 
-    const reserved = await this.repo.sumActiveReservations(wallet.id);
-    const available = wallet.balance.sub(reserved);
+    // AVAILABLE = balance − active order reservations − withdrawals already
+    // in flight. Without the last term, two overlapping withdrawal requests
+    // could each pass this check against the same balance.
+    const [reserved, pendingWithdrawals] = await Promise.all([
+      this.repo.sumActiveReservations(wallet.id),
+      this.repo.prismaClient.transaction.aggregate({
+        where: {
+          walletId: wallet.id,
+          type: 'WITHDRAWAL',
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+    const available = wallet.balance
+      .sub(reserved)
+      .sub(pendingWithdrawals._sum.amount ?? new Decimal(0));
     const amountDecimal = new Decimal(params.amount);
 
     if (available.lt(amountDecimal)) {
       throw new BadRequestException(
-        `Insufficient funds. Available: MWK ${available.toNumber().toLocaleString()}`,
+        `Insufficient available funds. Available: MWK ${available.toNumber().toLocaleString()} ` +
+        `(funds reserved for pending orders and withdrawals are excluded).`,
       );
     }
 
@@ -259,14 +335,64 @@ export class WalletService {
     return { transactionId: tx.id, status: 'PENDING' };
   }
 
+  /**
+   * Broker approval of a pending withdrawal — settles it through the
+   * double-entry ledger (processWithdrawal). This is the ONLY path that
+   * completes a withdrawal; nothing auto-settles.
+   */
+  async settleWithdrawal(transactionId: string): Promise<void> {
+    await this.processWithdrawal(transactionId);
+  }
+
+  /**
+   * Broker rejection of a pending withdrawal — the transaction is marked
+   * FAILED, no money moves (the wallet was never debited; the pending
+   * transaction only reduced AVAILABLE), and the investor is notified.
+   */
+  async rejectWithdrawal(transactionId: string, reason: string): Promise<void> {
+    const prisma = this.repo.prismaClient;
+    const transaction = await prisma.transaction.findUnique({
+      where: { id: transactionId },
+      include: { wallet: true },
+    });
+    if (!transaction || transaction.type !== 'WITHDRAWAL') {
+      throw new NotFoundException('Withdrawal not found');
+    }
+    if (transaction.status !== 'PENDING') {
+      throw new BadRequestException('Withdrawal already processed');
+    }
+
+    await prisma.transaction.update({
+      where: { id: transactionId },
+      data: {
+        status: 'FAILED',
+        processedAt: new Date(),
+        metadata: {
+          ...((transaction.metadata as Record<string, any>) ?? {}),
+          rejectionReason: reason,
+        },
+      },
+    });
+
+    this.logger.warn({ transactionId, reason }, 'Withdrawal rejected');
+
+    this.eventEmitter.emit('wallet.withdrawal.rejected', {
+      userId: transaction.wallet.userId,
+      amount: transaction.amount.toNumber(),
+      reason,
+    });
+  }
+
   // ── Ledger Operations (double-entry) ────────────────────────
 
   /**
    * Process a completed deposit — creates ledger entries and updates wallet balance.
    *
-   * Double-entry:
-   *   DEBIT  PLATFORM_CASH    (money enters the platform)
-   *   CREDIT USER_WALLET      (user's balance increases)
+   * Double-entry (Transaction.amount is the NET wallet credit; the payer was
+   * charged GROSS = net + processing fee, recorded in metadata):
+   *   DEBIT  PLATFORM_CASH        gross  (money enters the platform)
+   *   CREDIT USER_WALLET          net    (user's balance increases)
+   *   CREDIT PLATFORM_FEE_REVENUE fee    (deposit processing fee, if any)
    */
   async processDeposit(transactionId: string): Promise<void> {
     const prisma = this.repo.prismaClient;
@@ -283,6 +409,12 @@ export class WalletService {
 
       const wallet = transaction.wallet;
       const newBalance = wallet.balance.add(transaction.amount);
+
+      // Processing fee from the breakdown stamped at initiation. Older
+      // transactions (pre fee-schedule) have no metadata fee → zero.
+      const meta = (transaction.metadata ?? {}) as Record<string, any>;
+      const processingFee = new Decimal(meta.processingFee ?? 0);
+      const grossAmount = transaction.amount.add(processingFee);
 
       // Ledger entries (double-entry)
       await tx.ledgerEntry.create({
@@ -301,10 +433,22 @@ export class WalletService {
           transactionId,
           accountType: 'PLATFORM_CASH',
           direction: 'DEBIT',
-          amount: transaction.amount,
+          amount: grossAmount,
           balanceAfter: new Decimal(0), // Platform account — tracked separately
         },
       });
+
+      if (processingFee.gt(0)) {
+        await tx.ledgerEntry.create({
+          data: {
+            transactionId,
+            accountType: 'PLATFORM_FEE_REVENUE',
+            direction: 'CREDIT',
+            amount: processingFee,
+            balanceAfter: new Decimal(0), // Platform account — tracked separately
+          },
+        });
+      }
 
       // Update wallet balance (denormalized). Atomic increment: the DB adds
       // the deposit to the current balance — never a replacement — so the

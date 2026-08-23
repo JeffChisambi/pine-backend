@@ -7,6 +7,7 @@ import { RiskService } from './risk.service';
 import { ExecutionEngineService } from './execution-engine.service';
 import { TradingRepository } from '../repositories/trading.repository';
 import { ReservationService } from '../../wallet/services/reservation.service';
+import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
 import { OrderCreatedEvent, OrderCancelledEvent, OrderRejectedEvent } from '../events/trading.events';
 import {
@@ -43,7 +44,119 @@ export class TradingService {
     private readonly repo: TradingRepository,
     private readonly eventEmitter: EventEmitter2,
     private readonly reservationService: ReservationService,
+    private readonly feePolicy: FeePolicyService,
   ) {}
+
+  /**
+   * Quote an order BEFORE submission — the transparent breakdown the
+   * Review Order screen renders. Uses the exact same fee authority
+   * (FeePolicyService) and availability formulas as validation, so the
+   * preview always matches what execution will charge.
+   */
+  async quoteOrder(
+    userId: string,
+    params: { stockSymbol: string; quantity: number; side: 'BUY' | 'SELL' },
+  ) {
+    const stock = await this.repo.findStockBySymbol(params.stockSymbol);
+    if (!stock || !stock.isActive) {
+      throw new ResourceNotFoundException('Stock', params.stockSymbol);
+    }
+    const price = stock.prices[0]?.closePrice;
+    if (!price) {
+      throw new ValidationException('No price data available for this stock');
+    }
+
+    const quantity = new Decimal(params.quantity);
+    if (quantity.lte(0)) {
+      throw new ValidationException('Quantity must be positive');
+    }
+
+    const fees = await this.feePolicy.tradingFeesForUser(
+      userId,
+      price,
+      quantity,
+      params.side,
+    );
+
+    // Cash availability — same formula as validation and the wallet summary:
+    // balance − active reservations − pending withdrawals.
+    const wallet = await this.repo.findWalletByUserId(userId);
+    let cashAvailable = new Decimal(0);
+    if (wallet) {
+      const [reserved, pendingWd] = await Promise.all([
+        this.repo.db.walletReservation.aggregate({
+          where: { walletId: wallet.id, status: 'ACTIVE' },
+          _sum: { amount: true },
+        }),
+        this.repo.db.transaction.aggregate({
+          where: {
+            walletId: wallet.id,
+            type: 'WITHDRAWAL',
+            status: { in: ['PENDING', 'PROCESSING'] },
+          },
+          _sum: { amount: true },
+        }),
+      ]);
+      cashAvailable = Decimal.max(
+        wallet.balance
+          .sub(reserved._sum.amount ?? new Decimal(0))
+          .sub(pendingWd._sum.amount ?? new Decimal(0)),
+        new Decimal(0),
+      );
+    }
+
+    const base = {
+      symbol: stock.symbol,
+      stockName: stock.name,
+      side: params.side,
+      quantity: quantity.toNumber(),
+      pricePerShare: price.toNumber(),
+      grossValue: fees.grossValue.toNumber(),
+      commission: fees.brokerCommission.toNumber(),
+      secLevy: fees.secLevy.toNumber(),
+      mseLevy: fees.mseLevy.toNumber(),
+      withholdingTax: fees.withholdingTax.toNumber(),
+      totalFees: fees.totalFees.toNumber(),
+      cashAvailable: cashAvailable.toNumber(),
+    };
+
+    if (params.side === 'BUY') {
+      const totalCost = fees.totalCost;
+      return {
+        ...base,
+        totalCost: totalCost.toNumber(),
+        remainingAfter: cashAvailable.sub(totalCost).toNumber(),
+        sufficientFunds: cashAvailable.gte(totalCost),
+      };
+    }
+
+    // SELL — net proceeds after fees, and available (uncommitted) shares.
+    const [holding, openSells] = await Promise.all([
+      this.repo.findUserHolding(userId, stock.id),
+      this.repo.db.order.aggregate({
+        where: {
+          userId,
+          stockId: stock.id,
+          side: 'SELL',
+          status: {
+            in: ['PENDING_VALIDATION', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED'],
+          },
+        },
+        _sum: { quantity: true },
+      }),
+    ]);
+    const availableShares = Decimal.max(
+      (holding?.quantity ?? new Decimal(0)).sub(openSells._sum.quantity ?? new Decimal(0)),
+      new Decimal(0),
+    );
+    return {
+      ...base,
+      netProceeds: fees.totalCost.toNumber(),
+      sharesHeld: (holding?.quantity ?? new Decimal(0)).toNumber(),
+      sharesAvailable: availableShares.toNumber(),
+      sufficientShares: availableShares.gte(quantity),
+    };
+  }
 
   /**
    * Submit a BUY order — the full pipeline.

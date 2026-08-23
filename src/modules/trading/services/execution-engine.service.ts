@@ -6,6 +6,7 @@ import { BrokerGateway } from './broker-gateway.service';
 import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
 import { calculateTradingFees, serializeFees } from '../domain/trading-fee.calculator';
 import { OrderExecutedEvent, OrderRejectedEvent } from '../events/trading.events';
+import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 
 /**
  * Execution Engine — the heart of the trading system.
@@ -28,6 +29,7 @@ export class ExecutionEngineService {
     private readonly repo: TradingRepository,
     private readonly brokerGateway: BrokerGateway,
     private readonly eventEmitter: EventEmitter2,
+    private readonly feePolicy: FeePolicyService,
   ) {}
 
   /**
@@ -113,17 +115,27 @@ export class ExecutionEngineService {
       return { order, status: 'REJECTED' as const };
     }
 
-    // Calculate actual fees based on fill price
+    // Calculate actual fees based on fill price, under the owning broker's
+    // configured commission schedule (the same policy validation used).
     const fillPrice = new Decimal(fillResult.fillPrice);
     const filledQty = new Decimal(fillResult.filledQuantity);
-    const fees = calculateTradingFees(fillPrice, filledQty, order.side as 'BUY' | 'SELL');
+    const fees = await this.feePolicy.tradingFeesForUser(
+      order.userId,
+      fillPrice,
+      filledQty,
+      order.side as 'BUY' | 'SELL',
+    );
 
-    // Create trade record
+    // Create trade record with the commission/levy breakdown: commission is
+    // BROKER REVENUE; levies are statutory. `fee` remains the total for
+    // backward compatibility.
     const trade = await this.repo.createTrade({
       orderId,
       quantity: filledQty,
       price: fillPrice,
       fee: fees.totalFees,
+      commission: fees.brokerCommission,
+      levies: fees.secLevy.add(fees.mseLevy).add(fees.withholdingTax),
     });
 
     // Create execution record

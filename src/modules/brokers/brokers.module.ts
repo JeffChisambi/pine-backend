@@ -6,8 +6,10 @@ import { BrokerAdminService } from './services/broker-admin.service';
 import { BrokerPaymentConfigService } from './services/broker-payment-config.service';
 import { BrokerSecretsService } from './services/broker-secrets.service';
 import { BrokerScopeService } from './services/broker-scope.service';
+import { FeePolicyService } from './services/fee-policy.service';
 import { AdminBrokersController } from './controllers/admin-brokers.controller';
 import { BrokersController } from './controllers/brokers.controller';
+import { AdminFeesController } from './controllers/admin-fees.controller';
 
 /**
  * BrokersModule — multi-broker tenancy:
@@ -18,14 +20,21 @@ import { BrokersController } from './controllers/brokers.controller';
  */
 @Module({
   imports: [AuthModule, AuditModule],
-  controllers: [AdminBrokersController, BrokersController],
+  controllers: [AdminBrokersController, BrokersController, AdminFeesController],
   providers: [
     BrokerService,
     BrokerAdminService,
     BrokerPaymentConfigService,
     BrokerSecretsService,
     BrokerScopeService,
+    FeePolicyService,
   ],
-  exports: [BrokerScopeService, BrokerPaymentConfigService, BrokerAdminService, BrokerService],
+  exports: [
+    BrokerScopeService,
+    BrokerPaymentConfigService,
+    BrokerAdminService,
+    BrokerService,
+    FeePolicyService,
+  ],
 })
 export class BrokersModule {}

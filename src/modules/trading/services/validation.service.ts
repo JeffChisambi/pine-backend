@@ -3,6 +3,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { TradingRepository } from '../repositories/trading.repository';
 import { MarketService } from './market.service';
 import { calculateTradingFees } from '../domain/trading-fee.calculator';
+import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 
 /**
  * Validation Service — Pre-trade gate checks.
@@ -33,6 +34,7 @@ export class ValidationService {
   constructor(
     private readonly repo: TradingRepository,
     private readonly marketService: MarketService,
+    private readonly feePolicy: FeePolicyService,
   ) {}
 
   /**
@@ -71,8 +73,14 @@ export class ValidationService {
     // 5. Get estimated price
     const price = this.getOrderPrice(order.type, order.limitPrice, stock.latestPrice);
 
-    // 6. Calculate fees and total cost
-    const fees = calculateTradingFees(price, order.quantity, order.side);
+    // 6. Calculate fees and total cost under the OWNING BROKER's configured
+    // commission schedule (Fees & Charges) — the single fee authority.
+    const fees = await this.feePolicy.tradingFeesForUser(
+      order.userId,
+      price,
+      order.quantity,
+      order.side,
+    );
 
     // 7. Check max order value
     this.checkMaxOrderValue(fees.grossValue);
@@ -165,19 +173,32 @@ export class ValidationService {
     if (!wallet) {
       throw new BadRequestException('Wallet not found');
     }
-    // AVAILABLE balance = total minus funds already reserved for other pending
-    // orders. Checking the raw balance let concurrent orders collectively
-    // overdraw the wallet.
-    const reserved = await this.repo.db.walletReservation.aggregate({
-      where: { walletId: wallet.id, status: 'ACTIVE' },
-      _sum: { amount: true },
-    });
-    const available = wallet.balance.sub(reserved._sum.amount ?? new Decimal(0));
+    // AVAILABLE = balance − active order reservations − PENDING withdrawals.
+    // All three commitments must be excluded: omitting pending withdrawals
+    // let a user reserve the same money for a buy order and a withdrawal
+    // simultaneously (double-spend window).
+    const [reserved, pendingWithdrawals] = await Promise.all([
+      this.repo.db.walletReservation.aggregate({
+        where: { walletId: wallet.id, status: 'ACTIVE' },
+        _sum: { amount: true },
+      }),
+      this.repo.db.transaction.aggregate({
+        where: {
+          walletId: wallet.id,
+          type: 'WITHDRAWAL',
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+    const available = wallet.balance
+      .sub(reserved._sum.amount ?? new Decimal(0))
+      .sub(pendingWithdrawals._sum.amount ?? new Decimal(0));
     if (available.lt(totalCost)) {
       throw new BadRequestException(
         `Insufficient available funds. Required: MWK ${totalCost.toNumber().toLocaleString()}, ` +
         `Available: MWK ${available.toNumber().toLocaleString()} ` +
-        `(funds reserved for pending orders are excluded).`,
+        `(funds reserved for pending orders and withdrawals are excluded).`,
       );
     }
   }
@@ -188,11 +209,25 @@ export class ValidationService {
     quantity: Decimal,
   ): Promise<void> {
     const holding = await this.repo.findUserHolding(userId, stockId);
-    if (!holding || holding.quantity.lt(quantity)) {
-      const held = holding?.quantity.toNumber() ?? 0;
+    // AVAILABLE shares = held − quantities already committed to open sell
+    // orders. Without this, two queued sells of the same shares both pass
+    // and the user is paid twice for shares they own once.
+    const openSells = await this.repo.db.order.aggregate({
+      where: {
+        userId,
+        stockId,
+        side: 'SELL',
+        status: { in: ['PENDING_VALIDATION', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED'] },
+      },
+      _sum: { quantity: true },
+    });
+    const committed = openSells._sum.quantity ?? new Decimal(0);
+    const availableShares = (holding?.quantity ?? new Decimal(0)).sub(committed);
+    if (availableShares.lt(quantity)) {
       throw new BadRequestException(
         `Insufficient shares. Required: ${quantity.toString()}, ` +
-        `Available: ${held}`,
+        `Available: ${Decimal.max(availableShares, 0).toString()} ` +
+        `(shares committed to pending sell orders are excluded).`,
       );
     }
   }

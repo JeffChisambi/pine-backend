@@ -7,6 +7,7 @@ import type { AuthenticatedUser } from '../../../core/types/request-context.type
 import { AdminRepository } from '../repositories/admin.repository';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
+import { AdminFinanceService } from '../services/admin-finance.service';
 
 @ApiTags('admin', 'dashboard')
 @ApiBearerAuth()
@@ -16,6 +17,7 @@ export class AdminDashboardController {
     private readonly adminRepo: AdminRepository,
     private readonly prisma: PrismaService,
     private readonly brokerScope: BrokerScopeService,
+    private readonly finance: AdminFinanceService,
   ) {}
 
   @Get('stats')
@@ -28,6 +30,35 @@ export class AdminDashboardController {
   async getStats(@CurrentUser() admin: AuthenticatedUser) {
     const scope = await this.brokerScope.resolveScope(admin);
     return this.adminRepo.getDashboardStats(scope);
+  }
+
+  @Get('financials')
+  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @ApiOperation({
+    summary: 'Financial overview (broker admins: own broker only)',
+    description:
+      'Client Assets (cash / portfolio market value / total), Broker Revenue ' +
+      '(trading commissions), statutory levies, and Payment Costs (deposit ' +
+      'processing fees) — each derived independently from transactional data.',
+  })
+  @ApiResponse({ status: 200, description: 'Financial overview' })
+  async getFinancials(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.finance.brokerFinancials(scope);
+  }
+
+  @Get('reconciliation')
+  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @ApiOperation({
+    summary: 'Wallet ↔ ledger reconciliation (broker admins: own broker only)',
+    description:
+      'Compares every wallet balance against its double-entry ledger sum. ' +
+      'Any discrepancy is listed and also surfaced into System Errors.',
+  })
+  @ApiResponse({ status: 200, description: 'Reconciliation result' })
+  async getReconciliation(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    return this.finance.reconcile(scope);
   }
 
   @Get('charts')

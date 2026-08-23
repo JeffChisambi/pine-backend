@@ -236,6 +236,7 @@ model Broker {
 
   users           User[]
   paymentConfig   BrokerPaymentConfig?
+  feeConfig       BrokerFeeConfig?
   apiConfigs      BrokerApiConfig[]
   adminInvitations BrokerAdminInvitation[]
   wallets         Wallet[]
@@ -919,6 +920,10 @@ model Trade {
   quantity     Decimal  @db.Decimal(18, 4)
   price        Decimal  @db.Decimal(18, 4)
   fee          Decimal  @default(0) @db.Decimal(18, 4)
+  /// Broker-revenue component of  (tiered commission).
+  commission   Decimal  @default(0) @db.Decimal(18, 4)
+  /// Statutory component of  (SEC + MSE levies) — not broker revenue.
+  levies       Decimal  @default(0) @db.Decimal(18, 4)
   settledAt    DateTime?
   createdAt    DateTime @default(now())
 
@@ -1602,4 +1607,38 @@ model SystemErrorEvent {
   @@index([status])
   @@index([lastSeenAt])
   @@map("system_error_events")
+}
+
+// ─── Broker fee configuration (Fees & Charges settings) ──────────────────────
+
+enum FeeKind {
+  FIXED
+  PERCENT
+}
+
+/// Per-broker fee schedule, edited in Broker Dashboard → Settings →
+/// Fees & Charges. Absent config = platform defaults (no deposit fee,
+/// default commission tier). Deposit fees are PAYMENT COSTS (owed to the
+/// bank/provider); trading commissions are BROKER REVENUE — never mixed.
+model BrokerFeeConfig {
+  id                    String   @id @default(uuid()) @db.Uuid
+  brokerId              String   @unique @db.Uuid
+  broker                Broker   @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+
+  depositFeeEnabled     Boolean  @default(false)
+  depositFeeKind        FeeKind  @default(PERCENT)
+  /// PERCENT: rate in percent (e.g. 2 = 2%). FIXED: flat MWK amount.
+  depositFeeValue       Decimal  @default(0) @db.Decimal(18, 4)
+  depositFeeDescription String?
+
+  commissionEnabled     Boolean  @default(true)
+  /// Ordered tiers: [{ "minAmount": 0, "maxAmount": 100000|null, "ratePct": 1.7, "minFee": 500 }]
+  /// maxAmount null = open-ended top tier. Statutory levies (SEC/MSE) are
+  /// applied separately and are not broker revenue.
+  commissionTiers       Json?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("broker_fee_configs")
 }

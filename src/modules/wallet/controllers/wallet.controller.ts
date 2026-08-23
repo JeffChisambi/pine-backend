@@ -151,6 +151,21 @@ export class WalletController {
 
   // ── Deposit ─────────────────────────────────────────────────
 
+  @Get('deposit/preview')
+  @ApiOperation({
+    summary: 'Preview a deposit fee breakdown',
+    description:
+      "Returns gross amount, the broker's configured processing fee, and " +
+      'the net amount that will be credited to the wallet — before paying.',
+  })
+  @ApiResponse({ status: 200, description: 'Deposit fee breakdown' })
+  async depositPreview(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('amount') amount: string,
+  ) {
+    return this.walletService.previewDeposit(user.id, Number(amount));
+  }
+
   @Post('deposit')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({

@@ -49,6 +49,32 @@ import {
 export class TradingController {
   constructor(private readonly tradingService: TradingService) {}
 
+  // ── Quote ───────────────────────────────────────────────────
+
+  @Get('quote')
+  @ApiOperation({
+    summary: 'Quote an order before submission',
+    description:
+      'Transparent breakdown for the Review Order screen: price, gross value, ' +
+      'broker commission (tiered, per broker), statutory levies, total ' +
+      'cost / net proceeds, and remaining balance — computed by the same fee ' +
+      'authority the execution engine uses.',
+  })
+  @ApiResponse({ status: 200, description: 'Order quote with fee breakdown' })
+  async quote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('symbol') symbol: string,
+    @Query('quantity') quantity: string,
+    @Query('side') side: string,
+  ) {
+    const normalizedSide = side?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+    return this.tradingService.quoteOrder(user.id, {
+      stockSymbol: symbol,
+      quantity: Number(quantity),
+      side: normalizedSide,
+    });
+  }
+
   // ── Buy ─────────────────────────────────────────────────────
 
   @Post('buy')

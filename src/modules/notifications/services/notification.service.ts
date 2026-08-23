@@ -401,6 +401,30 @@ export class NotificationService implements OnModuleInit {
     }
   }
 
+  /** Wallet: withdrawal rejected by the broker — funds stay in the wallet */
+  @OnEvent('wallet.withdrawal.rejected')
+  async onWithdrawalRejected(event: {
+    userId: string;
+    amount: number;
+    reason: string;
+  }) {
+    await this.notify({
+      userId: event.userId,
+      templateKey: 'wallet.withdrawal.rejected',
+      variables: {
+        amount: event.amount.toLocaleString(),
+        reason: event.reason,
+      },
+      category: 'WALLET',
+      priority: PRIORITY.IMPORTANT,
+      data: {
+        type: 'WITHDRAWAL_REJECTED',
+        amount: event.amount,
+        reason: event.reason,
+      },
+    });
+  }
+
   /** Corporate Actions: dividend paid to user */
   @OnEvent('corporate-actions.dividend.paid')
   async onDividendPaid(event: {

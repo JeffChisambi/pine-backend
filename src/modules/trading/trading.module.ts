@@ -3,6 +3,7 @@ import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
 import { AuthModule } from '../auth/auth.module';
 import { WalletModule } from '../wallet/wallet.module';
+import { BrokersModule } from '../brokers/brokers.module';
 
 // Repository
 import { TradingRepository } from './repositories/trading.repository';
@@ -47,6 +48,8 @@ import { TradingController } from './controllers/trading.controller';
     // Fund reservations: cash is held the moment a BUY order is accepted and
     // consumed/released by settlement/cancellation.
     WalletModule,
+    // FeePolicyService — per-broker commission schedules.
+    BrokersModule,
   ],
   controllers: [TradingController],
   providers: [

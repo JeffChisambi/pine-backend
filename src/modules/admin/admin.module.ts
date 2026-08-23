@@ -6,6 +6,8 @@ import { AuditModule } from '../audit/audit.module';
 import { KycModule } from '../kyc/kyc.module';
 import { TradingModule } from '../trading/trading.module';
 import { BrokersModule } from '../brokers/brokers.module';
+import { WalletModule } from '../wallet/wallet.module';
+import { SystemErrorsModule } from '../system-errors/system-errors.module';
 
 
 // Repository
@@ -13,6 +15,7 @@ import { AdminRepository } from './repositories/admin.repository';
 
 // Services
 import { MfaService } from './services/mfa.service';
+import { AdminFinanceService } from './services/admin-finance.service';
 import { AdminAuthService } from './services/admin-auth.service';
 
 // Controllers
@@ -59,6 +62,8 @@ import { AdminMeController } from './controllers/admin-me.controller';
     KycModule,
     TradingModule,
     BrokersModule,
+    WalletModule,
+    SystemErrorsModule,
   ],
   controllers: [
     AdminAuthController,
@@ -74,6 +79,7 @@ import { AdminMeController } from './controllers/admin-me.controller';
     AdminRepository,
     MfaService,
     AdminAuthService,
+    AdminFinanceService,
   ],
   exports: [MfaService],
 })

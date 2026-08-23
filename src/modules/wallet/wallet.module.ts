@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../infrastructure/database/database.module';
 import { ConfigModule } from '../../config/config.module';
 import { AuthModule } from '../auth/auth.module';
+import { BrokersModule } from '../brokers/brokers.module';
 
 // Repository
 import { WalletRepository } from './repositories/wallet.repository';
@@ -46,6 +47,8 @@ import { WalletController } from './controllers/wallet.controller';
     DatabaseModule,
     ConfigModule,
     AuthModule,
+    // FeePolicyService — deposit processing-fee schedule.
+    BrokersModule,
   ],
   controllers: [WalletController],
   providers: [

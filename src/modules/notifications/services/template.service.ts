@@ -50,6 +50,10 @@ const DEFAULT_TEMPLATES: Record<string, { subject?: string; body: string }> = {
     subject: 'Withdrawal Processed',
     body: 'Your withdrawal of MWK {{amount}} has been processed successfully.',
   },
+  'wallet.withdrawal.rejected': {
+    subject: 'Withdrawal Rejected',
+    body: 'Your withdrawal of MWK {{amount}} was not processed: {{reason}}. The funds remain in your wallet.',
+  },
 
   // ── KYC ─────────────────────────────────────────────────
   'kyc.approved': {

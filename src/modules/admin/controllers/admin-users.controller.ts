@@ -23,6 +23,7 @@ import { SessionService } from '../../auth/services/session.service';
 import { ListUsersQueryDto, UpdateUserStatusDto } from '../dto/admin.dto';
 import { ResourceNotFoundException, ValidationException } from '../../../core/exceptions/app.exception';
 import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
+import { AdminFinanceService } from '../services/admin-finance.service';
 
 @ApiTags('admin', 'users')
 @ApiBearerAuth()
@@ -34,6 +35,7 @@ export class AdminUsersController {
     private readonly prisma: PrismaService,
     private readonly sessionService: SessionService,
     private readonly brokerScope: BrokerScopeService,
+    private readonly finance: AdminFinanceService,
   ) {}
 
   @Get()
@@ -42,7 +44,7 @@ export class AdminUsersController {
   @ApiResponse({ status: 200, description: 'Paginated user list' })
   async listUsers(@Query() query: ListUsersQueryDto, @CurrentUser() admin: AuthenticatedUser) {
     const scope = await this.brokerScope.resolveScope(admin);
-    return this.adminRepo.listUsers(
+    const result = await this.adminRepo.listUsers(
       {
         search: query.search,
         status: query.status,
@@ -53,6 +55,22 @@ export class AdminUsersController {
       },
       scope,
     );
+    // Real AUM per listed investor: wallet cash + market value of holdings,
+    // valued at the latest close — the same formula the mobile app uses.
+    const portfolios = await this.finance.portfolioValues({
+      userIds: result.users.map((u) => u.id),
+    });
+    return {
+      ...result,
+      users: result.users.map((u) => {
+        const portfolioValue = portfolios.get(u.id)?.toNumber() ?? 0;
+        return {
+          ...u,
+          portfolioValue,
+          totalAssets: Number(u.walletBalance) + portfolioValue,
+        };
+      }),
+    };
   }
 
   @Get(':id')
@@ -68,11 +86,16 @@ export class AdminUsersController {
     if (!user) {
       throw new ResourceNotFoundException('User', userId);
     }
+    // Server-computed financial summary — cash breakdown, market-valued
+    // portfolio, lifetime fees. The dashboard renders these numbers as-is;
+    // it never derives its own.
+    const financialSummary = await this.finance.investorSummary(userId);
     // Brokers legitimately need the investor's FULL bank account number —
     // it goes on the CSD trading-account opening form. Expose it explicitly
     // as `accountNumber` instead of leaking the raw storage column.
     return {
       ...user,
+      financialSummary,
       linkedBanks: (user.linkedBanks ?? []).map((b: any) => ({
         id: b.id,
         bankName: b.bankName,

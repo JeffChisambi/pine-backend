@@ -162,6 +162,8 @@ export class TradingRepository {
     quantity: Decimal;
     price: Decimal;
     fee: Decimal;
+    commission?: Decimal;
+    levies?: Decimal;
   }) {
     return this.prisma.trade.create({
       data: {
@@ -169,6 +171,8 @@ export class TradingRepository {
         quantity: data.quantity,
         price: data.price,
         fee: data.fee,
+        commission: data.commission ?? new Decimal(0),
+        levies: data.levies ?? new Decimal(0),
       },
     });
   }
