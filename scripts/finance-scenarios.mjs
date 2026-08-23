@@ -113,7 +113,7 @@ async function main() {
       email: INVESTOR_EMAIL, phone: '+265990000901',
       firstName: 'Fin', lastName: 'Investor',
       role: 'CUSTOMER', kycStatus: 'APPROVED',
-      isActive: true, emailVerified: true, phoneVerified: true,
+      isActive: true, emailVerifiedAt: new Date(), phoneVerifiedAt: new Date(),
       passwordHash, pinHash, brokerId: broker.id,
     },
   });
@@ -122,7 +122,7 @@ async function main() {
       email: ADMIN_EMAIL, phone: '+265990000902',
       firstName: 'Fin', lastName: 'BrokerAdmin',
       role: 'BROKER', kycStatus: 'NOT_SUBMITTED',
-      isActive: true, emailVerified: true, phoneVerified: true,
+      isActive: true, emailVerifiedAt: new Date(), phoneVerifiedAt: new Date(),
       passwordHash, brokerId: broker.id,
     },
   });
