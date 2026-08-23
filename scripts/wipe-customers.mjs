@@ -74,7 +74,7 @@ async function main() {
     await step('portfolio allocations', () => tx.portfolioAllocation.deleteMany({ where: { userId: { in: uids } } }));
     await step('dividend distributions', () => tx.dividendDistribution.deleteMany({ where: { userId: { in: uids } } }));
     // KYC
-    await step('kyc documents', () => tx.kycDocument.deleteMany({ where: { application: { userId: { in: uids } } } }));
+    await step('kyc documents', () => tx.kycDocument.deleteMany({ where: { kycApplication: { userId: { in: uids } } } }));
     await step('face embeddings', () => tx.faceEmbedding.deleteMany({ where: { userId: { in: uids } } }));
     await step('kyc applications', () => tx.kycApplication.deleteMany({ where: { userId: { in: uids } } }));
     // Notifications
