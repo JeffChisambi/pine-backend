@@ -8,6 +8,7 @@ import { BalanceService } from './balance.service';
 import { ReservationService } from './reservation.service';
 import { StatementService } from './statement.service';
 import { FeePolicyService } from '../../brokers/services/fee-policy.service';
+import { RiskPolicyService } from '../../brokers/services/risk-policy.service';
 import { FINANCIAL_TRANSACTION_OPTIONS } from '../../../infrastructure/database/prisma.service';
 import type { TradingService } from '../../trading/services/trading.service';
 
@@ -50,6 +51,7 @@ export class WalletService {
     private readonly statementService: StatementService,
     private readonly eventEmitter: EventEmitter2,
     private readonly feePolicy: FeePolicyService,
+    private readonly riskPolicy: RiskPolicyService,
   ) {}
 
   /** Called by PaymentsModule to wire the TradingService without circular DI. */
@@ -95,17 +97,32 @@ export class WalletService {
    * GET /wallet/deposit/preview — fee breakdown before paying.
    * Uses the same FeePolicyService the deposit itself will use.
    */
-  async previewDeposit(userId: string, amount: number) {
+  async previewDeposit(userId: string, amount: number, method: string | null = 'CARD') {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Deposit amount must be positive');
     }
     const policy = await this.feePolicy.forUser(userId);
     const breakdown = this.feePolicy.depositBreakdown(policy, new Decimal(amount));
+    // Broker deposit limits — the same engine that will enforce them at
+    // submission, so the preview always matches the decision.
+    const risk = await this.riskPolicy.checkDeposit(userId, new Decimal(amount), method);
     return {
       grossAmount: breakdown.grossAmount.toNumber(),
       processingFee: breakdown.processingFee.toNumber(),
       netAmount: breakdown.netAmount.toNumber(),
       feeDescription: breakdown.description ?? null,
+      limits: {
+        allowed: risk.allowed,
+        reason: risk.reason,
+        maxAllowedNow: risk.limits.maxAllowedNow,
+        perTransactionMax: risk.limits.perTransactionMax,
+        dailyLimit: risk.limits.dailyLimit,
+        dailyUsed: risk.limits.dailyUsed,
+        dailyRemaining: risk.limits.dailyRemaining,
+        monthlyLimit: risk.limits.monthlyLimit,
+        monthlyUsed: risk.limits.monthlyUsed,
+        monthlyRemaining: risk.limits.monthlyRemaining,
+      },
     };
   }
 
@@ -120,6 +137,8 @@ export class WalletService {
     amount: number;
     idempotencyKey?: string;
     metadata?: Record<string, any>;
+    /** Payment method for risk-rule matching (e.g. 'CARD'). */
+    method?: string;
   }): Promise<{ transactionId: string; status: string }> {
     // A valid broker relationship is REQUIRED before any deposit: funds
     // always land in the investor's selected broker's account, so a
@@ -154,23 +173,17 @@ export class WalletService {
       throw new BadRequestException('Deposit amount must be positive');
     }
 
-    // Daily deposit limit — enforced against today's completed deposits.
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayDeposits = await this.repo.prismaClient.transaction.aggregate({
-      where: {
-        walletId: wallet.id,
-        type: 'DEPOSIT',
-        status: 'COMPLETED',
-        createdAt: { gte: todayStart },
-      },
-      _sum: { amount: true },
-    });
-    const todaysTotal = (todayDeposits._sum.amount ?? new Decimal(0)).add(params.amount);
-    if (todaysTotal.gt(wallet.dailyDepositLimit)) {
-      throw new BadRequestException(
-        `Daily deposit limit of MWK ${wallet.dailyDepositLimit.toNumber().toLocaleString()} exceeded.`,
-      );
+    // Broker risk constraints — per-transaction/daily/monthly/velocity
+    // deposit limits (RiskPolicyService). The system-wide wallet daily
+    // limit is evaluated inside the same check; where bounds overlap the
+    // MOST RESTRICTIVE one wins. Server-side — the client is never trusted.
+    const riskCheck = await this.riskPolicy.checkDeposit(
+      params.userId,
+      new Decimal(params.amount),
+      params.method ?? null,
+    );
+    if (!riskCheck.allowed) {
+      throw new BadRequestException(riskCheck.reason ?? 'Deposit exceeds your broker\'s limits.');
     }
 
     // Idempotency check

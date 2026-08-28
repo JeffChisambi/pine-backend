@@ -94,6 +94,7 @@ export class CardPaymentService {
       userId: user.id,
       amount: dto.amount,
       idempotencyKey: txRef,
+      method: 'CARD',
       metadata: {
         purpose,
         method: 'BANK_CARD',

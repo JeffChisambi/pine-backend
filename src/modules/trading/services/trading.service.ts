@@ -8,6 +8,7 @@ import { ExecutionEngineService } from './execution-engine.service';
 import { TradingRepository } from '../repositories/trading.repository';
 import { ReservationService } from '../../wallet/services/reservation.service';
 import { FeePolicyService } from '../../brokers/services/fee-policy.service';
+import { RiskPolicyService } from '../../brokers/services/risk-policy.service';
 import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
 import { OrderCreatedEvent, OrderCancelledEvent, OrderRejectedEvent } from '../events/trading.events';
 import {
@@ -45,6 +46,7 @@ export class TradingService {
     private readonly eventEmitter: EventEmitter2,
     private readonly reservationService: ReservationService,
     private readonly feePolicy: FeePolicyService,
+    private readonly riskPolicy: RiskPolicyService,
   ) {}
 
   /**
@@ -122,11 +124,19 @@ export class TradingService {
 
     if (params.side === 'BUY') {
       const totalCost = fees.totalCost;
+      // Broker risk constraints — same engine validation enforces, so the
+      // Review screen shows exactly what submission will decide.
+      const concentration = await this.riskPolicy.checkBuyConcentration(
+        userId,
+        stock.id,
+        fees.grossValue,
+      );
       return {
         ...base,
         totalCost: totalCost.toNumber(),
         remainingAfter: cashAvailable.sub(totalCost).toNumber(),
         sufficientFunds: cashAvailable.gte(totalCost),
+        constraints: { concentration },
       };
     }
 

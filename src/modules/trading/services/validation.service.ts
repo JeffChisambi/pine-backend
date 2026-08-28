@@ -4,6 +4,7 @@ import { TradingRepository } from '../repositories/trading.repository';
 import { MarketService } from './market.service';
 import { calculateTradingFees } from '../domain/trading-fee.calculator';
 import { FeePolicyService } from '../../brokers/services/fee-policy.service';
+import { RiskPolicyService } from '../../brokers/services/risk-policy.service';
 
 /**
  * Validation Service — Pre-trade gate checks.
@@ -35,6 +36,7 @@ export class ValidationService {
     private readonly repo: TradingRepository,
     private readonly marketService: MarketService,
     private readonly feePolicy: FeePolicyService,
+    private readonly riskPolicy: RiskPolicyService,
   ) {}
 
   /**
@@ -88,6 +90,19 @@ export class ValidationService {
     // 8. Sufficient funds (BUY) or sufficient shares (SELL)?
     if (order.side === 'BUY') {
       await this.checkSufficientFunds(order.userId, fees.totalCost);
+      // 9. Broker risk constraints — portfolio concentration (BUY only;
+      // selling always remains possible). Server-side enforcement of the
+      // OWNING BROKER's configured limit on post-order exposure.
+      const concentration = await this.riskPolicy.checkBuyConcentration(
+        order.userId,
+        order.stockId,
+        fees.grossValue,
+      );
+      if (concentration.status === 'BLOCKED') {
+        throw new BadRequestException(
+          concentration.reason ?? "Order exceeds your broker's portfolio concentration limit.",
+        );
+      }
     } else {
       await this.checkSufficientShares(order.userId, order.stockId, order.quantity);
     }

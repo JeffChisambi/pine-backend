@@ -237,6 +237,7 @@ model Broker {
   users           User[]
   paymentConfig   BrokerPaymentConfig?
   feeConfig       BrokerFeeConfig?
+  riskConfig      BrokerRiskConfig?
   apiConfigs      BrokerApiConfig[]
   adminInvitations BrokerAdminInvitation[]
   wallets         Wallet[]
@@ -1641,4 +1642,30 @@ model BrokerFeeConfig {
   updatedAt             DateTime @updatedAt
 
   @@map("broker_fee_configs")
+}
+
+model BrokerRiskConfig {
+  id       String @id @default(uuid()) @db.Uuid
+  brokerId String @unique @db.Uuid
+  broker   Broker @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+
+  /// Portfolio concentration limit — enforced on BUY orders only.
+  concentrationEnabled Boolean  @default(false)
+  /// Max % of the investor's stock portfolio a single position may reach (post-order).
+  maxPositionPct       Decimal  @default(100) @db.Decimal(5, 2)
+  /// Optional soft threshold — orders proceed but the investor sees a warning.
+  warnPositionPct      Decimal? @db.Decimal(5, 2)
+
+  /// Deposit limit rules: ordered JSON array (see RiskPolicyService.parseDepositRules).
+  /// [{ id, label?, enabled, method: 'CARD'|null, kycStatus: 'APPROVED'|null,
+  ///    perTransactionMax?, dailyMax?, monthlyMax?,
+  ///    velocityMaxCount?, velocityWindowMinutes? }]
+  /// Where several rules (or the system-wide wallet limit) apply, the MOST
+  /// RESTRICTIVE bound wins.
+  depositRules         Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("broker_risk_configs")
 }

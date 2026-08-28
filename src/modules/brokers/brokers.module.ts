@@ -7,9 +7,11 @@ import { BrokerPaymentConfigService } from './services/broker-payment-config.ser
 import { BrokerSecretsService } from './services/broker-secrets.service';
 import { BrokerScopeService } from './services/broker-scope.service';
 import { FeePolicyService } from './services/fee-policy.service';
+import { RiskPolicyService } from './services/risk-policy.service';
 import { AdminBrokersController } from './controllers/admin-brokers.controller';
 import { BrokersController } from './controllers/brokers.controller';
 import { AdminFeesController } from './controllers/admin-fees.controller';
+import { AdminRiskController } from './controllers/admin-risk.controller';
 
 /**
  * BrokersModule — multi-broker tenancy:
@@ -20,7 +22,7 @@ import { AdminFeesController } from './controllers/admin-fees.controller';
  */
 @Module({
   imports: [AuthModule, AuditModule],
-  controllers: [AdminBrokersController, BrokersController, AdminFeesController],
+  controllers: [AdminBrokersController, BrokersController, AdminFeesController, AdminRiskController],
   providers: [
     BrokerService,
     BrokerAdminService,
@@ -28,6 +30,7 @@ import { AdminFeesController } from './controllers/admin-fees.controller';
     BrokerSecretsService,
     BrokerScopeService,
     FeePolicyService,
+    RiskPolicyService,
   ],
   exports: [
     BrokerScopeService,
@@ -35,6 +38,7 @@ import { AdminFeesController } from './controllers/admin-fees.controller';
     BrokerAdminService,
     BrokerService,
     FeePolicyService,
+    RiskPolicyService,
   ],
 })
 export class BrokersModule {}

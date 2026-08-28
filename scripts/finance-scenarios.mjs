@@ -404,6 +404,138 @@ async function main() {
   ok(rec.data?.inBalance === true, 'wallet balances match ledger exactly (0 drift)',
     JSON.stringify(rec.data?.discrepancies)?.slice(0, 300));
 
+  // ── RISK ENGINE: broker-configured constraints ─────────────
+  console.log('\n━ Risk engine: deposit limits (per-tx / daily / velocity)');
+  // Daily gross so far: Scenario A deposited 100,000 (gross) today.
+  const putRisk = await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: {
+      concentrationEnabled: false, maxPositionPct: 100, warnPositionPct: null,
+      depositRules: [
+        { id: 'r-card', label: 'Card deposits', enabled: true, method: 'CARD', kycStatus: null,
+          perTransactionMax: 50_000, dailyMax: 120_000, monthlyMax: null,
+          velocityMaxCount: null, velocityWindowMinutes: null },
+      ],
+    },
+  });
+  ok(putRisk.status === 200 && putRisk.data?.depositRules?.length === 1, 'risk config saved', JSON.stringify(putRisk.raw)?.slice(0, 200));
+
+  const badRisk = await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: { concentrationEnabled: true, maxPositionPct: 20, warnPositionPct: 30, depositRules: [] },
+  });
+  ok(badRisk.status >= 400, 'invalid config (warn ≥ max) rejected');
+
+  const limPrev = await call('GET', '/wallet/deposit/preview?amount=30000&method=CARD', { token: iTok });
+  eq(limPrev.data?.limits?.dailyUsed, 100_000, 'preview: daily used = gross deposits today (100,000)');
+  eq(limPrev.data?.limits?.dailyRemaining, 20_000, 'preview: daily remaining = 20,000');
+  eq(limPrev.data?.limits?.maxAllowedNow, 20_000, 'preview: max allowed now = most restrictive bound');
+  ok(limPrev.data?.limits?.allowed === false, 'preview: 30,000 exceeds remaining → flagged before paying');
+
+  const overTx = await call('POST', '/payments/card/initiate', {
+    token: iTok,
+    body: { amount: 60_000, currency: 'MWK', cardholderName: 'FIN INVESTOR', cardNumber: '4111111111111111',
+      expiryMonth: '12', expiryYear: '29', cvv: '123', testScenario: 'success' },
+  });
+  ok(overTx.status >= 400 && /Maximum per deposit/i.test(JSON.stringify(overTx.raw)), 'deposit over per-transaction cap rejected with reason', JSON.stringify(overTx.raw)?.slice(0, 200));
+
+  const okDep = await call('POST', '/payments/card/initiate', {
+    token: iTok,
+    body: { amount: 15_000, currency: 'MWK', cardholderName: 'FIN INVESTOR', cardNumber: '4111111111111111',
+      expiryMonth: '12', expiryYear: '29', cvv: '123', testScenario: 'success' },
+  });
+  ok(okDep.status === 201 && /SUCCESS|COMPLETED/i.test(okDep.data?.status ?? ''), 'deposit within limits succeeds (15,000)');
+  await sleep(1200);
+
+  const overDaily = await call('POST', '/payments/card/initiate', {
+    token: iTok,
+    body: { amount: 10_000, currency: 'MWK', cardholderName: 'FIN INVESTOR', cardNumber: '4111111111111111',
+      expiryMonth: '12', expiryYear: '29', cvv: '123', testScenario: 'success' },
+  });
+  ok(overDaily.status >= 400 && /Daily deposit limit/i.test(JSON.stringify(overDaily.raw)), 'deposit exceeding daily remaining rejected with usage in reason');
+
+  // Velocity: 2 deposits already today → a 2-per-hour rule blocks the next.
+  await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: {
+      concentrationEnabled: false, maxPositionPct: 100, warnPositionPct: null,
+      depositRules: [
+        { id: 'r-vel', label: 'Anti-abuse velocity', enabled: true, method: null, kycStatus: null,
+          perTransactionMax: null, dailyMax: null, monthlyMax: null,
+          velocityMaxCount: 2, velocityWindowMinutes: 60 },
+      ],
+    },
+  });
+  const velDep = await call('POST', '/payments/card/initiate', {
+    token: iTok,
+    body: { amount: 5_000, currency: 'MWK', cardholderName: 'FIN INVESTOR', cardNumber: '4111111111111111',
+      expiryMonth: '12', expiryYear: '29', cvv: '123', testScenario: 'success' },
+  });
+  ok(velDep.status >= 400 && /Too many deposits/i.test(JSON.stringify(velDep.raw)), 'velocity limit blocks a 3rd deposit in the window');
+
+  console.log('\n━ Risk engine: portfolio concentration (buys only)');
+  // Live investor state → compute expected post-order exposure ourselves.
+  const wNow = await prisma.wallet.findUnique({ where: { userId: investor.id } });
+  const hNow = await prisma.holding.findFirst({ where: { userId: investor.id, stockId: stock.id } });
+  const posValue = Number(hNow?.quantity ?? 0) * stock.price;
+  const totalAssets = Number(wNow.balance) + posValue;
+  const buyQty2 = Math.max(1, Math.floor(10_000 / stock.price));
+  const buyGross = buyQty2 * stock.price;
+  const expPostPct = ((posValue + buyGross) / totalAssets) * 100;
+
+  // Tight cap (below the post-order exposure) → BLOCKED end-to-end.
+  const tightMax = Math.max(1, Math.floor(expPostPct - 3));
+  await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: { concentrationEnabled: true, maxPositionPct: tightMax, warnPositionPct: null, depositRules: [] },
+  });
+  const qBlocked = await call('GET', `/trading/quote?symbol=${stock.symbol}&quantity=${buyQty2}&side=BUY`, { token: iTok });
+  ok(qBlocked.data?.constraints?.concentration?.status === 'BLOCKED', `quote: post-order ${expPostPct.toFixed(1)}% vs cap ${tightMax}% → BLOCKED`);
+  eq(qBlocked.data?.constraints?.concentration?.postOrderPct, expPostPct, 'quote: post-order exposure math matches', 0.5);
+  const pinC1 = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const buyBlocked = await call('POST', '/trading/buy', {
+    token: iTok, pinToken: pinC1.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: buyQty2, orderType: 'MARKET', idempotencyKey: `${TAG}-conc-block` },
+  });
+  ok(buyBlocked.status >= 400 && /one stock|concentration/i.test(JSON.stringify(buyBlocked.raw)), 'buy over concentration cap rejected server-side');
+
+  // Selling must ALWAYS remain possible under the same tight cap.
+  const pinSell = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const sellUnderCap = await call('POST', '/trading/sell', {
+    token: iTok, pinToken: pinSell.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: 1, orderType: 'MARKET', idempotencyKey: `${TAG}-conc-sell` },
+  });
+  ok(sellUnderCap.status === 201, 'selling still possible under concentration cap');
+  const sellOrderC = await prisma.order.findFirst({ where: { userId: investor.id, idempotencyKey: `${TAG}-conc-sell` } });
+  await call('POST', `/trading/cancel/${sellOrderC.id}`, { token: iTok });
+
+  // Loose cap with a warning threshold → WARNING shown, order accepted.
+  const looseWarn = Math.max(1, Math.floor(expPostPct - 3));
+  await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: { concentrationEnabled: true, maxPositionPct: 90, warnPositionPct: looseWarn, depositRules: [] },
+  });
+  const qWarn = await call('GET', `/trading/quote?symbol=${stock.symbol}&quantity=${buyQty2}&side=BUY`, { token: iTok });
+  ok(qWarn.data?.constraints?.concentration?.status === 'WARNING', 'quote: over warn threshold (under cap) → WARNING');
+  const pinC2 = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const buyWarn = await call('POST', '/trading/buy', {
+    token: iTok, pinToken: pinC2.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: buyQty2, orderType: 'MARKET', idempotencyKey: `${TAG}-conc-warn` },
+  });
+  ok(buyWarn.status === 201, 'warned order still accepted (warning is advisory)');
+  const warnOrder = await prisma.order.findFirst({ where: { userId: investor.id, idempotencyKey: `${TAG}-conc-warn` } });
+  await call('POST', `/trading/cancel/${warnOrder.id}`, { token: iTok });
+
+  // Config changes are audited with before/after.
+  const auditRows = await prisma.auditLog.count({
+    where: { action: 'RISK_CONFIG_UPDATED', actorId: brokerAdmin.id },
+  });
+  ok(auditRows >= 4, `risk config changes audited (${auditRows} entries with before/after)`);
+
+  // Final integrity: the extra deposit kept wallet ↔ ledger in balance.
+  const rec2 = await call('GET', '/admin/dashboard/reconciliation', { token: adminToken });
+  ok(rec2.data?.inBalance === true, 'still 0 drift after risk-engine scenarios');
+
   // ── Result ─────────────────────────────────────────────────
   console.log(`\n━━ ${passed} passed, ${failed} failed ━━`);
   if (failures.length) console.log('Failed:\n' + failures.map((f) => `  • ${f}`).join('\n'));

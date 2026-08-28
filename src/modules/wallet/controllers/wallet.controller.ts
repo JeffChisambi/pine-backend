@@ -162,8 +162,9 @@ export class WalletController {
   async depositPreview(
     @CurrentUser() user: AuthenticatedUser,
     @Query('amount') amount: string,
+    @Query('method') method?: string,
   ) {
-    return this.walletService.previewDeposit(user.id, Number(amount));
+    return this.walletService.previewDeposit(user.id, Number(amount), method ?? 'CARD');
   }
 
   @Post('deposit')
