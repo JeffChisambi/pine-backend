@@ -8,9 +8,10 @@ import { TradingRepository } from '../repositories/trading.repository';
  * These checks go beyond basic validation (sufficient funds, KYC)
  * and look at patterns and limits that banks require:
  *
+ * Platform-wide abuse guards only (broker-configurable investment limits
+ * live in RiskPolicyService):
  * - Daily trading volume limit
  * - Maximum single order value
- * - Portfolio concentration limit (single stock ≤ 30%)
  * - Velocity check (too many orders in short time)
  */
 @Injectable()
@@ -22,9 +23,6 @@ export class RiskService {
 
   /** Maximum single order value */
   private readonly MAX_SINGLE_ORDER_MWK = new Decimal('5000000'); // 5M MWK
-
-  /** Maximum portfolio concentration in a single stock (30%) */
-  private readonly MAX_CONCENTRATION_PCT = 0.30;
 
   /** Maximum orders per user per hour (velocity check) */
   private readonly MAX_ORDERS_PER_HOUR = 20;
@@ -47,14 +45,12 @@ export class RiskService {
     // 2. Daily trading limit
     await this.checkDailyTradingLimit(params.userId, params.grossValue);
 
-    // 3. Portfolio concentration (only for BUY orders)
-    if (params.side === 'BUY') {
-      await this.checkConcentrationLimit(
-        params.userId,
-        params.stockId,
-        params.totalCost,
-      );
-    }
+    // 3. Portfolio concentration is a BROKER-CONFIGURED constraint —
+    // enforced by RiskPolicyService in ValidationService under the owning
+    // broker's own limit. The hardcoded 30% cap that used to live here
+    // silently overrode whatever the broker configured, so it is gone:
+    // brokers own investment limits; this service keeps only
+    // platform-wide abuse guards (order size, daily volume, velocity).
 
     // 4. Velocity check
     await this.checkOrderVelocity(params.userId);
@@ -88,7 +84,8 @@ export class RiskService {
     );
 
     const todayVolume = todayOrders.reduce(
-      (sum, o) => sum.add(o.totalCost),
+      // Queued orders may not have totalCost yet — treat as 0, never crash.
+      (sum, o) => sum.add(o.totalCost ?? new Decimal(0)),
       new Decimal(0),
     );
 
@@ -97,45 +94,6 @@ export class RiskService {
         `This order would exceed your daily trading limit of MWK ${this.DAILY_TRADE_LIMIT_MWK.toNumber().toLocaleString()}. ` +
         `Today's volume: MWK ${todayVolume.toNumber().toLocaleString()}.`,
       );
-    }
-  }
-
-  private async checkConcentrationLimit(
-    userId: string,
-    stockId: string,
-    additionalCost: Decimal,
-  ): Promise<void> {
-    const holdings = await this.repo.findUserHoldings(userId);
-    const wallet = await this.repo.findWalletByUserId(userId);
-
-    if (!wallet) return; // No wallet = no portfolio to check
-
-    // Calculate total portfolio value (cash + holdings market value)
-    let totalPortfolioValue = wallet.balance;
-    let currentStockValue = new Decimal(0);
-
-    for (const h of holdings) {
-      const marketPrice = h.stock.prices[0]?.closePrice ?? h.averageCost;
-      const holdingValue = h.quantity.mul(marketPrice);
-      totalPortfolioValue = totalPortfolioValue.add(holdingValue);
-
-      if (h.stockId === stockId) {
-        currentStockValue = holdingValue;
-      }
-    }
-
-    // After this order, what % would this stock represent?
-    const newStockValue = currentStockValue.add(additionalCost);
-    const newTotalValue = totalPortfolioValue.add(additionalCost);
-
-    if (newTotalValue.gt(0)) {
-      const concentration = newStockValue.div(newTotalValue).toNumber();
-      if (concentration > this.MAX_CONCENTRATION_PCT) {
-        throw new BadRequestException(
-          `This order would give you ${Math.round(concentration * 100)}% concentration in this stock. ` +
-          `Maximum allowed is ${this.MAX_CONCENTRATION_PCT * 100}%. Diversify your portfolio.`,
-        );
-      }
     }
   }
 

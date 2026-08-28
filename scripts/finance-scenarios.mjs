@@ -500,12 +500,18 @@ async function main() {
   ok(buyBlocked.status >= 400 && /one stock|concentration/i.test(JSON.stringify(buyBlocked.raw)), 'buy over concentration cap rejected server-side');
 
   // Selling must ALWAYS remain possible under the same tight cap.
+  // (Quantity sized so net proceeds stay positive — a 1-share sell is
+  // legitimately rejected because the minimum commission exceeds it.)
+  const sellProbeQty = Math.max(1, Math.min(
+    Number(hNow?.quantity ?? 1),
+    Math.ceil(700 / stock.price),
+  ));
   const pinSell = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
   const sellUnderCap = await call('POST', '/trading/sell', {
     token: iTok, pinToken: pinSell.data.pinToken,
-    body: { stockSymbol: stock.symbol, quantity: 1, orderType: 'MARKET', idempotencyKey: `${TAG}-conc-sell` },
+    body: { stockSymbol: stock.symbol, quantity: sellProbeQty, orderType: 'MARKET', idempotencyKey: `${TAG}-conc-sell` },
   });
-  ok(sellUnderCap.status === 201, 'selling still possible under concentration cap');
+  ok(sellUnderCap.status === 201, 'selling still possible under concentration cap', JSON.stringify(sellUnderCap.raw)?.slice(0, 300));
   const sellOrderC = await prisma.order.findFirst({ where: { userId: investor.id, idempotencyKey: `${TAG}-conc-sell` } });
   await call('POST', `/trading/cancel/${sellOrderC.id}`, { token: iTok });
 
