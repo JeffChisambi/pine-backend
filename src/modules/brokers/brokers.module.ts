@@ -32,6 +32,7 @@ import { AdminRiskController } from './controllers/admin-risk.controller';
     BrokerScopeService,
     FeePolicyService,
     RiskPolicyService,
+    PlatformFeeService,
   ],
   exports: [
     BrokerScopeService,
