@@ -83,6 +83,7 @@ function totp(secret, offsetSteps = 0) {
 const TAG = 'FINTEST';
 const INVESTOR_EMAIL = 'fin.scenario.investor@appine.online';
 const ADMIN_EMAIL = 'fin.scenario.broker@appine.online';
+const SUPER_EMAIL = 'fin.scenario.super@appine.online';
 const PASSWORD = 'Fin-Scenario-2026!x';
 const PIN = '4321';
 const DEPOSIT = 100_000;           // gross
@@ -124,6 +125,16 @@ async function main() {
       role: 'BROKER', kycStatus: 'NOT_SUBMITTED',
       isActive: true, emailVerifiedAt: new Date(), phoneVerifiedAt: new Date(),
       passwordHash, brokerId: broker.id,
+    },
+  });
+  // Test SUPER_ADMIN for platform-level (Pine) settings — no broker.
+  await prisma.user.create({
+    data: {
+      email: SUPER_EMAIL, phone: '+265990000903',
+      firstName: 'Fin', lastName: 'SuperAdmin',
+      role: 'SUPER_ADMIN', kycStatus: 'NOT_SUBMITTED',
+      isActive: true, emailVerifiedAt: new Date(), phoneVerifiedAt: new Date(),
+      passwordHash,
     },
   });
   console.log(`  broker=${broker.id.slice(0, 8)} investor=${investor.id.slice(0, 8)} admin=${brokerAdmin.id.slice(0, 8)}`);
@@ -542,6 +553,60 @@ async function main() {
   const rec2 = await call('GET', '/admin/dashboard/reconciliation', { token: adminToken });
   ok(rec2.data?.inBalance === true, 'still 0 drift after risk-engine scenarios');
 
+  // ── Platform commission: Pine's cut of broker commissions ──
+  console.log('\n━ Platform commission: super admin sets rate, broker owes Pine per trade');
+  const superLogin = await call('POST', '/admin/auth/login', { body: { email: SUPER_EMAIL, password: PASSWORD } });
+  const superSetup = await call('POST', '/admin/auth/mfa/setup', { body: { mfaToken: superLogin.data?.mfaToken } });
+  const superConfirm = await call('POST', '/admin/auth/mfa/confirm-setup', {
+    body: { mfaToken: superLogin.data?.mfaToken, code: totp(superSetup.data?.secret ?? '') },
+  });
+  ok(!!superConfirm.data?.accessToken, 'test super admin logged in (MFA)', JSON.stringify(superConfirm.raw)?.slice(0, 200));
+  const superToken = superConfirm.data?.accessToken;
+
+  const prevRate = (await call('GET', '/admin/platform/commission', { token: superToken })).data?.platformCommissionPct ?? 0;
+  const PLATFORM_PCT = 20;
+  const setRate = await call('PUT', '/admin/platform/commission', { token: superToken, body: { platformCommissionPct: PLATFORM_PCT } });
+  eq(setRate.data?.platformCommissionPct, PLATFORM_PCT, 'platform rate set to 20% (audited)');
+  const brokerForbidden = await call('PUT', '/admin/platform/commission', { token: adminToken, body: { platformCommissionPct: 1 } });
+  ok(brokerForbidden.status === 403, 'broker admin cannot change the platform rate');
+
+  // Relax concentration so a small buy passes, then trade 1 share.
+  await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: { concentrationEnabled: false, maxPositionPct: 100, warnPositionPct: null, depositRules: [] },
+  });
+  await sleep(1200); // fee-policy / risk caches
+  const pinP = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const buyP = await call('POST', '/trading/buy', {
+    token: iTok, pinToken: pinP.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: 1, orderType: 'MARKET', idempotencyKey: `${TAG}-platform-buy` },
+  });
+  ok(buyP.status === 201, 'buy accepted under platform rate', JSON.stringify(buyP.raw)?.slice(0, 200));
+  await sleep(800);
+  const orderP = await prisma.order.findFirst({ where: { userId: investor.id, idempotencyKey: `${TAG}-platform-buy` } });
+  await sleep(61_000); // PlatformFeeService caches the rate for 60s — wait it out before execution
+  const execP = await call('POST', `/admin/trading/orders/${orderP.id}/execute`, { token: adminToken });
+  ok(execP.status === 200 || execP.status === 201, 'broker executed the trade');
+  await sleep(2500);
+  const tradeP = await prisma.trade.findFirst({ where: { orderId: orderP.id } });
+  const expPlatform = Number(tradeP?.commission ?? 0) * (PLATFORM_PCT / 100);
+  eq(tradeP?.platformFee, expPlatform, `DB: trade.platformFee = 20% of broker commission (${expPlatform})`);
+
+  const finP = await call('GET', '/admin/dashboard/financials', { token: adminToken });
+  eq(finP.data?.platformFees?.ratePct, PLATFORM_PCT, 'broker dashboard shows the platform rate');
+  eq(finP.data?.platformFees?.owedThisMonth, expPlatform, 'broker dashboard: owed to Pine this month = Σ platformFee');
+
+  const report = await call('GET', '/admin/platform/brokers/earnings', { token: superToken });
+  const mine = (report.data?.brokers ?? []).find((b) => b.code === TAG);
+  eq(mine?.thisMonth?.owedToPlatform, expPlatform, 'admin earnings report: FINTEST owes Pine the same amount');
+  ok((mine?.thisMonth?.commissions ?? 0) > 0, 'admin earnings report: broker commissions tracked');
+  const reportAsBroker = await call('GET', '/admin/platform/brokers/earnings', { token: adminToken });
+  ok(reportAsBroker.status === 403, 'earnings report is super-admin only');
+
+  // Restore the production rate exactly as it was.
+  await call('PUT', '/admin/platform/commission', { token: superToken, body: { platformCommissionPct: prevRate } });
+  eq((await call('GET', '/admin/platform/commission', { token: superToken })).data?.platformCommissionPct, prevRate, 'platform rate restored');
+
   // ── Result ─────────────────────────────────────────────────
   console.log(`\n━━ ${passed} passed, ${failed} failed ━━`);
   if (failures.length) console.log('Failed:\n' + failures.map((f) => `  • ${f}`).join('\n'));
@@ -560,7 +625,7 @@ async function main() {
 async function cleanup(quiet) {
   try {
     const users = await prisma.user.findMany({
-      where: { email: { in: [INVESTOR_EMAIL, ADMIN_EMAIL] } },
+      where: { email: { in: [INVESTOR_EMAIL, ADMIN_EMAIL, SUPER_EMAIL] } },
       select: { id: true },
     });
     const uids = users.map((u) => u.id);
