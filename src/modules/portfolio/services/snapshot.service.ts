@@ -81,6 +81,11 @@ export class SnapshotService {
     const snapshots = await this.repo.findSnapshots(userId, limit);
     return snapshots.map((s) => ({
       date: s.snapshotDate,
+      /** Stocks at market — THE portfolio series the app charts. */
+      holdingsValue: s.holdingsValue.toNumber(),
+      /** Uninvested cash that day: context only, never charted as growth. */
+      cashBalance: s.cashBalance.toNumber(),
+      /** LEGACY: holdings + cash. Do not chart. */
       totalValue: s.totalValue.toNumber(),
       totalCost: s.totalCost.toNumber(),
       unrealizedPnl: s.unrealizedPnl.toNumber(),
