@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 /**
  * AdminRepository — admin-surface aggregation queries.
@@ -87,95 +87,88 @@ export class AdminRepository {
     };
   }
 
+  /**
+   * Daily time-series for the dashboard charts — one contract for platform
+   * staff (unscoped) and broker admins (scoped), computed with SQL GROUP BY
+   * over the real transactional tables. Exactly `days` buckets ending today,
+   * zero-filled. `revenue` is the viewer's OWN revenue: a broker's trading
+   * commissions, or Pine's platform fees for platform staff.
+   */
   async getChartData(days = 14, scopeBrokerId?: string) {
     const since = new Date();
-    since.setDate(since.getDate() - days);
     since.setHours(0, 0, 0, 0);
+    since.setDate(since.getDate() - (days - 1));
 
-    if (!scopeBrokerId) {
-      // Platform staff: pre-aggregated platform-wide rollups.
-      const dailyMetrics = await this.prisma.dailyMetric.findMany({
-        where: { date: { gte: since } },
-        orderBy: { date: 'asc' },
-      });
+    const scope = scopeBrokerId
+      ? Prisma.sql`AND u."brokerId" = ${scopeBrokerId}::uuid`
+      : Prisma.empty;
 
-      return dailyMetrics.map((m) => ({
-        date: m.date.toISOString().slice(0, 10),
-        trades: m.totalTrades,
-        volume: m.totalTradeVolume.toString(),
-        deposits: m.totalDeposits.toString(),
-        withdrawals: m.totalWithdrawals.toString(),
-        revenue: m.platformRevenue.toString(),
-        newUsers: m.newRegistrations,
-        activeUsers: m.dailyActiveUsers,
-      }));
-    }
-
-    // Broker admin: compute charts from THEIR broker's rows only —
-    // platform-wide aggregates would leak other brokers' financials.
-    const byUserBroker = { user: { brokerId: scopeBrokerId } };
-
-    const [orders, transactions, newUsers] = await Promise.all([
-      this.prisma.order.findMany({
-        where: { createdAt: { gte: since }, ...byUserBroker },
-        select: { createdAt: true, totalCost: true, status: true },
-      }),
-      this.prisma.transaction.findMany({
-        where: {
-          createdAt: { gte: since },
-          status: 'COMPLETED',
-          type: { in: ['DEPOSIT', 'WITHDRAWAL'] },
-          wallet: { user: { brokerId: scopeBrokerId } },
-        },
-        select: { createdAt: true, type: true, amount: true },
-      }),
-      this.prisma.user.findMany({
-        where: { brokerId: scopeBrokerId, role: 'CUSTOMER', createdAt: { gte: since } },
-        select: { createdAt: true },
-      }),
+    type Row = { d: Date; a: string | null; b: string | null };
+    const [orders, txns, trades, signups, active] = await Promise.all([
+      this.prisma.$queryRaw<Row[]>`
+        SELECT date_trunc('day', o."createdAt") AS d,
+               COUNT(*)::text AS a,
+               COALESCE(SUM(CASE WHEN o.status::text IN ('FILLED','PARTIALLY_FILLED','SETTLED','COMPLETED') THEN o."totalCost" END), 0)::text AS b
+        FROM "orders" o JOIN "users" u ON u.id = o."userId"
+        WHERE o."createdAt" >= ${since} ${scope}
+        GROUP BY 1`,
+      this.prisma.$queryRaw<Row[]>`
+        SELECT date_trunc('day', t."createdAt") AS d,
+               COALESCE(SUM(CASE WHEN t.type::text = 'DEPOSIT' THEN t.amount END), 0)::text AS a,
+               COALESCE(SUM(CASE WHEN t.type::text = 'WITHDRAWAL' THEN t.amount END), 0)::text AS b
+        FROM "transactions" t
+        JOIN "wallets" w ON w.id = t."walletId"
+        JOIN "users" u ON u.id = w."userId"
+        WHERE t.status::text = 'COMPLETED' AND t.type::text IN ('DEPOSIT','WITHDRAWAL')
+          AND t."createdAt" >= ${since} ${scope}
+        GROUP BY 1`,
+      this.prisma.$queryRaw<Row[]>`
+        SELECT date_trunc('day', tr."createdAt") AS d,
+               COALESCE(SUM(tr.commission), 0)::text AS a,
+               COALESCE(SUM(tr."platformFee"), 0)::text AS b
+        FROM "trades" tr
+        JOIN "orders" o ON o.id = tr."orderId"
+        JOIN "users" u ON u.id = o."userId"
+        WHERE tr."createdAt" >= ${since} ${scope}
+        GROUP BY 1`,
+      this.prisma.$queryRaw<Row[]>`
+        SELECT date_trunc('day', u."createdAt") AS d, COUNT(*)::text AS a, NULL AS b
+        FROM "users" u
+        WHERE u.role::text = 'CUSTOMER' AND u."createdAt" >= ${since} ${scope}
+        GROUP BY 1`,
+      this.prisma.$queryRaw<Row[]>`
+        SELECT date_trunc('day', s."lastUsedAt") AS d, COUNT(DISTINCT s."userId")::text AS a, NULL AS b
+        FROM "sessions" s JOIN "users" u ON u.id = s."userId"
+        WHERE u.role::text = 'CUSTOMER' AND s."lastUsedAt" >= ${since} ${scope}
+        GROUP BY 1`,
     ]);
 
-    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
-    const byDay = new Map<
-      string,
-      { trades: number; volume: number; deposits: number; withdrawals: number; newUsers: number }
-    >();
-    for (let i = 0; i <= days; i++) {
+    const key = (d: Date) => new Date(d).toISOString().slice(0, 10);
+    const index = (rows: Row[]) => new Map(rows.map((r) => [key(r.d), r]));
+    const [oi, ti, ri, si, ai] = [orders, txns, trades, signups, active].map(index);
+
+    const out: Array<{
+      date: string; trades: number; volume: string; deposits: string; withdrawals: string;
+      revenue: string; newUsers: number; activeUsers: number;
+    }> = [];
+    for (let i = 0; i < days; i++) {
       const d = new Date(since);
-      d.setDate(d.getDate() + i);
-      if (d > new Date()) break;
-      byDay.set(dayKey(d), { trades: 0, volume: 0, deposits: 0, withdrawals: 0, newUsers: 0 });
+      d.setDate(since.getDate() + i);
+      const k = key(d);
+      const o = oi.get(k), t = ti.get(k), r = ri.get(k), sg = si.get(k), ac = ai.get(k);
+      out.push({
+        date: k,
+        trades: Number(o?.a ?? 0),
+        volume: o?.b ?? '0',
+        deposits: t?.a ?? '0',
+        withdrawals: t?.b ?? '0',
+        // Broker: their commissions. Platform staff: Pine's platform fees.
+        revenue: scopeBrokerId ? (r?.a ?? '0') : (r?.b ?? '0'),
+        newUsers: Number(sg?.a ?? 0),
+        activeUsers: Number(ac?.a ?? 0),
+      });
     }
-
-    for (const o of orders) {
-      const row = byDay.get(dayKey(o.createdAt));
-      if (!row) continue;
-      row.trades += 1;
-      if (['FILLED', 'COMPLETED', 'SETTLED'].includes(o.status)) {
-        row.volume += Number(o.totalCost);
-      }
-    }
-    for (const t of transactions) {
-      const row = byDay.get(dayKey(t.createdAt));
-      if (!row) continue;
-      if (t.type === 'DEPOSIT') row.deposits += Number(t.amount);
-      else row.withdrawals += Number(t.amount);
-    }
-    for (const u of newUsers) {
-      const row = byDay.get(dayKey(u.createdAt));
-      if (row) row.newUsers += 1;
-    }
-
-    return Array.from(byDay.entries()).map(([date, r]) => ({
-      date,
-      trades: r.trades,
-      volume: r.volume.toString(),
-      deposits: r.deposits.toString(),
-      withdrawals: r.withdrawals.toString(),
-      revenue: '0',
-      newUsers: r.newUsers,
-      activeUsers: 0,
-    }));
+    return out;
   }
 
   // ── Users ────────────────────────────────────────────────────

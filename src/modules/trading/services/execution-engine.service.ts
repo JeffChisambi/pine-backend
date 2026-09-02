@@ -7,6 +7,7 @@ import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycl
 import { calculateTradingFees, serializeFees } from '../domain/trading-fee.calculator';
 import { OrderExecutedEvent, OrderRejectedEvent } from '../events/trading.events';
 import { FeePolicyService } from '../../brokers/services/fee-policy.service';
+import { PlatformFeeService } from '../../brokers/services/platform-fee.service';
 
 /**
  * Execution Engine — the heart of the trading system.
@@ -30,6 +31,7 @@ export class ExecutionEngineService {
     private readonly brokerGateway: BrokerGateway,
     private readonly eventEmitter: EventEmitter2,
     private readonly feePolicy: FeePolicyService,
+    private readonly platformFee: PlatformFeeService,
   ) {}
 
   /**
@@ -128,7 +130,9 @@ export class ExecutionEngineService {
 
     // Create trade record with the commission/levy breakdown: commission is
     // BROKER REVENUE; levies are statutory. `fee` remains the total for
-    // backward compatibility.
+    // backward compatibility. platformFee is Pine's cut of the broker's
+    // commission, frozen at today's platform rate.
+    const platformFee = await this.platformFee.feeForCommission(fees.brokerCommission);
     const trade = await this.repo.createTrade({
       orderId,
       quantity: filledQty,
@@ -136,6 +140,7 @@ export class ExecutionEngineService {
       fee: fees.totalFees,
       commission: fees.brokerCommission,
       levies: fees.secLevy.add(fees.mseLevy).add(fees.withholdingTax),
+      platformFee,
     });
 
     // Create execution record

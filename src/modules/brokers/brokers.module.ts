@@ -7,6 +7,7 @@ import { BrokerPaymentConfigService } from './services/broker-payment-config.ser
 import { BrokerSecretsService } from './services/broker-secrets.service';
 import { BrokerScopeService } from './services/broker-scope.service';
 import { FeePolicyService } from './services/fee-policy.service';
+import { PlatformFeeService } from './services/platform-fee.service';
 import { RiskPolicyService } from './services/risk-policy.service';
 import { AdminBrokersController } from './controllers/admin-brokers.controller';
 import { BrokersController } from './controllers/brokers.controller';

@@ -925,6 +925,10 @@ model Trade {
   commission   Decimal  @default(0) @db.Decimal(18, 4)
   /// Statutory component of  (SEC + MSE levies) — not broker revenue.
   levies       Decimal  @default(0) @db.Decimal(18, 4)
+  /// Pine's platform commission on this trade: a percentage of the BROKER's
+  /// commission, frozen at execution under the platform rate in force then.
+  /// The broker owes Pine the sum of these — settled monthly.
+  platformFee  Decimal  @default(0) @db.Decimal(18, 4)
   settledAt    DateTime?
   createdAt    DateTime @default(now())
 
@@ -1668,4 +1672,18 @@ model BrokerRiskConfig {
   updatedAt DateTime @updatedAt
 
   @@map("broker_risk_configs")
+}
+
+/// Platform-wide configuration owned by Pine (Super Admin). Singleton row
+/// (id = "default"). platformCommissionPct is Pine's cut of every broker
+/// commission — e.g. 20 means Pine earns 20% of what the broker earns per
+/// trade; applied at execution and frozen on the Trade row.
+model PlatformConfig {
+  id                    String   @id @default("default")
+  platformCommissionPct Decimal  @default(0) @db.Decimal(7, 4)
+  updatedById           String?  @db.Uuid
+  updatedAt             DateTime @updatedAt
+  createdAt             DateTime @default(now())
+
+  @@map("platform_config")
 }

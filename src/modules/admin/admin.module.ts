@@ -27,6 +27,7 @@ import { AdminTradingController } from './controllers/admin-trading.controller';
 import { AdminWalletController } from './controllers/admin-wallet.controller';
 import { AdminNotificationsController } from './controllers/admin-notifications.controller';
 import { AdminMeController } from './controllers/admin-me.controller';
+import { AdminPlatformController } from './controllers/admin-platform.controller';
 
 /**
  * AdminModule — the administrative control surface for Pine.
@@ -74,6 +75,7 @@ import { AdminMeController } from './controllers/admin-me.controller';
     AdminWalletController,
     AdminNotificationsController,
     AdminMeController,
+    AdminPlatformController,
   ],
   providers: [
     AdminRepository,

@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { SystemErrorService } from '../../system-errors/services/system-error.service';
+import { PlatformFeeService } from '../../brokers/services/platform-fee.service';
 
 /**
  * AdminFinanceService — the single aggregation authority for every
@@ -41,6 +42,7 @@ export class AdminFinanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly systemErrors: SystemErrorService,
+    private readonly platformFee: PlatformFeeService,
   ) {}
 
   /** Latest close price per stock (MSE lists ~20 symbols — one small query). */
@@ -134,6 +136,10 @@ export class AdminFinanceService {
     let portfolioValue = new Decimal(0);
     for (const v of portfolioByUser.values()) portfolioValue = portfolioValue.add(v);
 
+    // Pine platform commission owed by the broker — this month / last month /
+    // lifetime — from the per-trade platformFee frozen at execution.
+    const platformFees = await this.platformFeeSummary(scopeBrokerId);
+
     return {
       clientAssets: {
         clientCash: clientCash.toNumber(),
@@ -142,7 +148,9 @@ export class AdminFinanceService {
       },
       brokerRevenue: {
         tradingCommissions: (commissionAgg._sum.commission ?? new Decimal(0)).toNumber(),
+        commissionsThisMonth: platformFees.commissionsThisMonth,
       },
+      platformFees,
       statutory: {
         leviesCollected: (leviesAgg._sum.levies ?? new Decimal(0)).toNumber(),
       },
@@ -214,6 +222,118 @@ export class AdminFinanceService {
         totalTradingFees: (commissionAgg._sum.fee ?? new Decimal(0)).toNumber(),
         depositFeesPaid: Number(feeRows[0]?.total ?? 0),
       },
+    };
+  }
+
+  // ── Platform commission (Pine's cut of broker commissions) ──
+
+  private monthBounds(offset = 0) {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + offset + 1, 1);
+    return { start, end };
+  }
+
+  /**
+   * What a broker owes Pine: Σ trade.platformFee for the broker's trades,
+   * bucketed this month / last month / lifetime, alongside the commissions
+   * those fees were computed from.
+   */
+  async platformFeeSummary(scopeBrokerId?: string) {
+    const orderScope = scopeBrokerId ? { user: { brokerId: scopeBrokerId } } : {};
+    const cur = this.monthBounds(0);
+    const prev = this.monthBounds(-1);
+    const sum = async (range?: { start: Date; end: Date }) =>
+      this.prisma.trade.aggregate({
+        where: {
+          order: orderScope,
+          ...(range ? { createdAt: { gte: range.start, lt: range.end } } : {}),
+        },
+        _sum: { platformFee: true, commission: true },
+        _count: { id: true },
+      });
+    const [thisMonth, lastMonth, lifetime, ratePct] = await Promise.all([
+      sum(cur), sum(prev), sum(), this.platformFee.ratePct(),
+    ]);
+    const n = (d: Decimal | null | undefined) => (d ?? new Decimal(0)).toNumber();
+    return {
+      ratePct: ratePct.toNumber(),
+      owedThisMonth: n(thisMonth._sum.platformFee),
+      owedLastMonth: n(lastMonth._sum.platformFee),
+      owedLifetime: n(lifetime._sum.platformFee),
+      commissionsThisMonth: n(thisMonth._sum.commission),
+      commissionsLastMonth: n(lastMonth._sum.commission),
+      tradesThisMonth: thisMonth._count.id,
+      periodStart: cur.start.toISOString(),
+      periodEnd: cur.end.toISOString(),
+    };
+  }
+
+  /**
+   * Super Admin: every broker's earnings and what each owes Pine.
+   */
+  async brokerEarningsReport() {
+    const brokers = await this.prisma.broker.findMany({
+      select: { id: true, name: true, code: true, isActive: true, _count: { select: { users: true } } },
+      orderBy: { name: 'asc' },
+    });
+    const cur = this.monthBounds(0);
+    const prev = this.monthBounds(-1);
+    const rows = await Promise.all(
+      brokers.map(async (b) => {
+        const scope = { order: { user: { brokerId: b.id } } };
+        const [month, last, life] = await Promise.all([
+          this.prisma.trade.aggregate({
+            where: { ...scope, createdAt: { gte: cur.start, lt: cur.end } },
+            _sum: { commission: true, platformFee: true, levies: true }, _count: { id: true },
+          }),
+          this.prisma.trade.aggregate({
+            where: { ...scope, createdAt: { gte: prev.start, lt: prev.end } },
+            _sum: { commission: true, platformFee: true },
+          }),
+          this.prisma.trade.aggregate({
+            where: scope, _sum: { commission: true, platformFee: true }, _count: { id: true },
+          }),
+        ]);
+        const n = (d: Decimal | null | undefined) => (d ?? new Decimal(0)).toNumber();
+        return {
+          brokerId: b.id,
+          name: b.name,
+          code: b.code,
+          isActive: b.isActive,
+          investors: b._count.users,
+          thisMonth: {
+            trades: month._count.id,
+            commissions: n(month._sum.commission),
+            leviesCollected: n(month._sum.levies),
+            owedToPlatform: n(month._sum.platformFee),
+          },
+          lastMonth: {
+            commissions: n(last._sum.commission),
+            owedToPlatform: n(last._sum.platformFee),
+          },
+          lifetime: {
+            trades: life._count.id,
+            commissions: n(life._sum.commission),
+            owedToPlatform: n(life._sum.platformFee),
+          },
+        };
+      }),
+    );
+    const totals = rows.reduce(
+      (t, r) => ({
+        commissionsThisMonth: t.commissionsThisMonth + r.thisMonth.commissions,
+        owedThisMonth: t.owedThisMonth + r.thisMonth.owedToPlatform,
+        owedLifetime: t.owedLifetime + r.lifetime.owedToPlatform,
+      }),
+      { commissionsThisMonth: 0, owedThisMonth: 0, owedLifetime: 0 },
+    );
+    return {
+      ratePct: (await this.platformFee.ratePct()).toNumber(),
+      periodStart: cur.start.toISOString(),
+      periodEnd: cur.end.toISOString(),
+      brokers: rows,
+      totals,
     };
   }
 
