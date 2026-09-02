@@ -33,7 +33,10 @@ export class PerformanceService {
     const cashBalance = wallet?.balance ?? new Decimal(0);
 
     const summary = this.calculator.calculateSummary(holdings, cashBalance);
-    const currentValue = cashBalance.add(summary.totalMarketValue);
+    // Performance is about the STOCKS the investor owns. Including wallet
+    // cash made a deposit read as a gain and counted uninvested cash as
+    // lifetime profit — both badly misleading.
+    const currentValue = summary.totalMarketValue;
 
     // Get historical snapshots for comparison
     const snapshots = await this.repo.findSnapshots(userId, 400);

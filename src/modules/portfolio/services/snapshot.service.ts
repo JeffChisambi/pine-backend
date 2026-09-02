@@ -48,6 +48,10 @@ export class SnapshotService {
         userId,
         snapshotDate: today,
         totalValue,
+        // The series investors actually see: stocks only. Cash is recorded
+        // beside it, never inside it — a deposit must not look like growth.
+        holdingsValue: summary.totalMarketValue,
+        cashBalance,
         totalCost: summary.totalInvested,
         unrealizedPnl: summary.totalUnrealizedPnl,
       });

@@ -119,6 +119,8 @@ export class PortfolioRepository {
     userId: string;
     snapshotDate: Date;
     totalValue: Decimal;
+    holdingsValue: Decimal;
+    cashBalance: Decimal;
     totalCost: Decimal;
     unrealizedPnl: Decimal;
   }) {
@@ -131,6 +133,8 @@ export class PortfolioRepository {
       },
       update: {
         totalValue: data.totalValue,
+        holdingsValue: data.holdingsValue,
+        cashBalance: data.cashBalance,
         totalCost: data.totalCost,
         unrealizedPnl: data.unrealizedPnl,
       },
@@ -138,6 +142,8 @@ export class PortfolioRepository {
         userId: data.userId,
         snapshotDate: data.snapshotDate,
         totalValue: data.totalValue,
+        holdingsValue: data.holdingsValue,
+        cashBalance: data.cashBalance,
         totalCost: data.totalCost,
         unrealizedPnl: data.unrealizedPnl,
       },

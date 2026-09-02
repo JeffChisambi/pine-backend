@@ -227,7 +227,12 @@ export class PortfolioCalculator {
   calculatePerformance(
     currentValue: Decimal,
     currentCost: Decimal,
-    snapshots: Array<{ snapshotDate: Date; totalValue: Decimal; totalCost: Decimal }>,
+    snapshots: Array<{
+      snapshotDate: Date;
+      /** Stocks only — the basis for every return below. */
+      holdingsValue: Decimal;
+      totalCost: Decimal;
+    }>,
   ): PerformanceMetrics {
     const now = new Date();
     const oneDay = 24 * 60 * 60 * 1000;
@@ -248,10 +253,10 @@ export class PortfolioCalculator {
       return { abs: ret, pct };
     };
 
-    const daily = calcReturn(findSnapshot(1)?.totalValue);
-    const weekly = calcReturn(findSnapshot(7)?.totalValue);
-    const monthly = calcReturn(findSnapshot(30)?.totalValue);
-    const yearly = calcReturn(findSnapshot(365)?.totalValue);
+    const daily = calcReturn(findSnapshot(1)?.holdingsValue);
+    const weekly = calcReturn(findSnapshot(7)?.holdingsValue);
+    const monthly = calcReturn(findSnapshot(30)?.holdingsValue);
+    const yearly = calcReturn(findSnapshot(365)?.holdingsValue);
 
     // Lifetime = current value vs total cost (all-time P&L)
     const lifetimeReturn = currentValue.sub(currentCost);

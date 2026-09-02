@@ -694,6 +694,43 @@ async function main() {
     JSON.stringify(sandboxStill.raw)?.slice(0, 160),
   );
 
+  // ── Portfolio analytics: stocks only, cash never counted as growth ──
+  console.log('\n━ Portfolio analytics excludes uninvested cash');
+
+  const sumA = await call('GET', '/portfolio/summary', { token: iTok });
+  const perfA = await call('GET', '/portfolio/performance', { token: iTok });
+  const mktA = Number(sumA.data?.totalMarketValue ?? 0);
+  const investedA = Number(sumA.data?.totalInvested ?? 0);
+  const cashA = Number(sumA.data?.cashBalance ?? 0);
+
+  ok(cashA > 0 && mktA > 0, 'fixture holds both cash and stocks (a real mixed case)',
+    `cash ${cashA} market ${mktA}`);
+
+  // Lifetime return must be the stocks' unrealised P&L. Before the fix this
+  // was (cash + market) − invested, so idle cash showed up as pure profit.
+  eq(perfA.data?.lifetimeReturn, mktA - investedA,
+    'lifetime return = market value − invested (cash excluded)', 1);
+  const cashInflated = cashA + mktA - investedA;
+  ok(
+    Math.abs(Number(perfA.data?.lifetimeReturn ?? 0) - cashInflated) > 1,
+    'lifetime return is NOT the cash-inflated figure',
+    `cash-inflated would be ${cashInflated}`,
+  );
+
+  // The history series the app charts must carry a holdings-only field.
+  const histA = await call('GET', '/portfolio/history?limit=5', { token: iTok });
+  const rows = Array.isArray(histA.data) ? histA.data : (histA.data?.snapshots ?? []);
+  ok(histA.status === 200, 'portfolio history responds');
+  if (rows.length > 0) {
+    const r = rows[rows.length - 1];
+    ok('holdingsValue' in r && 'cashBalance' in r,
+      'history rows expose holdingsValue and cashBalance separately');
+    eq(Number(r.holdingsValue) + Number(r.cashBalance), Number(r.totalValue),
+      'holdingsValue + cashBalance reconciles to the legacy totalValue', 1);
+  } else {
+    ok(true, 'history empty (daily snapshot cron has not run for the fixture) — skipped row check');
+  }
+
   // ── Result ─────────────────────────────────────────────────
   console.log(`\n━━ ${passed} passed, ${failed} failed ━━`);
   if (failures.length) console.log('Failed:\n' + failures.map((f) => `  • ${f}`).join('\n'));

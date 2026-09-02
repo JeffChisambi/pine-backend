@@ -1036,7 +1036,16 @@ model Holding {
 model PortfolioSnapshot {
   id            String   @id @default(uuid()) @db.Uuid
   userId        String   @db.Uuid
+  /// LEGACY: holdings + uninvested cash. Kept for compatibility only —
+  /// mixing cash in makes a deposit look like portfolio growth, so nothing
+  /// user-facing should chart this. Use holdingsValue.
   totalValue    Decimal  @db.Decimal(18, 4)
+  /// Market value of the STOCKS held on this date. This is the portfolio
+  /// series investors see: it moves only with prices and trades.
+  holdingsValue Decimal  @default(0) @db.Decimal(18, 4)
+  /// Uninvested wallet cash on this date — tracked separately, never charted
+  /// as portfolio performance.
+  cashBalance   Decimal  @default(0) @db.Decimal(18, 4)
   totalCost     Decimal  @db.Decimal(18, 4)
   unrealizedPnl Decimal  @db.Decimal(18, 4)
   snapshotDate  DateTime @db.Date
