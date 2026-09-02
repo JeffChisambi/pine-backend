@@ -607,6 +607,93 @@ async function main() {
   await call('PUT', '/admin/platform/commission', { token: superToken, body: { platformCommissionPct: prevRate } });
   eq((await call('GET', '/admin/platform/commission', { token: superToken })).data?.platformCommissionPct, prevRate, 'platform rate restored');
 
+  // ── Hosted Session / tokenisation safety ───────────────────
+  // No live MPGS credentials exist for the test broker, so the value here is
+  // proving the new money paths fail SAFELY and legibly rather than crashing,
+  // and that nothing can be charged without a configured broker gateway.
+  console.log('\n━ Hosted Session: card data never reaches Pine');
+
+  const sess = await call('POST', '/payments/card/session', {
+    token: iTok,
+    body: { amount: 5_000, currency: 'MWK', purpose: 'wallet_deposit' },
+  });
+  ok(
+    sess.status === 409 || sess.status === 503,
+    'card session refused cleanly when the broker gateway is unconfigured',
+    `status ${sess.status} ${JSON.stringify(sess.raw)?.slice(0, 160)}`,
+  );
+  ok(
+    /not yet enabled|not configured|unavailable/i.test(JSON.stringify(sess.raw ?? '')),
+    'refusal explains that the broker has no payment configuration',
+  );
+
+  const noDeposit = await prisma.transaction.findFirst({
+    where: { wallet: { userId: investor.id }, metadata: { path: ['integration'], equals: 'HOSTED_SESSION' } },
+  });
+  ok(!noDeposit, 'no pending deposit is left behind by a refused session');
+
+  const completeUnknown = await call('POST', '/payments/card/session/complete', {
+    token: iTok,
+    body: { txRef: 'PINE-CARD-does-not-exist' },
+  });
+  ok(completeUnknown.status === 404, 'completing an unknown reference is rejected');
+
+  // A saved card from the pre-tokenisation era holds no gateway token: it must
+  // be refused with a re-add prompt, never charged and never crash.
+  const legacyCard = await prisma.savedCard.create({
+    data: {
+      userId: investor.id,
+      last4: '4242',
+      cardBrand: 'Visa',
+      cardholderName: 'Fin Investor',
+      expiryMonth: '12',
+      expiryYear: '29',
+      cardNumberEncrypted: 'legacy-placeholder',
+      isDefault: false,
+    },
+  });
+  const legacyCharge = await call('POST', '/payments/card/saved', {
+    token: iTok,
+    body: { savedCardId: legacyCard.id, amount: 5_000, currency: 'MWK' },
+  });
+  ok(
+    legacyCharge.status >= 400,
+    'a pre-tokenisation saved card cannot be charged',
+    `status ${legacyCharge.status}`,
+  );
+
+  const cardList = await call('GET', '/cards', { token: iTok });
+  const listed = (Array.isArray(cardList.data) ? cardList.data : []).find((c) => c.id === legacyCard.id);
+  ok(listed?.chargeable === false, 'saved-card list marks the legacy card as not chargeable');
+  await prisma.savedCard.delete({ where: { id: legacyCard.id } }).catch(() => {});
+
+  // The sandbox path must be untouched by the tokenisation work. Clear the
+  // deposit limits the risk scenarios left in force first, otherwise this
+  // would be blocked by them rather than by anything to do with cards.
+  await call('PUT', '/admin/risk/config', {
+    token: adminToken,
+    body: {
+      concentrationEnabled: false, maxPositionPct: 100, warnPositionPct: null,
+      depositRules: [],
+    },
+  });
+  await sleep(1200); // risk-policy cache
+
+  const sandboxStill = await call('POST', '/payments/card/initiate', {
+    token: iTok,
+    body: {
+      amount: 5_000, currency: 'MWK',
+      cardholderName: 'FIN INVESTOR', cardNumber: '4111111111111111',
+      expiryMonth: '12', expiryYear: '29', cvv: '123',
+      testScenario: 'success',
+    },
+  });
+  ok(
+    sandboxStill.status === 201 && /SUCCESS|COMPLETED/i.test(sandboxStill.data?.status ?? ''),
+    'sandbox test transactions still work after the tokenisation change',
+    JSON.stringify(sandboxStill.raw)?.slice(0, 160),
+  );
+
   // ── Result ─────────────────────────────────────────────────
   console.log(`\n━━ ${passed} passed, ${failed} failed ━━`);
   if (failures.length) console.log('Failed:\n' + failures.map((f) => `  • ${f}`).join('\n'));
@@ -649,6 +736,7 @@ async function cleanup(quiet) {
       await del(() => prisma.walletReservation.deleteMany({ where: { walletId: { in: wids } } }));
       await del(() => prisma.walletSnapshot.deleteMany({ where: { walletId: { in: wids } } }));
       await del(() => prisma.order.deleteMany({ where: { id: { in: oids } } }));
+      await del(() => prisma.savedCard.deleteMany({ where: { userId: { in: uids } } }));
       await del(() => prisma.holding.deleteMany({ where: { userId: { in: uids } } }));
       await del(() => prisma.wallet.deleteMany({ where: { id: { in: wids } } }));
       await del(() => prisma.payment.deleteMany({ where: { userId: { in: uids } } }));

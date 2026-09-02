@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
+import { MastercardGatewayModule } from '../mastercard-gateway/mastercard-gateway.module';
 import { BrokerService } from './services/broker.service';
 import { BrokerAdminService } from './services/broker-admin.service';
 import { BrokerPaymentConfigService } from './services/broker-payment-config.service';
@@ -19,10 +20,14 @@ import { AdminRiskController } from './controllers/admin-risk.controller';
  *   - Super Admin broker management (CRUD, admins, payment/API config)
  *   - Mobile broker list + investor broker selection
  *   - BrokerScopeService (server-side broker-scoped authorization)
- *   - BrokerPaymentConfigService (per-broker gateway credential resolution)
+ *   - BrokerPaymentConfigService (per-broker gateway credential resolution
+ *     and the Super Admin MPGS connection/credential test)
+ *
+ * MastercardGatewayModule is imported for the credential test. It only
+ * depends on ConfigModule, so no dependency cycle is introduced.
  */
 @Module({
-  imports: [AuthModule, AuditModule],
+  imports: [AuthModule, AuditModule, MastercardGatewayModule],
   controllers: [AdminBrokersController, BrokersController, AdminFeesController, AdminRiskController],
   providers: [
     BrokerService,

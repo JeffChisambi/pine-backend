@@ -166,6 +166,24 @@ export class AdminBrokersController {
     return this.paymentConfigService.upsertConfig(id, dto, admin, req.ip);
   }
 
+  @Post(':id/payment-config/test')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Test the broker's Mastercard Gateway credentials",
+    description:
+      'Runs two live checks against the acquiring bank: (1) reachability of the ' +
+      'gateway host, and (2) credential validity, by creating a payment session ' +
+      'with the stored merchant ID and decrypted API password. Nothing is charged. ' +
+      'The API password is never returned or logged.',
+  })
+  async testPaymentConfig(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.paymentConfigService.testGatewayConnection(id, admin, req.ip);
+  }
+
   // ── API configuration ─────────────────────────────────────────────
 
   @Get(':id/api-config')
