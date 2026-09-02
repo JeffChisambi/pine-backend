@@ -13,19 +13,29 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
 import { SavedCardService } from '../services/saved-card.service';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { SaveCardDto } from '../dto/saved-card.dto';
 
 @ApiTags('cards')
 @ApiBearerAuth()
 @Controller('cards')
 export class SavedCardsController {
-  constructor(private readonly savedCardService: SavedCardService) {}
+  constructor(
+    private readonly savedCardService: SavedCardService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'List saved cards for the authenticated user' })
   @ApiResponse({ status: 200, description: 'List of saved cards' })
   async list(@CurrentUser() user: AuthenticatedUser) {
-    return this.savedCardService.listCards(user.id);
+    // Card-on-file tokens are merchant scoped, so each card is reported with
+    // whether it is chargeable through the investor's CURRENT broker.
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { brokerId: true },
+    });
+    return this.savedCardService.listChargeableCards(user.id, dbUser?.brokerId ?? null);
   }
 
   @Post()

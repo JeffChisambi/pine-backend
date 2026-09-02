@@ -269,3 +269,91 @@ export interface McgsOperationResult {
   currency?: string;
   rawResponse: McgsTransactionResponse;
 }
+
+// ── Hosted Session (PCI scope reduction) ──────────────────────────────────────
+// The app never sends card data to Pine. Pine creates a SESSION with the
+// broker's credentials, the app PUTs the card straight to the gateway using
+// only the session id (an unauthenticated call by design), then Pine performs
+// PAY against that session. Card data never touches Pine's servers or logs.
+
+/** What the mobile app needs to update a session with card details itself. */
+export interface McgsSessionHandle {
+  sessionId: string;
+  /**
+   * The gateway API version that CREATED the session. Updating the session
+   * must use this exact version — a mismatch is rejected by the gateway.
+   */
+  apiVersion: number;
+  /** Merchant the session belongs to. Not a secret: required to build the URL. */
+  merchantId: string;
+  /** Gateway host the app PUTs card details to. Not a secret. */
+  gatewayBaseUrl: string;
+}
+
+/** Raw CREATE SESSION / session response envelope. */
+export interface McgsSessionResponse {
+  session?: {
+    id?: string;
+    updateStatus?: string;
+    version?: string;
+  };
+  result?: McgsResult;
+  successIndicator?: string;
+  error?: {
+    cause?: string;
+    explanation?: string;
+    field?: string;
+    validationType?: string;
+  };
+}
+
+/** PAY against a session the app has already populated with card details. */
+export interface McgsChargeSessionParams {
+  txRef: string;
+  amount: number;
+  currency: 'MWK' | 'USD';
+  sessionId: string;
+  email?: string;
+}
+
+/** PAY against a stored card-on-file token. */
+export interface McgsChargeTokenParams {
+  txRef: string;
+  amount: number;
+  currency: 'MWK' | 'USD';
+  token: string;
+  /** Optional CVV re-verification for card-on-file transactions. */
+  securityCode?: string;
+  email?: string;
+}
+
+/** A card-on-file token created from a session — replaces storing the PAN. */
+export interface McgsCardToken {
+  /** Gateway token. Safe to store: it is useless outside this merchant. */
+  token: string;
+  last4: string;
+  cardBrand: string;
+  expiryMonth: string;
+  expiryYear: string;
+}
+
+/** Raw CREATE TOKEN response envelope. */
+export interface McgsTokenResponse {
+  token?: string;
+  status?: string;
+  result?: McgsResult;
+  sourceOfFunds?: {
+    provided?: {
+      card?: {
+        number?: string;
+        brand?: string;
+        scheme?: string;
+        expiry?: { month?: string; year?: string };
+      };
+    };
+  };
+  error?: {
+    cause?: string;
+    explanation?: string;
+  };
+}

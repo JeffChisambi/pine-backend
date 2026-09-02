@@ -780,7 +780,15 @@ model SavedCard {
   cardholderName      String
   expiryMonth         String   @db.VarChar(2)
   expiryYear          String   @db.VarChar(4)
-  cardNumberEncrypted String
+  /// LEGACY: AES-256-GCM encrypted PAN. Null for tokenised cards. New cards
+  /// never store a PAN — the gateway holds it behind gatewayToken.
+  cardNumberEncrypted String?
+  /// Mastercard card-on-file token. Replaces PAN storage (PCI scope).
+  gatewayToken        String?
+  /// The broker whose merchant account issued the token. A token is merchant
+  /// scoped: it is NOT chargeable through any other broker, so a card saved
+  /// under one broker must never be offered after the investor switches.
+  tokenBrokerId       String?  @db.Uuid
   isDefault           Boolean  @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt

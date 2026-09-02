@@ -9,6 +9,7 @@ import {
   IsUUID,
   Matches,
   Max,
+  MaxLength,
   Min,
   MinLength,
   ValidateIf,
@@ -178,4 +179,104 @@ export class BankCardRefundRequest {
   @IsNumber()
   @Min(1)
   amount?: number;
+}
+
+// ── Hosted Session DTOs (card data never reaches Pine) ────────────────────────
+
+/** Step 1: ask for a gateway payment session for a new deposit. */
+export class CreateCardSessionDto {
+  @ApiProperty({ description: 'Amount to charge', example: 50000 })
+  @IsNumber()
+  @Min(1)
+  amount: number;
+
+  @ApiProperty({ enum: ['MWK', 'USD'], default: 'MWK' })
+  @IsEnum(['MWK', 'USD'])
+  currency: 'MWK' | 'USD';
+
+  @ApiPropertyOptional({ description: 'wallet_deposit (default) or BUY_SHARES' })
+  @IsOptional()
+  @IsString()
+  purpose?: string;
+
+  @ApiPropertyOptional({ description: 'Stock symbol when purpose is BUY_SHARES' })
+  @IsOptional()
+  @IsString()
+  stockSymbol?: string;
+
+  @ApiPropertyOptional({ description: 'Quantity when purpose is BUY_SHARES' })
+  @IsOptional()
+  @IsNumber()
+  quantity?: number;
+
+  @ApiPropertyOptional({ description: 'Client key making the deposit idempotent' })
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
+}
+
+/** What the app needs to send card details straight to the gateway. */
+export class CardSessionResponse {
+  @ApiProperty() txRef: string;
+  @ApiProperty() transactionId: string;
+  @ApiProperty({ description: 'Update this session with the card, then complete' })
+  sessionId: string;
+  @ApiProperty({ description: 'MUST be used when updating the session' })
+  apiVersion: number;
+  @ApiProperty({ description: 'Gateway merchant id (not a secret)' })
+  merchantId: string;
+  @ApiProperty({ description: 'Gateway host to PUT card details to' })
+  gatewayBaseUrl: string;
+  @ApiProperty({ description: 'Gross amount that will be charged' })
+  amount: number;
+  @ApiProperty() currency: 'MWK' | 'USD';
+}
+
+/** Step 3: capture the payment for a session the app has populated. */
+export class CompleteCardSessionDto {
+  @ApiProperty({ description: 'Reference returned when the session was created' })
+  @IsString()
+  @IsNotEmpty()
+  txRef: string;
+
+  @ApiPropertyOptional({ description: 'Tokenise and remember this card' })
+  @IsOptional()
+  @IsBoolean()
+  saveCard?: boolean;
+
+  @ApiPropertyOptional({ description: 'Name to label the saved card with' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cardholderName?: string;
+}
+
+/** Deposit charged against a stored card-on-file token. */
+export class SavedCardPaymentDto {
+  @ApiProperty() @IsString() @IsNotEmpty()
+  savedCardId: string;
+
+  @ApiProperty({ example: 50000 }) @IsNumber() @Min(1)
+  amount: number;
+
+  @ApiProperty({ enum: ['MWK', 'USD'], default: 'MWK' })
+  @IsEnum(['MWK', 'USD'])
+  currency: 'MWK' | 'USD';
+
+  @ApiPropertyOptional({ description: 'CVV re-check for card-on-file' })
+  @IsOptional()
+  @Matches(/^\d{3,4}$/, { message: 'cvv must be 3–4 digits' })
+  cvv?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString()
+  purpose?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString()
+  stockSymbol?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsNumber()
+  quantity?: number;
+
+  @ApiPropertyOptional() @IsOptional() @IsString()
+  idempotencyKey?: string;
 }

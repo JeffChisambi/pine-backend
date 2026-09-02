@@ -269,6 +269,49 @@ export class WalletService {
     }
   }
 
+  /**
+   * Attach non-sensitive facts to a PENDING deposit — e.g. the gateway
+   * payment session id. Deliberately cannot change the amount: the figure
+   * charged is fixed when the deposit is created, so a client can never
+   * influence it between session creation and capture.
+   */
+  async attachDepositMetadata(
+    txRef: string,
+    patch: Record<string, string | number | boolean>,
+  ): Promise<void> {
+    const tx = await this.repo.prismaClient.transaction.findFirst({
+      where: { idempotencyKey: txRef, type: 'DEPOSIT', status: 'PENDING' },
+      select: { id: true, metadata: true },
+    });
+    if (!tx) return;
+
+    await this.repo.prismaClient.transaction.update({
+      where: { id: tx.id },
+      data: {
+        metadata: {
+          ...((tx.metadata as Record<string, any>) ?? {}),
+          ...patch,
+        },
+      },
+    });
+  }
+
+  /**
+   * Read a deposit belonging to THIS user by its txRef. Used to complete a
+   * hosted-session payment: the amount and session id come from here, never
+   * from the request body.
+   */
+  async getDepositForUser(userId: string, txRef: string) {
+    return this.repo.prismaClient.transaction.findFirst({
+      where: {
+        idempotencyKey: txRef,
+        type: 'DEPOSIT',
+        wallet: { userId },
+      },
+      select: { id: true, status: true, amount: true, metadata: true },
+    });
+  }
+
   // ── Withdrawal ──────────────────────────────────────────────
 
   /**

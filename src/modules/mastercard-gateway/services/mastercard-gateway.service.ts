@@ -19,6 +19,12 @@ import type {
   McgsVerifyCardParams,
   McgsVoidParams,
   McgsVoidRequest,
+  McgsSessionHandle,
+  McgsSessionResponse,
+  McgsChargeSessionParams,
+  McgsChargeTokenParams,
+  McgsCardToken,
+  McgsTokenResponse,
 } from '../interfaces/mastercard-gateway.interface';
 import {
   MastercardGatewayException,
@@ -510,6 +516,242 @@ export class MastercardGatewayService implements IMastercardGateway, OnModuleIni
     }
 
     return this.parseAndValidateResponse(rawText, orderId, transactionId);
+  }
+
+  // ── Hosted Session (PCI scope reduction) ───────────────────────────────────
+  //
+  // Flow:
+  //   1. createSession()            server, authenticated  → session id
+  //   2. app PUTs card to gateway   device → gateway       (Pine not involved)
+  //   3. chargeSession()            server, authenticated  → PAY
+  //   4. createTokenFromSession()   server, authenticated  → card-on-file token
+  //
+  // Card data never reaches Pine's servers, logs, or database in this flow.
+
+  /**
+   * CREATE SESSION — POST .../merchant/{mid}/session
+   *
+   * Returns everything the app needs to send card details straight to the
+   * gateway. merchantId and the gateway host are NOT secrets (they appear in
+   * every client-side integration); the API password never leaves this server.
+   */
+  async createSession(): Promise<McgsSessionHandle> {
+    this.assertConfigured();
+
+    const url =
+      `${this.baseUrl}/api/rest/version/${this.apiVersion}` +
+      `/merchant/${encodeURIComponent(this.merchantId)}/session`;
+
+    const parsed = await this.requestJson<McgsSessionResponse>('POST', url, {}, 15_000);
+
+    const sessionId = parsed.session?.id;
+    if (!sessionId) {
+      this.logger.error(
+        { cause: parsed.error?.cause, explanation: parsed.error?.explanation },
+        'CREATE SESSION returned no session id',
+      );
+      throw new MastercardGatewayException({
+        gatewayResult: 'ERROR',
+        gatewayCode: McgsGatewayCode.SYSTEM_ERROR,
+        errorCause: parsed.error?.cause ?? 'SERVER_FAILED',
+        errorExplanation:
+          parsed.error?.explanation ?? 'Gateway did not return a payment session.',
+      });
+    }
+
+    this.logger.log({ sessionId, merchantId: this.merchantId }, 'Payment session created');
+
+    return {
+      sessionId,
+      // The session must be updated with the SAME version that created it.
+      apiVersion: this.apiVersion,
+      merchantId: this.merchantId,
+      gatewayBaseUrl: this.baseUrl,
+    };
+  }
+
+  /**
+   * PAY using a session the app has already populated with card details.
+   * Identical to chargeCard() except the card fields are replaced by a
+   * session reference — Pine never holds the PAN.
+   */
+  async chargeSession(params: McgsChargeSessionParams): Promise<BankCardChargeResult> {
+    this.assertConfigured();
+
+    const orderId = this.sanitizeId(params.txRef);
+    const transactionId = `${orderId}-pay-1`;
+
+    this.logger.log(
+      { orderId, transactionId, amount: params.amount, currency: params.currency },
+      'Initiating PAY transaction (hosted session)',
+    );
+
+    const body = {
+      apiOperation: 'PAY',
+      order: {
+        amount: this.formatAmount(params.amount),
+        currency: params.currency,
+        description: `Pine payment — ${params.txRef}`,
+      },
+      transaction: { reference: params.txRef },
+      session: { id: params.sessionId },
+      ...(params.email ? { customer: { email: params.email } } : {}),
+    };
+
+    const response = await this.putTransaction(orderId, transactionId, body);
+    this.assertSuccess(response);
+
+    return {
+      processorReference: response.transaction?.id ?? transactionId,
+      txRef: params.txRef,
+      status: BankCardPaymentStatus.SUCCESS,
+      amount: params.amount,
+      currency: params.currency,
+      last4: this.extractLast4(response),
+      cardBrand: response.sourceOfFunds?.provided?.card?.brand ?? 'UNKNOWN',
+      message: response.response?.gatewayCode ?? McgsGatewayCode.APPROVED,
+      chargedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * CREATE TOKEN — POST .../merchant/{mid}/token
+   *
+   * Turns a session into a durable card-on-file token. Pine stores the token
+   * (useless outside this merchant) instead of the card number.
+   */
+  async createTokenFromSession(sessionId: string): Promise<McgsCardToken> {
+    this.assertConfigured();
+
+    const url =
+      `${this.baseUrl}/api/rest/version/${this.apiVersion}` +
+      `/merchant/${encodeURIComponent(this.merchantId)}/token`;
+
+    const parsed = await this.requestJson<McgsTokenResponse>(
+      'POST',
+      url,
+      { session: { id: sessionId } },
+      15_000,
+    );
+
+    const token = parsed.token;
+    if (!token) {
+      throw new MastercardGatewayException({
+        gatewayResult: 'ERROR',
+        gatewayCode: McgsGatewayCode.SYSTEM_ERROR,
+        errorCause: parsed.error?.cause ?? 'SERVER_FAILED',
+        errorExplanation:
+          parsed.error?.explanation ?? 'Gateway did not return a card token.',
+      });
+    }
+
+    const card = parsed.sourceOfFunds?.provided?.card;
+    // The gateway returns a MASKED pan (e.g. 512345xxxxxx0008) — never the PAN.
+    const masked = card?.number ?? '';
+    const last4 = masked.slice(-4) || '0000';
+
+    this.logger.log({ last4, brand: card?.brand }, 'Card tokenised (card-on-file)');
+
+    return {
+      token,
+      last4,
+      cardBrand: card?.brand ?? card?.scheme ?? 'UNKNOWN',
+      expiryMonth: card?.expiry?.month ?? '',
+      expiryYear: card?.expiry?.year ?? '',
+    };
+  }
+
+  /** PAY using a stored card-on-file token (saved card). */
+  async chargeToken(params: McgsChargeTokenParams): Promise<BankCardChargeResult> {
+    this.assertConfigured();
+
+    const orderId = this.sanitizeId(params.txRef);
+    const transactionId = `${orderId}-pay-1`;
+
+    this.logger.log(
+      { orderId, transactionId, amount: params.amount },
+      'Initiating PAY transaction (card-on-file token)',
+    );
+
+    const body = {
+      apiOperation: 'PAY',
+      order: {
+        amount: this.formatAmount(params.amount),
+        currency: params.currency,
+        description: `Pine payment — ${params.txRef}`,
+      },
+      transaction: { reference: params.txRef },
+      sourceOfFunds: {
+        type: 'CARD',
+        token: params.token,
+        ...(params.securityCode
+          ? { provided: { card: { securityCode: params.securityCode } } }
+          : {}),
+      },
+      ...(params.email ? { customer: { email: params.email } } : {}),
+    };
+
+    const response = await this.putTransaction(orderId, transactionId, body);
+    this.assertSuccess(response);
+
+    return {
+      processorReference: response.transaction?.id ?? transactionId,
+      txRef: params.txRef,
+      status: BankCardPaymentStatus.SUCCESS,
+      amount: params.amount,
+      currency: params.currency,
+      last4: this.extractLast4(response),
+      cardBrand: response.sourceOfFunds?.provided?.card?.brand ?? 'UNKNOWN',
+      message: response.response?.gatewayCode ?? McgsGatewayCode.APPROVED,
+      chargedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Authenticated JSON call to a non-transaction gateway resource
+   * (session, token). Network failures and non-JSON bodies are normalised
+   * into MastercardGatewayException like the transaction path.
+   */
+  private async requestJson<T>(
+    method: 'POST' | 'PUT' | 'GET',
+    url: string,
+    body: object | undefined,
+    timeoutMs: number,
+  ): Promise<T> {
+    let rawText: string;
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: this.buildHeaders(),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      rawText = await response.text();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error({ url, error: message }, 'Mastercard Gateway network error');
+      throw new MastercardGatewayException({
+        gatewayResult: 'ERROR',
+        gatewayCode: McgsGatewayCode.TIMED_OUT,
+        errorCause: 'SERVER_FAILED',
+        errorExplanation: `Network error reaching gateway: ${message}`,
+      });
+    }
+
+    try {
+      return JSON.parse(rawText) as T;
+    } catch {
+      this.logger.error(
+        { url, bodyPreview: rawText.slice(0, 200) },
+        'Mastercard Gateway returned a non-JSON response',
+      );
+      throw new MastercardGatewayException({
+        gatewayResult: 'ERROR',
+        gatewayCode: McgsGatewayCode.SYSTEM_ERROR,
+        errorCause: 'SERVER_FAILED',
+        errorExplanation: 'Gateway returned an unreadable response.',
+      });
+    }
   }
 
   // ── Internal utilities ──────────────────────────────────────────────────────
