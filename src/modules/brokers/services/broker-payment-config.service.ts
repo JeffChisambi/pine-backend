@@ -36,6 +36,8 @@ export interface ResolvedBrokerGatewayConfig {
   environment: string;
   merchantId: string;
   apiPassword: string;
+  /** Broker policy: refuse card deposits that cannot be 3DS authenticated. */
+  require3ds: boolean;
 }
 
 /**
@@ -277,6 +279,7 @@ export class BrokerPaymentConfigService {
       environment: cfg.environment,
       merchantId: cfg.merchantId,
       apiPassword,
+      require3ds: cfg.require3ds ?? false,
     };
   }
 
@@ -361,6 +364,7 @@ export class BrokerPaymentConfigService {
       environment: cfg.environment,
       merchantId: cfg.merchantId,
       apiPassword,
+      require3ds: cfg.require3ds ?? false,
     };
   }
 

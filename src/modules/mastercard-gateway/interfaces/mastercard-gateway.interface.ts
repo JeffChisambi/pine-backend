@@ -314,6 +314,12 @@ export interface McgsChargeSessionParams {
   currency: 'MWK' | 'USD';
   sessionId: string;
   email?: string;
+  /**
+   * Authentication leg to attach (3DS). When present the gateway passes the
+   * authentication result to the acquirer, moving chargeback liability to
+   * the issuer.
+   */
+  authenticationTransactionId?: string;
 }
 
 /** PAY against a stored card-on-file token. */
@@ -355,5 +361,84 @@ export interface McgsTokenResponse {
   error?: {
     cause?: string;
     explanation?: string;
+  };
+}
+
+// ── 3-D Secure (EMV 3DS) ─────────────────────────────────────────────────────
+// Authenticating the payer shifts fraud liability from the merchant to the
+// card issuer. That matters here because the merchant IS the broker: without
+// it, a fraudulent deposit that has already bought shares is the broker's loss.
+
+/** Device facts the ACS needs for a browser-channel authentication. */
+export interface McgsDeviceDetails {
+  ipAddress?: string;
+  /** User-Agent of the WebView that will render any challenge. */
+  browser?: string;
+  screenWidth?: number;
+  screenHeight?: number;
+  timeZone?: number;
+  language?: string;
+  colorDepth?: number;
+  acceptHeaders?: string;
+}
+
+export interface McgsInitiateAuthParams {
+  txRef: string;
+  currency: 'MWK' | 'USD';
+  sessionId: string;
+}
+
+export interface McgsAuthenticatePayerParams {
+  txRef: string;
+  amount: number;
+  currency: 'MWK' | 'USD';
+  sessionId: string;
+  /** Where the issuer sends the payer back once the challenge is done. */
+  redirectResponseUrl: string;
+  device?: McgsDeviceDetails;
+  email?: string;
+}
+
+/** What INITIATE_AUTHENTICATION told us about this card. */
+export interface McgsAuthInitResult {
+  /** '3DS2', '3DS1' or 'NONE' when the card/issuer cannot be authenticated. */
+  version: string;
+  /** True when the gateway can authenticate this payer. */
+  available: boolean;
+  /** PROCEED | DO_NOT_PROCEED | RESUBMIT_WITH_ALTERNATIVE_PAYMENT_DETAILS */
+  recommendation: string;
+  authTransactionId: string;
+}
+
+export type McgsAuthOutcome =
+  /** Issuer approved without asking the payer anything. */
+  | 'FRICTIONLESS'
+  /** The payer must complete a challenge in a WebView. */
+  | 'CHALLENGE'
+  /** Card or issuer does not support 3DS — liability stays with the merchant. */
+  | 'NOT_AVAILABLE'
+  /** The issuer refused; the payment must not proceed. */
+  | 'REJECTED';
+
+export interface McgsAuthResult {
+  outcome: McgsAuthOutcome;
+  authTransactionId: string;
+  /** Self-submitting HTML that posts to the issuer. Render in a WebView. */
+  redirectHtml?: string;
+  /** transaction.authenticationStatus as reported by the gateway. */
+  status?: string;
+  recommendation?: string;
+}
+
+/** Raw shape of an authentication response (superset of the txn response). */
+export interface McgsAuthResponse extends McgsTransactionResponse {
+  authentication?: {
+    version?: string;
+    redirect?: { html?: string };
+    '3ds2'?: { transactionStatus?: string; methodSupported?: string };
+    '3ds'?: { acsEci?: string; authenticationToken?: string };
+  };
+  transaction?: McgsTransactionResponse['transaction'] & {
+    authenticationStatus?: string;
   };
 }

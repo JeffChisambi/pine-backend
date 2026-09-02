@@ -19,6 +19,8 @@ import {
   CardSessionResponse,
   CompleteCardSessionDto,
   SavedCardPaymentDto,
+  AuthenticateCardSessionDto,
+  CardAuthenticationResponse,
 } from '../dto/bank-card.dto';
 import { BrokerPaymentConfigService } from '../../brokers/services/broker-payment-config.service';
 import { AppConfigService } from '../../../config/app-config.service';
@@ -339,7 +341,43 @@ export class CardPaymentService {
       );
     }
 
-    const { gateway, brokerId } = await this.resolveBrokerGateway(user.id);
+    const { gateway, brokerId, require3ds } = await this.resolveBrokerGateway(user.id);
+
+    // ── 3-D Secure gate ──────────────────────────────────────────────────
+    // The device reports that the challenge finished, but a device is not a
+    // source of truth: the authentication result is re-read FROM THE GATEWAY
+    // here. A client that skips the authenticate step entirely still lands in
+    // this check, so a broker that requires 3DS cannot be bypassed.
+    const authTxnId = meta.threeDsAuthTransactionId as string | undefined;
+    let authenticatedTxnId: string | undefined;
+
+    if (authTxnId) {
+      const verified = await gateway.retrieveAuthentication(dto.txRef).catch(() => null);
+      if (verified?.authenticated) {
+        authenticatedTxnId = authTxnId;
+      }
+    }
+
+    if (require3ds && !authenticatedTxnId) {
+      const reason =
+        'Your bank did not verify this payment, and your broker requires ' +
+        'verification for card deposits.';
+      await this.walletService
+        .markDepositFailed(dto.txRef, `3DS_REQUIRED: ${reason}`)
+        .catch(() => {});
+      this.logger.warn(
+        { txRef: dto.txRef, userId: user.id, hadAuthAttempt: !!authTxnId },
+        'Payment refused: broker requires 3DS and the payer was not authenticated',
+      );
+      return {
+        txRef: dto.txRef,
+        transactionId: deposit.id,
+        status: BankCardPaymentStatus.FAILED,
+        amount: grossAmount,
+        currency,
+        message: reason,
+      };
+    }
 
     try {
       const charge = await gateway.chargeSession({
@@ -348,6 +386,10 @@ export class CardPaymentService {
         currency,
         sessionId,
         email: user.email ?? undefined,
+        // Attaching the authentication moves chargeback liability to the
+        // issuer. Omitted when the card could not be authenticated and the
+        // broker allows unauthenticated deposits.
+        authenticationTransactionId: authenticatedTxnId,
       });
 
       // Credit the wallet through the standard atomic, idempotent pipeline
@@ -410,6 +452,141 @@ export class CardPaymentService {
         message: userMessage,
       };
     }
+  }
+
+  /**
+   * Step 2b — authenticate the payer (3-D Secure) for a populated session.
+   *
+   * Called after the card has been sent to the gateway and before the charge.
+   * Returns either a frictionless pass, HTML for a challenge the app must
+   * render, or the fact that the card cannot be authenticated at all.
+   *
+   * Whether an unauthenticated card may still be charged is the BROKER's
+   * policy (`require3ds`), because the broker is the merchant of record and
+   * carries the chargebacks.
+   */
+  async authenticateCardSession(
+    user: { id: string; email?: string | null },
+    dto: AuthenticateCardSessionDto,
+    context: { ipAddress?: string; userAgent?: string } = {},
+  ): Promise<CardAuthenticationResponse> {
+    const deposit = await this.walletService.getDepositForUser(user.id, dto.txRef);
+    if (!deposit) throw new NotFoundException('Payment not found.');
+    if (deposit.status !== 'PENDING') {
+      throw new BadRequestException('This payment is no longer awaiting authentication.');
+    }
+
+    const meta = (deposit.metadata ?? {}) as Record<string, any>;
+    const sessionId = meta.gatewaySessionId as string | undefined;
+    if (!sessionId) {
+      throw new BadRequestException('This payment has no active card session.');
+    }
+    const currency = (meta.currency as 'MWK' | 'USD') ?? 'MWK';
+    const grossAmount = Number(meta.grossAmount ?? deposit.amount);
+
+    const { gateway, require3ds } = await this.resolveBrokerGateway(user.id);
+
+    try {
+      const enrolment = await gateway.initiateAuthentication({
+        txRef: dto.txRef,
+        currency,
+        sessionId,
+      });
+
+      if (!enrolment.available || enrolment.recommendation === 'DO_NOT_PROCEED') {
+        // The card cannot be authenticated. Whether that blocks the payment
+        // is the broker's call.
+        await this.walletService.attachDepositMetadata(dto.txRef, {
+          threeDsOutcome: 'NOT_AVAILABLE',
+          threeDsVersion: enrolment.version,
+        });
+        if (require3ds || enrolment.recommendation === 'DO_NOT_PROCEED') {
+          return {
+            outcome: 'NOT_AVAILABLE',
+            canProceed: false,
+            message:
+              'This card could not be verified with your bank, and your broker ' +
+              'requires verification for card deposits. Please use a different card.',
+          };
+        }
+        return {
+          outcome: 'NOT_AVAILABLE',
+          canProceed: true,
+          message: 'Your bank does not support card verification for this card.',
+        };
+      }
+
+      const auth = await gateway.authenticatePayer({
+        txRef: dto.txRef,
+        amount: grossAmount,
+        currency,
+        sessionId,
+        redirectResponseUrl: this.threeDsReturnUrl(),
+        email: user.email ?? undefined,
+        device: {
+          ipAddress: context.ipAddress,
+          browser: context.userAgent ?? dto.userAgent,
+          screenWidth: dto.screenWidth,
+          screenHeight: dto.screenHeight,
+          timeZone: dto.timeZone,
+          language: dto.language,
+        },
+      });
+
+      await this.walletService.attachDepositMetadata(dto.txRef, {
+        threeDsOutcome: auth.outcome,
+        threeDsAuthTransactionId: auth.authTransactionId,
+        threeDsVersion: enrolment.version,
+      });
+
+      if (auth.outcome === 'REJECTED') {
+        return {
+          outcome: 'REJECTED',
+          canProceed: false,
+          message: 'Your bank declined to verify this payment. Please try another card.',
+        };
+      }
+
+      if (auth.outcome === 'CHALLENGE') {
+        return {
+          outcome: 'CHALLENGE',
+          canProceed: false,
+          // Rendered in a WebView; it self-submits to the issuer.
+          redirectHtml: auth.redirectHtml,
+          returnUrl: this.threeDsReturnUrl(),
+          message: 'Your bank needs to verify this payment.',
+        };
+      }
+
+      return {
+        outcome: auth.outcome,
+        canProceed: true,
+        message: 'Verified with your bank.',
+      };
+    } catch (error) {
+      const { userMessage, code } = this.describeFailure(error);
+      this.logger.warn(
+        { txRef: dto.txRef, userId: user.id, code },
+        '3DS authentication could not be completed',
+      );
+      // A gateway problem during authentication must not silently downgrade a
+      // broker that requires it.
+      if (require3ds) {
+        return { outcome: 'REJECTED', canProceed: false, message: userMessage };
+      }
+      return {
+        outcome: 'NOT_AVAILABLE',
+        canProceed: true,
+        message: 'Card verification is unavailable right now.',
+      };
+    }
+  }
+
+  /** Where the issuer returns the payer after a challenge. */
+  private threeDsReturnUrl(): string {
+    const base = this.appConfig.app.url.replace(/\/+$/, '');
+    const prefix = this.appConfig.app.apiPrefix.replace(/^\/+|\/+$/g, '');
+    return `${base}/${prefix}/payments/card/3ds/return`;
   }
 
   /**
@@ -514,7 +691,7 @@ export class CardPaymentService {
    */
   private async resolveBrokerGateway(
     userId: string,
-  ): Promise<{ gateway: MastercardGatewayService; brokerId: string }> {
+  ): Promise<{ gateway: MastercardGatewayService; brokerId: string; require3ds: boolean }> {
     const cfg = await this.brokerPaymentConfig.resolveGatewayConfigForUser(userId);
     const gateway = this.mpgs.scopedTo({
       merchantId: cfg.merchantId,
@@ -527,7 +704,7 @@ export class CardPaymentService {
         'Card payments are not yet enabled for your broker.',
       );
     }
-    return { gateway, brokerId: cfg.brokerId };
+    return { gateway, brokerId: cfg.brokerId, require3ds: cfg.require3ds };
   }
 
   /** Status poll — the wallet transaction row is the source of truth. */

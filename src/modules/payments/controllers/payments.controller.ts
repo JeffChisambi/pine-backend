@@ -7,6 +7,8 @@ import {
   Logger,
   Param,
   Post,
+  Req,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -14,8 +16,10 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
-import type { AuthenticatedUser } from '../../../core/types/request-context.types';
+import { Public } from '../../../core/decorators/public.decorator';
+import type { AuthenticatedUser, RequestWithUser } from '../../../core/types/request-context.types';
 import { CardPaymentService } from '../services/card-payment.service';
 import {
   InitiateBankCardPaymentDto,
@@ -24,6 +28,8 @@ import {
   CardSessionResponse,
   CompleteCardSessionDto,
   SavedCardPaymentDto,
+  AuthenticateCardSessionDto,
+  CardAuthenticationResponse,
 } from '../dto/bank-card.dto';
 
 /**
@@ -138,6 +144,53 @@ export class PaymentsController {
     return this.cardPayments.payWithSavedCard(
       { id: user.id, email: user.email },
       dto,
+    );
+  }
+  @Post('card/session/authenticate')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Authenticate the payer with 3-D Secure',
+    description:
+      'Run after the card has been sent to the gateway and BEFORE completing ' +
+      'the payment. Returns a frictionless pass, HTML for an issuer challenge ' +
+      'to render in a WebView, or the fact that the card cannot be verified. ' +
+      'Authenticating shifts chargeback liability to the card issuer.',
+  })
+  @ApiResponse({ status: 200, description: 'Authentication outcome', type: CardAuthenticationResponse })
+  async authenticateCardSession(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: AuthenticateCardSessionDto,
+    @Req() req: RequestWithUser,
+  ): Promise<CardAuthenticationResponse> {
+    return this.cardPayments.authenticateCardSession(
+      { id: user.id, email: user.email },
+      dto,
+      {
+        ipAddress: req.ip,
+        userAgent: dto.userAgent ?? (req.headers['user-agent'] as string | undefined),
+      },
+    );
+  }
+
+  /**
+   * Where the card issuer sends the payer back after a 3DS challenge.
+   *
+   * Public and deliberately inert: it renders a tiny page so the WebView has
+   * something to land on. The app detects this URL and asks the server to
+   * complete the payment, which re-reads the authentication result from the
+   * gateway — nothing here is trusted.
+   */
+  @Get('card/3ds/return')
+  @Public()
+  @ApiOperation({ summary: '3-D Secure challenge return page' })
+  threeDsReturn(@Res() res: Response): void {
+    res.status(HttpStatus.OK).type('text/html').send(
+      '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>Verification complete</title>' +
+      '<body style="margin:0;display:flex;align-items:center;justify-content:center;' +
+      'height:100vh;font-family:-apple-system,Roboto,sans-serif;color:#164951">' +
+      '<p>Verification complete. Returning to Pine…</p></body>',
     );
   }
 }

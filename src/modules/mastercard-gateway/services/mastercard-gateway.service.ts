@@ -25,6 +25,13 @@ import type {
   McgsChargeTokenParams,
   McgsCardToken,
   McgsTokenResponse,
+  McgsDeviceDetails,
+  McgsInitiateAuthParams,
+  McgsAuthenticatePayerParams,
+  McgsAuthInitResult,
+  McgsAuthOutcome,
+  McgsAuthResult,
+  McgsAuthResponse,
 } from '../interfaces/mastercard-gateway.interface';
 import {
   MastercardGatewayException,
@@ -518,6 +525,171 @@ export class MastercardGatewayService implements IMastercardGateway, OnModuleIni
     return this.parseAndValidateResponse(rawText, orderId, transactionId);
   }
 
+  // ── 3-D Secure (EMV 3DS) ───────────────────────────────────────────────────
+  //
+  //   1. initiateAuthentication()  is this card enrolled?
+  //   2. authenticatePayer()       frictionless, or a challenge to render
+  //   3. (payer completes the challenge in a WebView)
+  //   4. retrieveAuthentication()  VERIFY SERVER-SIDE — never trust the return
+  //   5. chargeSession({ authenticationTransactionId })
+  //
+  // The authentication uses its own transaction id on the same order, which
+  // the later PAY references.
+
+  /** Deterministic id for the authentication leg of an order. */
+  private authTransactionId(orderId: string): string {
+    return `${orderId}-3ds-1`;
+  }
+
+  /**
+   * INITIATE_AUTHENTICATION — asks the gateway which 3DS versions this card
+   * supports. Safe to call before the amount is final.
+   */
+  async initiateAuthentication(
+    params: McgsInitiateAuthParams,
+  ): Promise<McgsAuthInitResult> {
+    this.assertConfigured();
+
+    const orderId = this.sanitizeId(params.txRef);
+    const authTxnId = this.authTransactionId(orderId);
+
+    const body = {
+      apiOperation: 'INITIATE_AUTHENTICATION',
+      order: { currency: params.currency },
+      session: { id: params.sessionId },
+      authentication: {
+        channel: 'PAYER_BROWSER',
+        purpose: 'PAYMENT_TRANSACTION',
+      },
+    };
+
+    const response = (await this.putTransaction(
+      orderId,
+      authTxnId,
+      body,
+    )) as McgsAuthResponse;
+
+    const version = response.authentication?.version ?? 'NONE';
+    const recommendation = response.response?.gatewayRecommendation ?? 'PROCEED';
+    const available =
+      version !== 'NONE' &&
+      response.transaction?.authenticationStatus === 'AUTHENTICATION_AVAILABLE';
+
+    this.logger.log(
+      { orderId, version, recommendation, available },
+      '3DS enrolment checked',
+    );
+
+    return { version, available, recommendation, authTransactionId: authTxnId };
+  }
+
+  /**
+   * AUTHENTICATE_PAYER — either the issuer approves silently (frictionless)
+   * or it returns HTML that must be rendered so the payer can be challenged.
+   */
+  async authenticatePayer(
+    params: McgsAuthenticatePayerParams,
+  ): Promise<McgsAuthResult> {
+    this.assertConfigured();
+
+    const orderId = this.sanitizeId(params.txRef);
+    const authTxnId = this.authTransactionId(orderId);
+    const d = params.device ?? {};
+
+    const body = {
+      apiOperation: 'AUTHENTICATE_PAYER',
+      order: {
+        amount: this.formatAmount(params.amount),
+        currency: params.currency,
+      },
+      session: { id: params.sessionId },
+      authentication: { redirectResponseUrl: params.redirectResponseUrl },
+      device: {
+        ...(d.ipAddress ? { ipAddress: d.ipAddress } : {}),
+        ...(d.browser ? { browser: d.browser } : {}),
+        browserDetails: {
+          '3DSecureChallengeWindowSize': 'FULL_SCREEN',
+          acceptHeaders: d.acceptHeaders ?? 'application/json',
+          colorDepth: d.colorDepth ?? 24,
+          javaEnabled: false,
+          language: d.language ?? 'en-GB',
+          screenHeight: d.screenHeight ?? 900,
+          screenWidth: d.screenWidth ?? 400,
+          timeZone: d.timeZone ?? 0,
+        },
+      },
+      ...(params.email ? { customer: { email: params.email } } : {}),
+    };
+
+    const response = (await this.putTransaction(
+      orderId,
+      authTxnId,
+      body,
+    )) as McgsAuthResponse;
+
+    const status = response.transaction?.authenticationStatus;
+    const recommendation = response.response?.gatewayRecommendation;
+    const redirectHtml = response.authentication?.redirect?.html;
+
+    let outcome: McgsAuthOutcome;
+    if (recommendation === 'DO_NOT_PROCEED') {
+      outcome = 'REJECTED';
+    } else if (status === 'AUTHENTICATION_SUCCESSFUL') {
+      outcome = 'FRICTIONLESS';
+    } else if (redirectHtml) {
+      outcome = 'CHALLENGE';
+    } else if (status === 'AUTHENTICATION_NOT_SUPPORTED' || !status) {
+      outcome = 'NOT_AVAILABLE';
+    } else {
+      // AUTHENTICATION_PENDING without HTML is unusable — treat as failure
+      // rather than silently charging an unauthenticated card.
+      outcome = 'REJECTED';
+    }
+
+    this.logger.log(
+      { orderId, outcome, status, recommendation },
+      '3DS payer authentication result',
+    );
+
+    return {
+      outcome,
+      authTransactionId: authTxnId,
+      redirectHtml,
+      status,
+      recommendation,
+    };
+  }
+
+  /**
+   * Re-read the authentication straight from the gateway after a challenge.
+   *
+   * The payer's device reports the outcome too, but a device is not a source
+   * of truth — this is the check that decides whether the card is charged.
+   */
+  async retrieveAuthentication(txRef: string): Promise<{
+    authenticated: boolean;
+    status?: string;
+    recommendation?: string;
+  }> {
+    this.assertConfigured();
+
+    const orderId = this.sanitizeId(txRef);
+    const response = (await this.getTransaction(
+      orderId,
+      this.authTransactionId(orderId),
+    )) as McgsAuthResponse;
+
+    const status = response.transaction?.authenticationStatus;
+    const recommendation = response.response?.gatewayRecommendation;
+
+    return {
+      authenticated:
+        status === 'AUTHENTICATION_SUCCESSFUL' && recommendation !== 'DO_NOT_PROCEED',
+      status,
+      recommendation,
+    };
+  }
+
   // ── Hosted Session (PCI scope reduction) ───────────────────────────────────
   //
   // Flow:
@@ -595,6 +767,9 @@ export class MastercardGatewayService implements IMastercardGateway, OnModuleIni
       },
       transaction: { reference: params.txRef },
       session: { id: params.sessionId },
+      ...(params.authenticationTransactionId
+        ? { authentication: { transactionId: params.authenticationTransactionId } }
+        : {}),
       ...(params.email ? { customer: { email: params.email } } : {}),
     };
 

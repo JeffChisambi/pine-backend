@@ -280,3 +280,53 @@ export class SavedCardPaymentDto {
   @ApiPropertyOptional() @IsOptional() @IsString()
   idempotencyKey?: string;
 }
+
+// ── 3-D Secure DTOs ──────────────────────────────────────────────────────────
+
+/** Step 2b: authenticate the payer for a session that already holds the card. */
+export class AuthenticateCardSessionDto {
+  @ApiProperty({ description: 'Reference returned when the session was created' })
+  @IsString()
+  @IsNotEmpty()
+  txRef: string;
+
+  @ApiPropertyOptional({ description: 'User-Agent of the WebView that will show any challenge' })
+  @IsOptional() @IsString() @MaxLength(400)
+  userAgent?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsNumber()
+  screenWidth?: number;
+
+  @ApiPropertyOptional() @IsOptional() @IsNumber()
+  screenHeight?: number;
+
+  @ApiPropertyOptional({ description: 'Minutes offset from UTC' })
+  @IsOptional() @IsNumber()
+  timeZone?: number;
+
+  @ApiPropertyOptional({ example: 'en-GB' })
+  @IsOptional() @IsString() @MaxLength(20)
+  language?: string;
+}
+
+export class CardAuthenticationResponse {
+  @ApiProperty({
+    enum: ['FRICTIONLESS', 'CHALLENGE', 'NOT_AVAILABLE', 'REJECTED'],
+    description:
+      'FRICTIONLESS: issuer approved silently. CHALLENGE: render redirectHtml ' +
+      'and wait for returnUrl. NOT_AVAILABLE: card cannot be 3DS verified. ' +
+      'REJECTED: the issuer refused — do not charge.',
+  })
+  outcome: 'FRICTIONLESS' | 'CHALLENGE' | 'NOT_AVAILABLE' | 'REJECTED';
+
+  @ApiProperty({ description: 'Whether the app may call /session/complete now' })
+  canProceed: boolean;
+
+  @ApiPropertyOptional({ description: 'Self-submitting HTML to render in a WebView' })
+  redirectHtml?: string;
+
+  @ApiPropertyOptional({ description: 'Navigating here means the challenge is finished' })
+  returnUrl?: string;
+
+  @ApiPropertyOptional() message?: string;
+}

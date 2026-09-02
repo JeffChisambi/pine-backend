@@ -278,6 +278,11 @@ model BrokerPaymentConfig {
   settlementAccountIv     String?
   settlementAccountTag    String?
   isEnabled      Boolean  @default(false)
+  /// Refuse card deposits that cannot be 3DS authenticated. Off by default so
+  /// a broker whose acquirer has not switched 3DS on can still take payments.
+  /// Turning it on moves chargeback liability to the issuer on every deposit —
+  /// worth it here because the merchant of record is the BROKER.
+  require3ds     Boolean  @default(false)
   updatedById    String?  @db.Uuid
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
