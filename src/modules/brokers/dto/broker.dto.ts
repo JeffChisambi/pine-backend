@@ -194,6 +194,15 @@ export class UpsertBrokerPaymentConfigDto {
   @IsOptional()
   @IsBoolean()
   isEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Refuse card deposits that cannot be 3-D Secure verified. Shifts ' +
+      'chargeback liability to the card issuer on every deposit.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  require3ds?: boolean;
 }
 
 // ── API configuration ───────────────────────────────────────────────

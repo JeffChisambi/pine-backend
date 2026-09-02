@@ -88,6 +88,7 @@ export class BrokerPaymentConfigService {
       settlementAccountName: cfg.settlementAccountName,
       settlementAccountMasked: cfg.settlementAccountMasked,
       isEnabled: cfg.isEnabled,
+      require3ds: cfg.require3ds,
       updatedAt: cfg.updatedAt.toISOString(),
     };
   }
@@ -116,7 +117,7 @@ export class BrokerPaymentConfigService {
     const data: Record<string, unknown> = { updatedById: actor.id };
     const changedFields: string[] = [];
 
-    for (const field of ['provider', 'baseUrl', 'apiVersion', 'environment', 'merchantId', 'settlementBankName', 'settlementAccountName', 'isEnabled'] as const) {
+    for (const field of ['provider', 'baseUrl', 'apiVersion', 'environment', 'merchantId', 'settlementBankName', 'settlementAccountName', 'isEnabled', 'require3ds'] as const) {
       if (dto[field] !== undefined) {
         data[field] = dto[field];
         changedFields.push(field);

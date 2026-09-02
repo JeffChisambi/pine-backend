@@ -731,6 +731,73 @@ async function main() {
     ok(true, 'history empty (daily snapshot cron has not run for the fixture) — skipped row check');
   }
 
+  // ── 3-D Secure gate ────────────────────────────────────────
+  // The broker has no live gateway, so what matters here is that the gate
+  // itself is sound: authentication cannot be skipped, a device cannot claim
+  // success, and a broker that requires 3DS can never be charged around.
+  console.log('\n━ 3-D Secure: the gate cannot be bypassed');
+
+  const authNoPayment = await call('POST', '/payments/card/session/authenticate', {
+    token: iTok,
+    body: { txRef: 'PINE-CARD-nope' },
+  });
+  ok(authNoPayment.status === 404, 'authenticating an unknown payment is rejected');
+
+  // Turn the broker's 3DS requirement on and prove a forged completion is
+  // refused. The deposit is planted directly so the test does not depend on
+  // gateway credentials that do not exist yet.
+  await prisma.brokerPaymentConfig.upsert({
+    where: { brokerId: broker.id },
+    create: {
+      brokerId: broker.id, provider: 'MPGS', baseUrl: 'https://test-nbm.mtf.gateway.mastercard.com',
+      apiVersion: 100, environment: 'test', merchantId: 'FINTESTMID',
+      apiPasswordEnc: 'x', apiPasswordIv: 'x', apiPasswordTag: 'x',
+      isEnabled: true, require3ds: true,
+    },
+    update: { isEnabled: true, require3ds: true },
+  });
+
+  const wallet3ds = await prisma.wallet.findUnique({ where: { userId: investor.id } });
+  const forgedRef = `PINE-CARD-3DS-FORGED-${Date.now()}`;
+  await prisma.transaction.create({
+    data: {
+      walletId: wallet3ds.id,
+      type: 'DEPOSIT',
+      status: 'PENDING',
+      amount: 5_000,
+      idempotencyKey: forgedRef,
+      description: '3DS gate test',
+      // A client pretending authentication succeeded, with no gateway record.
+      metadata: {
+        purpose: 'wallet_deposit',
+        integration: 'HOSTED_SESSION',
+        currency: 'MWK',
+        grossAmount: '5000',
+        gatewaySessionId: 'SESSION-THAT-DOES-NOT-EXIST',
+        threeDsOutcome: 'FRICTIONLESS',
+        threeDsAuthTransactionId: 'forged-auth-id',
+      },
+    },
+  });
+
+  const forged = await call('POST', '/payments/card/session/complete', {
+    token: iTok,
+    body: { txRef: forgedRef },
+  });
+  ok(
+    forged.data?.status === 'FAILED' || forged.status >= 400,
+    'a forged 3DS claim cannot complete a payment',
+    `status ${forged.status} ${JSON.stringify(forged.raw)?.slice(0, 160)}`,
+  );
+
+  const forgedTx = await prisma.transaction.findFirst({ where: { idempotencyKey: forgedRef } });
+  ok(forgedTx?.status !== 'COMPLETED', 'the forged deposit was never credited');
+  const walletAfter3ds = await prisma.wallet.findUnique({ where: { userId: investor.id } });
+  eq(walletAfter3ds?.balance, wallet3ds.balance, 'wallet balance untouched by the forged attempt');
+
+  await prisma.transaction.deleteMany({ where: { idempotencyKey: forgedRef } });
+  await prisma.brokerPaymentConfig.deleteMany({ where: { brokerId: broker.id } });
+
   // ── Result ─────────────────────────────────────────────────
   console.log(`\n━━ ${passed} passed, ${failed} failed ━━`);
   if (failures.length) console.log('Failed:\n' + failures.map((f) => `  • ${f}`).join('\n'));
@@ -790,6 +857,7 @@ async function cleanup(quiet) {
     }
     if (broker) {
       try { await prisma.brokerFeeConfig.deleteMany({ where: { brokerId: broker.id } }); } catch {}
+      try { await prisma.brokerPaymentConfig.deleteMany({ where: { brokerId: broker.id } }); } catch {}
       try { await prisma.broker.delete({ where: { id: broker.id } }); } catch (e) { if (!quiet) console.log(`  broker cleanup: ${e.message?.slice(0, 100)}`); }
     }
   } catch (e) {
