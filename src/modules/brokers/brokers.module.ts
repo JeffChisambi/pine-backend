@@ -40,6 +40,7 @@ import { AdminRiskController } from './controllers/admin-risk.controller';
     BrokerService,
     FeePolicyService,
     RiskPolicyService,
+    PlatformFeeService,
   ],
 })
 export class BrokersModule {}
