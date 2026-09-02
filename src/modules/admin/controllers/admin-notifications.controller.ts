@@ -4,11 +4,13 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
   Post,
   Query,
   Req,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
 import { Permission } from '../../auth/constants/permissions.constant';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
@@ -18,6 +20,7 @@ import { AuditLogService } from '../../audit/services/audit-log.service';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { BroadcastNotificationDto } from '../dto/admin.dto';
 import { BrokerScopeService } from '../../brokers/services/broker-scope.service';
+import { ResourceNotFoundException } from '../../../core/exceptions/app.exception';
 
 @ApiTags('admin', 'notifications')
 @ApiBearerAuth()
@@ -67,6 +70,50 @@ export class AdminNotificationsController {
   async getStats(@CurrentUser() admin: AuthenticatedUser) {
     const scope = await this.brokerScope.resolveScope(admin);
     return this.adminRepo.getNotificationStats(scope);
+  }
+
+  /**
+   * Mark every notification in the caller's scope as read. Broker admins only
+   * touch rows belonging to their own investors; platform staff see all.
+   * Must be declared before `:id/read` so "read-all" is not captured as an id.
+   */
+  @Patch('read-all')
+  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @ApiOperation({ summary: 'Mark all notifications in scope as read' })
+  @ApiResponse({ status: 200, description: 'Count of notifications updated' })
+  async markAllRead(@CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        status: { not: 'READ' },
+        ...(scope ? { user: { brokerId: scope } } : {}),
+      },
+      data: { status: 'READ', readAt: new Date() },
+    });
+    return { updated: result.count };
+  }
+
+  /** Mark one notification as read — 404 when it is outside the caller's scope. */
+  @Patch(':id/read')
+  @RequirePermissions(Permission.ADMIN_ACCESS)
+  @ApiOperation({ summary: 'Mark a notification as read' })
+  @ApiParam({ name: 'id', description: 'Notification id' })
+  @ApiResponse({ status: 200, description: 'Updated notification' })
+  async markRead(@Param('id') id: string, @CurrentUser() admin: AuthenticatedUser) {
+    const scope = await this.brokerScope.resolveScope(admin);
+    const existing = await this.prisma.notification.findFirst({
+      where: { id, ...(scope ? { user: { brokerId: scope } } : {}) },
+      select: { id: true, status: true },
+    });
+    if (!existing) throw new ResourceNotFoundException('Notification', id);
+    if (existing.status === 'READ') return { id, status: 'READ' as const };
+
+    const updated = await this.prisma.notification.update({
+      where: { id },
+      data: { status: 'READ', readAt: new Date() },
+      select: { id: true, status: true, readAt: true },
+    });
+    return updated;
   }
 
   @Post('broadcast')
