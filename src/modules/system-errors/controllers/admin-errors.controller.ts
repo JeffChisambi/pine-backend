@@ -7,7 +7,7 @@ import {
   Patch,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
 import { Permission } from '../../auth/constants/permissions.constant';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
@@ -30,11 +30,15 @@ export class AdminErrorsController {
 
   @Get()
   @ApiOperation({ summary: 'List system errors with filters' })
+  @ApiQuery({ name: 'dateFrom', required: false, type: String, description: 'ISO date — last seen at or after' })
+  @ApiQuery({ name: 'dateTo', required: false, type: String, description: 'ISO date — last seen at or before' })
   @ApiResponse({ status: 200, description: 'Paginated error events' })
   async list(
     @Query('source') source?: string,
     @Query('severity') severity?: string,
     @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -42,6 +46,8 @@ export class AdminErrorsController {
       source: source?.toUpperCase(),
       severity: severity?.toUpperCase(),
       status: status?.toUpperCase(),
+      dateFrom,
+      dateTo,
       page: parseInt(page ?? '1', 10) || 1,
       limit: parseInt(limit ?? '50', 10) || 50,
     });

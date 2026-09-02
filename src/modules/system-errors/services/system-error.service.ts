@@ -99,6 +99,10 @@ export class SystemErrorService {
     source?: string;
     severity?: string;
     status?: string;
+    /** ISO date string — only events last seen at or after this instant. */
+    dateFrom?: string;
+    /** ISO date string — only events last seen at or before this instant. */
+    dateTo?: string;
     page?: number;
     limit?: number;
   }) {
@@ -108,6 +112,15 @@ export class SystemErrorService {
     if (filters.source) where.source = filters.source;
     if (filters.severity) where.severity = filters.severity;
     if (filters.status) where.status = filters.status;
+    // SystemErrorEvent has no `createdAt` — `lastSeenAt` is the row's activity
+    // timestamp (a deduped row is bumped, not recreated), so a time window
+    // means "errors that were still happening in this window".
+    if (filters.dateFrom || filters.dateTo) {
+      const lastSeenAt: { gte?: Date; lte?: Date } = {};
+      if (filters.dateFrom) lastSeenAt.gte = new Date(filters.dateFrom);
+      if (filters.dateTo) lastSeenAt.lte = new Date(filters.dateTo);
+      where.lastSeenAt = lastSeenAt;
+    }
 
     const [events, total] = await Promise.all([
       this.prisma.systemErrorEvent.findMany({

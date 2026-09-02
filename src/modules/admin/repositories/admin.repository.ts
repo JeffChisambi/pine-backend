@@ -500,6 +500,10 @@ export class AdminRepository {
       status?: string;
       channel?: string;
       category?: string;
+      /** ISO date string — only rows created at or after this instant. */
+      dateFrom?: string;
+      /** ISO date string — only rows created at or before this instant. */
+      dateTo?: string;
       page?: number;
       limit?: number;
     },
@@ -512,6 +516,11 @@ export class AdminRepository {
     if (filters.status) where.status = filters.status as Prisma.EnumNotificationStatusFilter;
     if (filters.channel) where.channel = filters.channel as Prisma.EnumNotificationChannelFilter;
     if (filters.category) where.category = filters.category;
+    if (filters.dateFrom || filters.dateTo) {
+      where.createdAt = {};
+      if (filters.dateFrom) where.createdAt.gte = new Date(filters.dateFrom);
+      if (filters.dateTo) where.createdAt.lte = new Date(filters.dateTo);
+    }
     if (scopeBrokerId) where.user = { brokerId: scopeBrokerId };
 
     const [notifications, total] = await Promise.all([
