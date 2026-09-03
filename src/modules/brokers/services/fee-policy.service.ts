@@ -4,6 +4,8 @@ import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import {
   CommissionTier,
   DEFAULT_COMMISSION_TIERS,
+  DEFAULT_STATUTORY_LEVIES,
+  StatutoryLevies,
   TradingFees,
   calculateTradingFees,
 } from '../../trading/domain/trading-fee.calculator';
@@ -26,6 +28,8 @@ export interface ResolvedFeePolicy {
   depositFeeKind: 'FIXED' | 'PERCENT';
   depositFeeValue: Decimal;
   depositFeeDescription: string | null;
+  /** Regulator-set rates, configured per broker — never broker revenue. */
+  statutoryLevies: StatutoryLevies;
 }
 
 /**
@@ -35,9 +39,9 @@ export interface ResolvedFeePolicy {
  * Settings → Fees & Charges) with platform defaults as fallback:
  *   - deposit processing fee: disabled by default
  *   - trading commission: flat 1.7% with MWK 500 floor (the historical rule)
- * Statutory levies (SEC 0.1% + MSE 0.1%) are fixed and are never broker
- * revenue. Deposit fees never apply to trades; commissions never apply to
- * deposits.
+ * Statutory levies (SEC, MSE, withholding tax) are configured alongside them
+ * but are never broker revenue — the broker collects and remits them. Deposit
+ * fees never apply to trades; commissions never apply to deposits.
  */
 @Injectable()
 export class FeePolicyService {
@@ -66,6 +70,7 @@ export class FeePolicyService {
       depositFeeKind: 'PERCENT',
       depositFeeValue: new Decimal(0),
       depositFeeDescription: null,
+      statutoryLevies: DEFAULT_STATUTORY_LEVIES,
     };
 
     if (brokerId) {
@@ -80,6 +85,11 @@ export class FeePolicyService {
           depositFeeKind: cfg.depositFeeKind,
           depositFeeValue: new Decimal(cfg.depositFeeValue.toString()),
           depositFeeDescription: cfg.depositFeeDescription,
+          statutoryLevies: {
+            secPct: Number(cfg.secLevyPct),
+            msePct: Number(cfg.mseLevyPct),
+            withholdingPct: Number(cfg.withholdingTaxPct),
+          },
         };
       }
     }
@@ -105,10 +115,13 @@ export class FeePolicyService {
     side: 'BUY' | 'SELL',
   ): Promise<TradingFees> {
     const policy = await this.forUser(userId);
-    return calculateTradingFees(price, quantity, side, {
-      tiers: policy.commissionTiers,
-      enabled: policy.commissionEnabled,
-    });
+    return calculateTradingFees(
+      price,
+      quantity,
+      side,
+      { tiers: policy.commissionTiers, enabled: policy.commissionEnabled },
+      policy.statutoryLevies,
+    );
   }
 
   /** Deposit processing-fee breakdown: gross charged → fee → net credited. */

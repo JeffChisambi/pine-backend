@@ -1660,9 +1660,18 @@ model BrokerFeeConfig {
 
   commissionEnabled     Boolean  @default(true)
   /// Ordered tiers: [{ "minAmount": 0, "maxAmount": 100000|null, "ratePct": 1.7, "minFee": 500 }]
-  /// maxAmount null = open-ended top tier. Statutory levies (SEC/MSE) are
-  /// applied separately and are not broker revenue.
+  /// maxAmount null = open-ended top tier. Statutory levies below are applied
+  /// separately and are never broker revenue.
   commissionTiers       Json?
+
+  /// Statutory levies, in percent of gross trade value. Set by the regulator,
+  /// not the broker's own pricing — but they DO change (and differ by market),
+  /// so they are configured here rather than compiled in. Defaults are the
+  /// MSE rates in force at launch: SEC 0.10%, MSE 0.10%, withholding 0%.
+  secLevyPct            Decimal  @default(0.1) @db.Decimal(9, 4)
+  mseLevyPct            Decimal  @default(0.1) @db.Decimal(9, 4)
+  /// Applied to SELL orders only (capital gains).
+  withholdingTaxPct     Decimal  @default(0) @db.Decimal(9, 4)
 
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt

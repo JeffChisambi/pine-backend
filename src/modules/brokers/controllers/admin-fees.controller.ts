@@ -64,13 +64,28 @@ class UpdateFeeConfigDto {
 
   @IsArray() @ValidateNested({ each: true }) @Type(() => CommissionTierDto)
   commissionTiers!: CommissionTierDto[];
+
+  /**
+   * Statutory levies, percent of gross trade value. Capped at 100 like any
+   * other rate; omitted fields keep whatever is already stored, so an older
+   * client cannot silently zero a levy it does not know about.
+   */
+  @IsOptional() @IsNumber() @Min(0) @Max(100)
+  secLevyPct?: number;
+
+  @IsOptional() @IsNumber() @Min(0) @Max(100)
+  mseLevyPct?: number;
+
+  @IsOptional() @IsNumber() @Min(0) @Max(100)
+  withholdingTaxPct?: number;
 }
 
 /**
  * Broker Dashboard → Settings → Fees & Charges.
  *
- * Broker admins configure THEIR OWN fee schedule: the deposit processing
- * fee (a payment cost) and tiered trading commissions (broker revenue).
+ * Broker admins configure THEIR OWN fee schedule: the deposit processing fee
+ * (a payment cost), tiered trading commissions (broker revenue), and the
+ * statutory levies they collect and remit (never their revenue).
  * Every change takes effect immediately across mobile and dashboard —
  * both consume FeePolicyService, so there is exactly one fee authority.
  */
@@ -98,7 +113,11 @@ export class AdminFeesController {
       depositFeeDescription: policy.depositFeeDescription,
       commissionEnabled: policy.commissionEnabled,
       commissionTiers: policy.commissionTiers,
-      statutory: { secLevyPct: 0.1, mseLevyPct: 0.1 },
+      statutory: {
+        secLevyPct: policy.statutoryLevies.secPct,
+        mseLevyPct: policy.statutoryLevies.msePct,
+        withholdingTaxPct: policy.statutoryLevies.withholdingPct,
+      },
     };
   }
 
@@ -112,6 +131,15 @@ export class AdminFeesController {
     const brokerId = await this.brokerScope.requireBrokerActor(admin);
     this.validateTiers(dto.commissionTiers);
 
+    // Only write the levies the client actually sent — see the DTO comment.
+    const levies = {
+      ...(dto.secLevyPct != null ? { secLevyPct: dto.secLevyPct } : {}),
+      ...(dto.mseLevyPct != null ? { mseLevyPct: dto.mseLevyPct } : {}),
+      ...(dto.withholdingTaxPct != null
+        ? { withholdingTaxPct: dto.withholdingTaxPct }
+        : {}),
+    };
+
     await this.prisma.brokerFeeConfig.upsert({
       where: { brokerId },
       create: {
@@ -122,6 +150,7 @@ export class AdminFeesController {
         depositFeeDescription: dto.depositFeeDescription ?? null,
         commissionEnabled: dto.commissionEnabled,
         commissionTiers: dto.commissionTiers as any,
+        ...levies,
       },
       update: {
         depositFeeEnabled: dto.depositFeeEnabled,
@@ -130,6 +159,7 @@ export class AdminFeesController {
         depositFeeDescription: dto.depositFeeDescription ?? null,
         commissionEnabled: dto.commissionEnabled,
         commissionTiers: dto.commissionTiers as any,
+        ...levies,
       },
     });
     this.feePolicy.invalidate(brokerId);
@@ -147,10 +177,13 @@ export class AdminFeesController {
     const policy = await this.feePolicy.forBroker(brokerId);
 
     const deposit = this.feePolicy.depositBreakdown(policy, amount);
-    const buy = calculateTradingFees(amount, new Decimal(1), 'BUY', {
-      tiers: policy.commissionTiers,
-      enabled: policy.commissionEnabled,
-    });
+    const buy = calculateTradingFees(
+      amount,
+      new Decimal(1),
+      'BUY',
+      { tiers: policy.commissionTiers, enabled: policy.commissionEnabled },
+      policy.statutoryLevies,
+    );
     return {
       deposit: {
         grossAmount: deposit.grossAmount.toNumber(),

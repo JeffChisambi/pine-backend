@@ -3,11 +3,13 @@ import { Decimal } from '@prisma/client/runtime/library';
 /**
  * MSE Trading Fee Calculator
  *
- * Fee structure for the Malawi Stock Exchange:
+ * Fee structure for the Malawi Stock Exchange. Every rate is configurable per
+ * broker (Settings → Fees & Charges); the values below are the defaults that
+ * apply until a broker sets its own:
  * - Broker commission: 1.70% of trade value
  * - SEC levy:          0.10% of trade value
  * - MSE levy:          0.10% of trade value
- * - Withholding tax:   Applicable on SELL orders (capital gains)
+ * - Withholding tax:   0%, applied to SELL orders only (capital gains)
  *
  * Total buy fee:  ~1.90% of trade value
  * Total sell fee: ~1.90% + withholding tax
@@ -27,9 +29,31 @@ export interface TradingFees {
   totalCost: Decimal;
 }
 
-const SEC_LEVY_RATE = new Decimal('0.001');           // 0.10% — statutory
-const MSE_LEVY_RATE = new Decimal('0.001');           // 0.10% — statutory
-const WITHHOLDING_TAX_RATE = new Decimal('0.00');     // 0% for now — set by RBFM policy
+/**
+ * Statutory levies, as PERCENTAGES of gross trade value.
+ *
+ * Set by the regulator rather than by the broker's own pricing, but they do
+ * change and they differ by market — so they are configuration, not constants.
+ * These are the MSE rates in force at launch and the fallback whenever a
+ * broker has no schedule of its own.
+ */
+export interface StatutoryLevies {
+  /** SEC levy, percent of gross (e.g. 0.1 = 0.10%). */
+  secPct: number;
+  /** MSE levy, percent of gross. */
+  msePct: number;
+  /** Withholding tax on SELL orders, percent of gross. */
+  withholdingPct: number;
+}
+
+export const DEFAULT_STATUTORY_LEVIES: StatutoryLevies = {
+  secPct: 0.1,
+  msePct: 0.1,
+  withholdingPct: 0,
+};
+
+const pctOf = (gross: Decimal, pct: number): Decimal =>
+  gross.mul(new Decimal(pct).div(100));
 
 /** One broker commission tier: rate applies when gross ∈ [minAmount, maxAmount]. */
 export interface CommissionTier {
@@ -79,6 +103,7 @@ export function calculateTradingFees(
     tiers: DEFAULT_COMMISSION_TIERS,
     enabled: true,
   },
+  levies: StatutoryLevies = DEFAULT_STATUTORY_LEVIES,
 ): TradingFees {
   const grossValue = price.mul(quantity);
 
@@ -88,12 +113,12 @@ export function calculateTradingFees(
     commissionSchedule.enabled,
   );
 
-  const secLevy = grossValue.mul(SEC_LEVY_RATE);
-  const mseLevy = grossValue.mul(MSE_LEVY_RATE);
+  const secLevy = pctOf(grossValue, levies.secPct);
+  const mseLevy = pctOf(grossValue, levies.msePct);
 
   // Withholding tax only on sells (capital gains)
   const withholdingTax = side === 'SELL'
-    ? grossValue.mul(WITHHOLDING_TAX_RATE)
+    ? pctOf(grossValue, levies.withholdingPct)
     : new Decimal(0);
 
   const totalFees = brokerCommission
