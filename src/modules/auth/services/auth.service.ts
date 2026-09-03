@@ -101,6 +101,11 @@ export class AuthService {
     this.events.emit('auth.user.registered', {
       userId: user.id,
       phone: user.phone,
+      // Present when the person arrived from a broker's migration invitation;
+      // the brokers module listens and links the record. Deliberately an event
+      // rather than a direct call — AuthModule is imported BY BrokersModule,
+      // so calling the other way would be a dependency cycle.
+      migrationToken: dto.migrationToken,
     });
     this.events.emit('auth.session.created', {
       userId: user.id,

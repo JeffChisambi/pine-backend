@@ -14,6 +14,8 @@ import { AdminBrokersController } from './controllers/admin-brokers.controller';
 import { BrokersController } from './controllers/brokers.controller';
 import { AdminFeesController } from './controllers/admin-fees.controller';
 import { AdminRiskController } from './controllers/admin-risk.controller';
+import { AdminMigrationController, MigrationClaimController } from './controllers/admin-migration.controller';
+import { InvestorMigrationService } from './services/investor-migration.service';
 
 /**
  * BrokersModule — multi-broker tenancy:
@@ -28,7 +30,14 @@ import { AdminRiskController } from './controllers/admin-risk.controller';
  */
 @Module({
   imports: [AuthModule, AuditModule, MastercardGatewayModule],
-  controllers: [AdminBrokersController, BrokersController, AdminFeesController, AdminRiskController],
+  controllers: [
+    AdminBrokersController,
+    BrokersController,
+    AdminFeesController,
+    AdminRiskController,
+    AdminMigrationController,
+    MigrationClaimController,
+  ],
   providers: [
     BrokerService,
     BrokerAdminService,
@@ -38,6 +47,7 @@ import { AdminRiskController } from './controllers/admin-risk.controller';
     FeePolicyService,
     RiskPolicyService,
     PlatformFeeService,
+    InvestorMigrationService,
   ],
   exports: [
     BrokerScopeService,
@@ -47,6 +57,7 @@ import { AdminRiskController } from './controllers/admin-risk.controller';
     FeePolicyService,
     RiskPolicyService,
     PlatformFeeService,
+    InvestorMigrationService,
   ],
 })
 export class BrokersModule {}

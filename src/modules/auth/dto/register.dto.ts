@@ -78,4 +78,14 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   platform?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Invitation token from a broker migration email. Links the new account ' +
+      'to the imported record and to that broker.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  migrationToken?: string;
 }

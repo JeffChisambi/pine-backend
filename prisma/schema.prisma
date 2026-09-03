@@ -240,6 +240,7 @@ model Broker {
   riskConfig      BrokerRiskConfig?
   apiConfigs      BrokerApiConfig[]
   adminInvitations BrokerAdminInvitation[]
+  migratedInvestors MigratedInvestor[]
   wallets         Wallet[]
   transactions    Transaction[]
   orders          Order[]
@@ -339,6 +340,65 @@ model BrokerAdminInvitation {
   @@map("broker_admin_invitations")
 }
 
+/// An investor carried over from a broker's previous system.
+///
+/// Deliberately NOT a User row: these people have not consented, have no
+/// password, and have not passed KYC on Pine. The record holds what the broker
+/// already knew about them so that, when they accept the invitation, the app
+/// can pre-fill registration — they still choose their own password and go
+/// through KYC themselves.
+model MigratedInvestor {
+  id          String                 @id @default(uuid()) @db.Uuid
+  brokerId    String                 @db.Uuid
+  broker      Broker                 @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+
+  firstName   String
+  lastName    String
+  /// Normalised to +265XXXXXXXXX on import. Unique per broker: re-importing
+  /// the same sheet updates the row instead of duplicating the person.
+  phone       String
+  email       String?
+  dateOfBirth DateTime?
+  /// 'M' | 'F'
+  gender      String?
+  /// Anything else the broker's own system held — account number, address,
+  /// notes. Carried for reference only; nothing here is trusted for KYC.
+  extra       Json?
+
+  status      MigratedInvestorStatus @default(PENDING)
+  /// SHA-256 of the invitation token. The token itself is only ever emailed.
+  tokenHash   String?                @unique
+  tokenExpiresAt DateTime?
+  invitedAt   DateTime?
+  inviteCount Int                    @default(0)
+  claimedAt   DateTime?
+  /// Set once the person has registered on Pine from this invitation.
+  userId      String?                @unique @db.Uuid
+  user        User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Groups every row that came from one uploaded sheet.
+  batchId     String?                @db.Uuid
+  importedById String?               @db.Uuid
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  @@unique([brokerId, phone])
+  @@index([brokerId, status])
+  @@index([batchId])
+  @@map("migrated_investors")
+}
+
+enum MigratedInvestorStatus {
+  /// Imported, not yet emailed.
+  PENDING
+  /// Invitation sent, waiting for the person to register.
+  INVITED
+  /// They registered on Pine from this invitation.
+  CLAIMED
+  /// Broker withdrew the invitation.
+  CANCELLED
+}
+
 // ============================================================
 // Identity & Access
 // ============================================================
@@ -389,6 +449,7 @@ model User {
   payments          Payment[]
   auditLogsAsActor  AuditLog[]        @relation("AuditActor")
   kycReviewsAsAdmin KycApplication[]  @relation("KycReviewer")
+  migratedFrom      MigratedInvestor?
   faceEmbeddings    FaceEmbedding[]   @relation("UserFaceEmbeddings")
   mfaConfig         MfaConfig?
   watchlistEntries      WatchlistEntry[]

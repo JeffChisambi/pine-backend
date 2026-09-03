@@ -192,6 +192,92 @@ export class MailService {
    * Never throws — invitation creation must not fail on a mail outage
    * (the token is still shown once in the Super Admin UI as a fallback).
    */
+  /**
+   * Invite an investor carried over from a broker's previous system to claim
+   * their Pine account.
+   *
+   * Deliberately plain about what happens next: their details are already
+   * loaded, but they choose their own password and complete KYC themselves.
+   * Anything vaguer reads like an account was opened without their consent.
+   */
+  async sendInvestorMigrationInvite(params: {
+    to: string;
+    firstName: string;
+    brokerName: string;
+    claimUrl: string;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    const { to, firstName, brokerName, claimUrl, expiresAt } = params;
+    const expiryText = expiresAt.toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric',
+    });
+
+    const subject = `${brokerName} has moved to Pine — claim your account`;
+    const text =
+      `Hi ${firstName},
+
+` +
+      `${brokerName} now manages its clients through Pine, where you can follow the Malawi ` +
+      `Stock Exchange and trade from your phone.
+
+` +
+      `Your details are already on file, so setting up takes a moment:
+${claimUrl}
+
+` +
+      `You'll choose your own password and confirm your identity — we cannot do either for you.
+
+` +
+      `This link expires on ${expiryText}.
+
+` +
+      `If you would rather not join, simply ignore this email; nothing happens until you do.` +
+      this.signatureText();
+
+    const B = MailService.BRAND;
+    const html = this.renderShell(
+      `${brokerName} has moved to Pine — claim your account`,
+      `
+      <div style="font-family:${B.font}; font-size:20px; font-weight:800; color:${B.ink};">Welcome to Pine, ${firstName}</div>
+      <p style="font-family:${B.font}; font-size:15px; line-height:24px; color:${B.ink}; margin:14px 0 0;">
+        <strong style="color:${B.teal};">${brokerName}</strong> now manages its clients through Pine,
+        where you can follow the Malawi Stock Exchange and trade from your phone.
+      </p>
+      <p style="font-family:${B.font}; font-size:15px; line-height:24px; color:${B.ink}; margin:14px 0 0;">
+        Your details are already on file, so there is not much to fill in.
+      </p>
+      ${this.renderCta('Claim your account', claimUrl)}
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td style="padding:0 0 8px;">
+          <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">🔑&nbsp; You choose your own password — nobody at ${brokerName} or Pine can see it</span>
+        </td></tr>
+        <tr><td style="padding:0 0 8px;">
+          <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">🪪&nbsp; You confirm your identity yourself, as the regulator requires</span>
+        </td></tr>
+        <tr><td>
+          <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">⏳&nbsp; This link expires on <strong style="color:${B.ink};">${expiryText}</strong></span>
+        </td></tr>
+      </table>
+      <p style="font-family:${B.font}; font-size:12px; line-height:18px; color:${B.faint}; margin:22px 0 0;">
+        Would rather not join? Ignore this email — nothing happens until you claim the account.
+      </p>`,
+    );
+
+    if (!this.transporter) {
+      this.logger.warn({ to }, '📧 investor migration invite not sent (no SMTP host)');
+      return false;
+    }
+
+    try {
+      await this.transporter.sendMail({ from: this.from, to, subject, text, html });
+      this.logger.log({ to }, 'Investor migration invite sent');
+      return true;
+    } catch (error) {
+      this.logger.error({ err: error, to }, 'Failed to send investor migration invite');
+      return false;
+    }
+  }
+
   async sendBrokerInvitation(params: {
     to: string;
     firstName: string;
