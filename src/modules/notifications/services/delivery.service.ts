@@ -90,12 +90,23 @@ export class PushProvider implements IChannelProvider {
       return { success: true, provider: this.name };
     }
 
+    // The number on the app icon. Expo forwards this to APNs (which will not
+    // show a badge without it) and to FCM. Counted here, at send time, from
+    // the same query the in-app bell uses — the inbox row for THIS
+    // notification already exists, so the icon and the bell always agree.
+    // Without it `shouldSetBadge` on the device has no value to apply and no
+    // badge ever appears.
+    const badge = await this.prisma.notification
+      .count({ where: { userId: payload.userId, channel: 'IN_APP', readAt: null } })
+      .catch(() => undefined);
+
     const messages: ExpoPushMessage[] = tokens.map((token) => ({
       to: token,
       sound: 'default' as const,
       title: payload.title,
       body: payload.body,
       data: payload.data,
+      ...(badge != null ? { badge } : {}),
       // Heads-up pop-up delivery: 'high' wakes the device promptly, and the
       // 'alerts' Android channel is created client-side with MAX importance
       // (banner + sound) — the tray-only 'default' channel stays for legacy.
