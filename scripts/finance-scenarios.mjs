@@ -313,6 +313,62 @@ async function main() {
   const holding2 = await prisma.holding.findFirst({ where: { userId: investor.id, stockId: stock.id } });
   eq(holding2?.quantity, qty - sellQty, 'DB: holding reduced by sold quantity');
 
+  // ── SCENARIO C2: sell EVERYTHING held — exact-quantity regression ────
+  // The share check used to count the order under validation against
+  // itself (own N, sell N → N "committed" → 0 available → rejected). Selling
+  // the exact remaining holding must be accepted, and a repeat of the same
+  // idempotency key must report that same order rather than re-running the
+  // pipeline and rejecting it.
+  console.log('\n━ Scenario C2: sell the exact remaining holding — accepted, idempotent replay honest');
+  const remaining = qty - sellQty;
+  const exactQuote = await call('GET', `/trading/quote?symbol=${stock.symbol}&quantity=${remaining}&side=SELL`, { token: iTok });
+  ok(exactQuote.data?.sufficientShares === true, `quote: exact ${remaining} shares are sufficient`);
+  const pinX = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const exactSell = await call('POST', '/trading/sell', {
+    token: iTok, pinToken: pinX.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: remaining, orderType: 'MARKET', idempotencyKey: `${TAG}-sell-exact` },
+  });
+  ok(exactSell.status === 201, 'sell of exact remaining holding accepted', JSON.stringify(exactSell.raw)?.slice(0, 300));
+  ok(exactSell.data?.queued === true, 'exact sell queued with the broker');
+  await sleep(500);
+  const exactOrder = await prisma.order.findFirst({ where: { userId: investor.id, idempotencyKey: `${TAG}-sell-exact` } });
+  ok(exactOrder?.status === 'SUBMITTED', `DB: exact sell is SUBMITTED (was ${exactOrder?.status})`);
+  ok(!exactOrder?.rejectionReason, 'DB: exact sell carries no rejection reason');
+
+  // Idempotent replay: the SAME key again must not reject the queued order.
+  const pinY = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const replay = await call('POST', '/trading/sell', {
+    token: iTok, pinToken: pinY.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: remaining, orderType: 'MARKET', idempotencyKey: `${TAG}-sell-exact` },
+  });
+  ok(replay.status === 201 && replay.data?.queued === true, 'idempotent replay reports the queued order');
+  ok(replay.data?.id === exactOrder?.id, 'idempotent replay returns the SAME order id');
+  const exactAfter = await prisma.order.findUnique({ where: { id: exactOrder.id } });
+  ok(exactAfter?.status === 'SUBMITTED', `DB: replay left the order SUBMITTED (was ${exactAfter?.status})`);
+
+  // While that sell is queued, every share is committed: another sell of
+  // even one share must be refused with a reason that names the reservation.
+  const pinZ = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
+  const oneMore = await call('POST', '/trading/sell', {
+    token: iTok, pinToken: pinZ.data.pinToken,
+    body: { stockSymbol: stock.symbol, quantity: 1, orderType: 'MARKET', idempotencyKey: `${TAG}-sell-onemore` },
+  });
+  ok(oneMore.status >= 400, 'sell of 1 more share while everything is committed is refused');
+  ok(/reserved|pending sell/i.test(JSON.stringify(oneMore.raw) ?? ''), 'refusal explains shares are reserved for a pending sell');
+  const oneMoreOrder = await prisma.order.findFirst({ where: { userId: investor.id, idempotencyKey: `${TAG}-sell-onemore` } });
+  ok(oneMoreOrder?.status === 'REJECTED', 'DB: refused sell recorded as REJECTED');
+  ok(/reserved|pending sell/i.test(oneMoreOrder?.rejectionReason ?? ''), 'DB: rejection reason is the user-facing text');
+  // No "Order Placed" notification for a sell that never passed validation.
+  const placedForRejected = await prisma.notification.findFirst({
+    where: { userId: investor.id, data: { path: ['orderId'], equals: oneMoreOrder?.id }, templateKey: 'trade.order.placed' },
+  }).catch(() => null);
+  ok(!placedForRejected, 'no "Order Placed" notification for the rejected sell');
+
+  // Cancel the exact sell so the holdings the later scenarios expect remain.
+  const cancelExact = await call('POST', `/trading/cancel/${exactOrder.id}`, { token: iTok });
+  ok(cancelExact.status === 200, 'exact sell cancelled to restore holdings for later scenarios');
+  await sleep(500);
+
   // ── SCENARIO E: cancelled order releases the hold ──────────
   console.log('\n━ Scenario E: cancelled buy — reservation released, no fees recorded');
   const pin4 = await call('POST', '/auth/pin/verify', { token: iTok, body: { pin: PIN } });
