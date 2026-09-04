@@ -648,13 +648,25 @@ async function main() {
   const expPlatform = Number(tradeP?.commission ?? 0) * (PLATFORM_PCT / 100);
   eq(tradeP?.platformFee, expPlatform, `DB: trade.platformFee = 20% of broker commission (${expPlatform})`);
 
+  // "Owed this month" is the SUM over every FINTEST trade this month, not just
+  // this one: the earlier scenarios executed trades under whatever platform
+  // rate production had at the time (each trade freezes its own fee), so the
+  // expectation is read back from the trades themselves.
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+  const owedRows = await prisma.trade.findMany({
+    where: { createdAt: { gte: monthStart }, order: { user: { brokerId: broker.id } } },
+    select: { platformFee: true },
+  });
+  const expOwed = owedRows.reduce((sum, t) => sum + Number(t.platformFee ?? 0), 0);
+  ok(expOwed >= expPlatform, `this month's FINTEST platform fees include this trade (${expOwed})`);
+
   const finP = await call('GET', '/admin/dashboard/financials', { token: adminToken });
   eq(finP.data?.platformFees?.ratePct, PLATFORM_PCT, 'broker dashboard shows the platform rate');
-  eq(finP.data?.platformFees?.owedThisMonth, expPlatform, 'broker dashboard: owed to Pine this month = Σ platformFee');
+  eq(finP.data?.platformFees?.owedThisMonth, expOwed, 'broker dashboard: owed to Pine this month = Σ platformFee');
 
   const report = await call('GET', '/admin/platform/brokers/earnings', { token: superToken });
   const mine = (report.data?.brokers ?? []).find((b) => b.code === TAG);
-  eq(mine?.thisMonth?.owedToPlatform, expPlatform, 'admin earnings report: FINTEST owes Pine the same amount');
+  eq(mine?.thisMonth?.owedToPlatform, expOwed, 'admin earnings report: FINTEST owes Pine the same amount');
   ok((mine?.thisMonth?.commissions ?? 0) > 0, 'admin earnings report: broker commissions tracked');
   const reportAsBroker = await call('GET', '/admin/platform/brokers/earnings', { token: adminToken });
   ok(reportAsBroker.status === 403, 'earnings report is super-admin only');
