@@ -59,6 +59,12 @@ export const jwtConfig = registerAs('jwt', () => ({
   refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
   issuer: process.env.JWT_ISSUER ?? 'pine.mw',
   audience: process.env.JWT_AUDIENCE ?? 'pine-mobile-app',
+  /**
+   * Staff (dashboard) sessions end after this long with no human activity.
+   * Investors on the mobile app are NOT subject to it: they hold a phone
+   * behind a PIN and expect to stay signed in.
+   */
+  staffIdleTimeoutMinutes: parseInt(process.env.STAFF_IDLE_TIMEOUT_MINUTES ?? '120', 10),
 }));
 
 export const securityConfig = registerAs('security', () => ({

@@ -5,6 +5,15 @@ import { TokenService } from './token.service';
 import { AppConfigService } from '../../../config/app-config.service';
 import { UnauthorizedException } from '../../../core/exceptions/app.exception';
 import { ErrorCode } from '../../../core/constants/error-codes.constant';
+import { STAFF_ROLES, Role } from '../../../core/constants/roles.constant';
+
+/**
+ * How stale `lastActivityAt` may get before we bother writing it again.
+ *
+ * The dashboard beats at most once a minute, but several tabs can beat at
+ * once; this keeps that to one write per session per minute.
+ */
+const ACTIVITY_WRITE_THROTTLE_MS = 60_000;
 
 /**
  * Session lifecycle management. Every login creates a session
@@ -105,6 +114,21 @@ export class SessionService {
         throw new UnauthorizedException(
           'Refresh token expired',
           ErrorCode.TOKEN_EXPIRED,
+        );
+      }
+
+      // A refresh is the client's timer talking, not a person. Without this
+      // check the dashboard would silently renew an abandoned session every
+      // time its access token aged out, and the idle limit would never bite.
+      const owner = await this.prisma.user.findUnique({
+        where: { id: session.userId },
+        select: { role: true },
+      });
+      if (this.isIdleExpired(owner?.role as Role, session.lastActivityAt)) {
+        await this.revokeForIdle(session.id, session.userId);
+        throw new UnauthorizedException(
+          'Session ended after a period of inactivity. Please sign in again.',
+          ErrorCode.SESSION_REVOKED,
         );
       }
 
@@ -238,13 +262,68 @@ export class SessionService {
   async validateSession(sessionId: string): Promise<boolean> {
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
+      include: { user: { select: { role: true } } },
     });
 
     if (!session) return false;
     if (session.isRevoked) return false;
     if (session.expiresAt < new Date()) return false;
 
+    // Staff dashboards end after a period with nobody at the keyboard. This
+    // is checked on EVERY request rather than by a sweep, so the moment the
+    // window passes the session is dead everywhere at once.
+    if (this.isIdleExpired(session.user?.role as Role, session.lastActivityAt)) {
+      await this.revokeForIdle(session.id, session.userId);
+      return false;
+    }
+
     return true;
+  }
+
+  /** Minutes of inactivity a staff session survives; 0 = no idle limit. */
+  private idleTimeoutMs(role: Role | undefined): number {
+    if (!role || !STAFF_ROLES.includes(role)) return 0;
+    const minutes = this.config.jwt.staffIdleTimeoutMinutes;
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 0;
+  }
+
+  private isIdleExpired(role: Role | undefined, lastActivityAt: Date): boolean {
+    const limit = this.idleTimeoutMs(role);
+    if (limit === 0) return false;
+    return Date.now() - lastActivityAt.getTime() > limit;
+  }
+
+  private async revokeForIdle(sessionId: string, userId: string): Promise<void> {
+    // Revoked, not merely rejected: the refresh token dies with it, so the
+    // client cannot quietly mint a new access token and carry on.
+    await this.prisma.session
+      .update({
+        where: { id: sessionId },
+        data: { isRevoked: true, revokedAt: new Date(), revokedReason: 'idle_timeout' },
+      })
+      .catch(() => undefined);
+    this.logger.log({ sessionId, userId }, 'Session ended — idle timeout');
+  }
+
+  /**
+   * Record that a HUMAN did something in this session.
+   *
+   * Deliberately NOT called from validateSession: the dashboard polls in the
+   * background every few seconds, so counting requests as activity would keep
+   * an abandoned session alive forever. Only the heartbeat — which the client
+   * sends when there has been real interaction — reaches here.
+   */
+  async recordActivity(sessionId: string): Promise<void> {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { lastActivityAt: true },
+    });
+    if (!session) return;
+    if (Date.now() - session.lastActivityAt.getTime() < ACTIVITY_WRITE_THROTTLE_MS) return;
+
+    await this.prisma.session
+      .update({ where: { id: sessionId }, data: { lastActivityAt: new Date() } })
+      .catch(() => undefined);
   }
 
   private calculateRefreshExpiry(): Date {

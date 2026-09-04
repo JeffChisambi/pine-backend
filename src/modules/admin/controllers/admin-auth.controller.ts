@@ -222,6 +222,22 @@ export class AdminAuthController {
     return this.adminAuthService.refreshTokens(body.refreshToken);
   }
 
+  @Post('heartbeat')
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Report that the person is still working',
+    description:
+      'The dashboard calls this when there has been real interaction — a ' +
+      'click, a keystroke, a scroll — at most once a minute. It is the ONLY ' +
+      'thing that keeps a staff session alive: background polling must not, ' +
+      'or an abandoned dashboard would never time out.',
+  })
+  async heartbeat(@CurrentUser() user: AuthenticatedUser) {
+    await this.adminAuthService.recordActivity(user.sessionId);
+    return { ok: true };
+  }
+
   @Post('logout')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)

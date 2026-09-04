@@ -563,7 +563,12 @@ model Session {
   revokedReason      String?
   expiresAt         DateTime
   createdAt         DateTime  @default(now())
+  /// Last time the refresh token was rotated. NOT a sign of a person being
+  /// present — the client rotates on a timer.
   lastUsedAt        DateTime  @default(now())
+  /// Last time a HUMAN did something (heartbeat from real interaction).
+  /// Staff sessions expire when this goes stale; see SessionService.
+  lastActivityAt    DateTime  @default(now())
 
   @@index([userId])
   @@index([familyId])

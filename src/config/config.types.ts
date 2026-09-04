@@ -42,6 +42,8 @@ export interface JwtConfig {
   refreshExpiresIn: string;
   issuer: string;
   audience: string;
+  /** Minutes of inactivity after which a staff dashboard session ends. */
+  staffIdleTimeoutMinutes: number;
 }
 
 export interface SecurityConfig {

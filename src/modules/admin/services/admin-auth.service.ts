@@ -317,6 +317,11 @@ export class AdminAuthService {
     return { accessToken, refreshToken: rotated.newRefreshToken };
   }
 
+  /** Mark a staff session as actively used by a person. */
+  async recordActivity(sessionId: string): Promise<void> {
+    await this.sessionService.recordActivity(sessionId);
+  }
+
   async logout(sessionId: string, userId: string, ipAddress?: string) {
     await this.sessionService.revokeSession(sessionId, userId, 'admin_logout');
 
