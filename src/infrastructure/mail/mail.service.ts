@@ -278,6 +278,90 @@ ${claimUrl}
     }
   }
 
+  /**
+   * Invite a broker STAFF member: a temporary password plus where to sign in.
+   *
+   * The password appears in this email and nowhere else afterwards; the
+   * account insists on a new one at first sign-in, so the exposure window
+   * is exactly one message. The sections list tells the person what to
+   * expect before they see a narrower dashboard than their colleague's.
+   */
+  async sendStaffInvitation(params: {
+    to: string;
+    firstName: string;
+    brokerName: string;
+    temporaryPassword: string;
+    loginUrl: string;
+    sections: readonly string[];
+    isReset?: boolean;
+  }): Promise<boolean> {
+    const { to, firstName, brokerName, temporaryPassword, loginUrl, sections, isReset } = params;
+    const sectionList = sections.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
+
+    const subject = isReset
+      ? `Your Pine dashboard password for ${brokerName} has been reset`
+      : `You've been added to ${brokerName} on Pine`;
+    const text =
+      `Hi ${firstName},\n\n` +
+      (isReset
+        ? `A new temporary password has been issued for your ${brokerName} dashboard account.\n\n`
+        : `You've been given access to the ${brokerName} dashboard on Pine.\n\n`) +
+      `Sign in: ${loginUrl}\nEmail: ${to}\nTemporary password: ${temporaryPassword}\n\n` +
+      `You'll be asked to choose your own password the first time you sign in, and to set up two-factor authentication.\n\n` +
+      `You have access to: ${sectionList}.\n\n` +
+      `If you weren't expecting this, ignore it — nothing happens until you sign in.` +
+      this.signatureText();
+
+    const B = MailService.BRAND;
+    const html = this.renderShell(
+      isReset ? `A new temporary password for ${brokerName}` : `Your ${brokerName} dashboard access on Pine`,
+      `
+      <div style="font-family:${B.font}; font-size:20px; font-weight:800; color:${B.ink};">${isReset ? 'New temporary password' : `Welcome aboard, ${firstName}`}</div>
+      <p style="font-family:${B.font}; font-size:15px; line-height:24px; color:${B.ink}; margin:14px 0 0;">
+        ${isReset
+          ? `A new temporary password has been issued for your <strong style="color:${B.teal};">${brokerName}</strong> dashboard account.`
+          : `You've been given access to the <strong style="color:${B.teal};">${brokerName}</strong> dashboard on Pine.`}
+      </p>
+      ${this.renderCta('Sign in to the dashboard', loginUrl)}
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 20px;">
+        <tr><td style="background:${B.panel}; border:1px solid ${B.border}; border-radius:12px; padding:16px 18px;">
+          <div style="font-family:${B.font}; font-size:10px; font-weight:700; letter-spacing:1.5px; color:${B.muted};">SIGN-IN DETAILS</div>
+          <div style="font-family:${B.font}; font-size:13px; color:${B.ink}; margin-top:8px;">Email: <strong>${to}</strong></div>
+          <div style="font-family:${B.font}; font-size:13px; color:${B.ink}; margin-top:4px;">Temporary password:</div>
+          <div style="font-family:'Courier New', Courier, monospace; font-size:16px; color:${B.ink}; margin-top:4px; letter-spacing:1px;">${temporaryPassword}</div>
+        </td></tr>
+      </table>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td style="padding:0 0 8px;">
+          <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">🔑&nbsp; You'll choose your own password the first time you sign in</span>
+        </td></tr>
+        <tr><td style="padding:0 0 8px;">
+          <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">🛡&nbsp; Two-factor authentication is set up on first sign-in</span>
+        </td></tr>
+        <tr><td>
+          <span style="font-family:${B.font}; font-size:13px; color:${B.muted};">📋&nbsp; You have access to: <strong style="color:${B.ink};">${sectionList}</strong></span>
+        </td></tr>
+      </table>
+      <p style="font-family:${B.font}; font-size:12px; line-height:18px; color:${B.faint}; margin:22px 0 0;">
+        If you weren't expecting this, you can ignore it — nothing happens until you sign in.
+      </p>`,
+    );
+
+    if (!this.transporter) {
+      this.logger.warn({ to }, '📧 staff invitation not sent (no SMTP host) — temporary password shown once in the dashboard');
+      return false;
+    }
+
+    try {
+      await this.transporter.sendMail({ from: this.from, to, subject, text, html });
+      this.logger.log({ to }, 'Staff invitation email sent');
+      return true;
+    } catch (error) {
+      this.logger.error({ err: error, to }, 'Failed to send staff invitation email');
+      return false;
+    }
+  }
+
   async sendBrokerInvitation(params: {
     to: string;
     firstName: string;

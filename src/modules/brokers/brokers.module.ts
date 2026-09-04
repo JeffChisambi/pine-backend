@@ -16,6 +16,9 @@ import { AdminFeesController } from './controllers/admin-fees.controller';
 import { AdminRiskController } from './controllers/admin-risk.controller';
 import { AdminMigrationController, MigrationClaimController } from './controllers/admin-migration.controller';
 import { InvestorMigrationService } from './services/investor-migration.service';
+import { AdminStaffController } from './controllers/admin-staff.controller';
+import { BrokerStaffService } from './services/broker-staff.service';
+import { StaffSectionGuard } from './guards/staff-section.guard';
 
 /**
  * BrokersModule — multi-broker tenancy:
@@ -37,6 +40,7 @@ import { InvestorMigrationService } from './services/investor-migration.service'
     AdminRiskController,
     AdminMigrationController,
     MigrationClaimController,
+    AdminStaffController,
   ],
   providers: [
     BrokerService,
@@ -48,6 +52,8 @@ import { InvestorMigrationService } from './services/investor-migration.service'
     RiskPolicyService,
     PlatformFeeService,
     InvestorMigrationService,
+    BrokerStaffService,
+    StaffSectionGuard,
   ],
   exports: [
     BrokerScopeService,
@@ -58,6 +64,8 @@ import { InvestorMigrationService } from './services/investor-migration.service'
     RiskPolicyService,
     PlatformFeeService,
     InvestorMigrationService,
+    BrokerStaffService,
+    StaffSectionGuard,
   ],
 })
 export class BrokersModule {}

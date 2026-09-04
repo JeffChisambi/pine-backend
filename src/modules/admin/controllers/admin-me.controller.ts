@@ -78,12 +78,20 @@ export class AdminMeController {
         phone: true,
         role: true,
         createdAt: true,
+        isBrokerStaff: true,
+        staffSections: true,
+        mustChangePassword: true,
       },
     });
 
     const mfaEnabled = await this.mfaService.isMfaEnabled(user.id);
+    const { staffSections, ...rest } = u;
 
-    return { ...u, mfaEnabled };
+    return {
+      ...rest,
+      sections: u.isBrokerStaff ? staffSections : null,
+      mfaEnabled,
+    };
   }
 
   @Patch()
@@ -127,10 +135,15 @@ export class AdminMeController {
       throw new ValidationException('Current password is incorrect.');
     }
 
+    if (dto.newPassword === dto.currentPassword) {
+      throw new ValidationException('Choose a password different from the current one.');
+    }
+
     const hash = await this.passwordService.hash(dto.newPassword);
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: hash },
+      // A staff member on a temporary password has now set their own.
+      data: { passwordHash: hash, mustChangePassword: false },
     });
 
     return { message: 'Password changed successfully.' };

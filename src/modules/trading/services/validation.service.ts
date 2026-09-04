@@ -59,6 +59,13 @@ export class ValidationService {
     quantity: Decimal;
     limitPrice?: Decimal | null;
     userKycStatus: string;
+    /**
+     * The order being validated. It already exists in PENDING_VALIDATION by
+     * the time this runs, so the share-availability check must leave it out —
+     * otherwise an order is counted against itself and a sell of everything
+     * the user owns is refused with "0 available".
+     */
+    orderId?: string;
   }): Promise<{ estimatedPrice: Decimal; fees: ReturnType<typeof calculateTradingFees> }> {
     // 1. Stock active?
     const stock = await this.checkStockActive(order.stockId);
@@ -104,7 +111,7 @@ export class ValidationService {
         );
       }
     } else {
-      await this.checkSufficientShares(order.userId, order.stockId, order.quantity);
+      await this.checkSufficientShares(order.userId, order.stockId, order.quantity, order.orderId);
     }
 
     this.logger.log(
@@ -222,28 +229,52 @@ export class ValidationService {
     userId: string,
     stockId: string,
     quantity: Decimal,
+    excludeOrderId?: string,
   ): Promise<void> {
     const holding = await this.repo.findUserHolding(userId, stockId);
-    // AVAILABLE shares = held − quantities already committed to open sell
-    // orders. Without this, two queued sells of the same shares both pass
-    // and the user is paid twice for shares they own once.
+    const held = holding?.quantity ?? new Decimal(0);
+
+    // AVAILABLE shares = held − quantities already committed to OTHER open
+    // sell orders. Without this, two queued sells of the same shares both
+    // pass and the user is paid twice for shares they own once.
+    //
+    // The order under validation is excluded by id. It was created (and
+    // moved to PENDING_VALIDATION) before this check runs, so counting it
+    // made every exact-quantity sell fail: own 10, sell 10 → 10 committed →
+    // 0 available.
     const openSells = await this.repo.db.order.aggregate({
       where: {
         userId,
         stockId,
         side: 'SELL',
         status: { in: ['PENDING_VALIDATION', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED'] },
+        ...(excludeOrderId ? { id: { not: excludeOrderId } } : {}),
       },
       _sum: { quantity: true },
     });
     const committed = openSells._sum.quantity ?? new Decimal(0);
-    const availableShares = (holding?.quantity ?? new Decimal(0)).sub(committed);
-    if (availableShares.lt(quantity)) {
+    const availableShares = Decimal.max(held.sub(committed), 0);
+
+    if (availableShares.gte(quantity)) return;
+
+    // Say what the person can act on. "0 available" alone reads as "you own
+    // nothing" to someone who can see the shares in their portfolio.
+    if (held.lte(0)) {
       throw new BadRequestException(
-        `Insufficient shares. Required: ${quantity.toString()}, ` +
-        `Available: ${Decimal.max(availableShares, 0).toString()} ` +
-        `(shares committed to pending sell orders are excluded).`,
+        'You do not hold any shares of this stock to sell.',
       );
     }
+    if (committed.gt(0)) {
+      throw new BadRequestException(
+        `You do not have enough shares available to complete this sell order. ` +
+        `You hold ${held.toFixed(0)}, but ${committed.toFixed(0)} are reserved for ` +
+        `${committed.eq(held) ? 'a' : 'another'} pending sell order, leaving ${availableShares.toFixed(0)} available. ` +
+        `Cancel the pending order or sell fewer shares.`,
+      );
+    }
+    throw new BadRequestException(
+      `You do not have enough shares to complete this sell order. ` +
+      `You hold ${held.toFixed(0)} and tried to sell ${quantity.toFixed(0)}.`,
+    );
   }
 }

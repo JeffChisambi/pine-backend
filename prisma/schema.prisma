@@ -429,6 +429,13 @@ model User {
   brokerId          String?    @db.Uuid
   broker            Broker?    @relation(fields: [brokerId], references: [id], onDelete: Restrict)
   brokerSelectedAt  DateTime?
+  /// Broker STAFF: a colleague a broker administrator let in with access to
+  /// chosen dashboard sections only (see brokers/staff/dashboard-sections.ts).
+  /// Administrators are role BROKER with this false and full access.
+  isBrokerStaff     Boolean    @default(false)
+  staffSections     String[]   @default([])
+  /// Set when a temporary password was issued; cleared by the first change.
+  mustChangePassword Boolean   @default(false)
   avatarKey         String?
   isActive          Boolean    @default(true)
   deactivatedAt     DateTime?

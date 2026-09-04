@@ -21,6 +21,7 @@ import { PinService } from './services/pin.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
+import { StaffSectionGuard } from '../brokers/guards/staff-section.guard';
 import { PinGuard } from './guards/pin.guard';
 
 /**
@@ -71,6 +72,13 @@ import { PinGuard } from './guards/pin.guard';
     {
       provide: APP_GUARD,
       useClass: PermissionsGuard,
+    },
+    // Narrows broker STAFF to the dashboard sections they were granted. Only
+    // needs the global PrismaService, so importing it from the brokers module
+    // creates no module dependency.
+    {
+      provide: APP_GUARD,
+      useClass: StaffSectionGuard,
     },
 
     // PinGuard is NOT global — exported for per-route use

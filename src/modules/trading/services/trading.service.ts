@@ -9,8 +9,10 @@ import { TradingRepository } from '../repositories/trading.repository';
 import { ReservationService } from '../../wallet/services/reservation.service';
 import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 import { RiskPolicyService } from '../../brokers/services/risk-policy.service';
-import { OrderLifecycleStatus, assertTransition } from '../domain/order-lifecycle';
+import { OrderLifecycleStatus, ACTIVE_STATES, assertTransition } from '../domain/order-lifecycle';
 import { OrderCreatedEvent, OrderCancelledEvent, OrderRejectedEvent } from '../events/trading.events';
+import { HttpException } from '@nestjs/common';
+import { AppException } from '../../../core/exceptions/app.exception';
 import {
   ConflictException,
   ResourceNotFoundException,
@@ -260,18 +262,14 @@ export class TradingService {
       idempotencyKey: dto.idempotencyKey,
     });
 
-    // Emit creation event
-    this.eventEmitter.emit(
-      OrderCreatedEvent.event,
-      new OrderCreatedEvent(
-        order.id,
-        userId,
-        dto.stockSymbol,
-        dto.side,
-        dto.quantity,
-        dto.orderType,
-      ),
-    );
+    // A repeat of the same idempotency key returns the ORIGINAL order, which
+    // has already been through this pipeline. Running it again would fail
+    // the DRAFT -> PENDING_VALIDATION transition and - because that failure
+    // lands in the catch below - mark a perfectly good queued order REJECTED.
+    // Report the order's actual state instead.
+    if (order.status !== OrderLifecycleStatus.DRAFT) {
+      return this.replayExistingOrder(order, dto.side);
+    }
 
     try {
       // ── Step 2: Validation ──────────────────────────────────
@@ -289,6 +287,7 @@ export class TradingService {
         quantity: new Decimal(dto.quantity),
         limitPrice: dto.limitPrice ? new Decimal(dto.limitPrice) : null,
         userKycStatus: liveKycStatus,
+        orderId: order.id,
       });
 
       // A sell whose fees exceed the proceeds would net the user a NEGATIVE
@@ -387,6 +386,22 @@ export class TradingService {
         },
       });
 
+      // The "order placed" notification goes out HERE, once the order has
+      // passed validation and is queued for the broker. It used to fire at
+      // creation, before validation - so a sell that failed the share check
+      // produced "Order Placed" followed seconds later by "Order Rejected".
+      this.eventEmitter.emit(
+        OrderCreatedEvent.event,
+        new OrderCreatedEvent(
+          order.id,
+          userId,
+          dto.stockSymbol,
+          dto.side,
+          dto.quantity,
+          dto.orderType,
+        ),
+      );
+
       const durationMs = Date.now() - startTime;
       this.logger.log(
         { orderId: order.id, durationMs },
@@ -411,13 +426,19 @@ export class TradingService {
       const currentOrder = await this.repo.findOrderById(order.id);
       const currentStatus = currentOrder?.status as OrderLifecycleStatus;
 
+      // What the investor is told. A validation/business error already says
+      // something a person can act on; anything else is an internal fault
+      // whose message ("Invalid order state transition ...") belongs in the
+      // log, not on their phone.
+      const userReason = this.userFacingRejectionReason(error);
+
       // Only reject if not already in a terminal state
       if (
         currentStatus &&
         !['REJECTED', 'CANCELLED', 'EXPIRED', 'COMPLETED'].includes(currentStatus)
       ) {
         await this.repo.updateOrderStatus(order.id, OrderLifecycleStatus.REJECTED, {
-          rejectionReason: (error as Error).message,
+          rejectionReason: userReason,
         });
 
         await this.repo.createTradeAudit({
@@ -426,18 +447,23 @@ export class TradingService {
           action: 'ORDER_REJECTED',
           fromStatus: currentStatus,
           toStatus: OrderLifecycleStatus.REJECTED,
-          metadata: { reason: (error as Error).message },
+          // The audit trail keeps the real message for whoever debugs it.
+          metadata: { reason: userReason, internal: (error as Error).message },
         });
 
         // Notify the user their order failed (the listener for this event
         // existed but nothing ever emitted it).
         this.eventEmitter.emit(
           OrderRejectedEvent.event,
-          new OrderRejectedEvent(order.id, userId, (error as Error).message),
+          new OrderRejectedEvent(order.id, userId, userReason),
         );
       }
 
-      throw error;
+      // Typed errors already carry a user-safe message and status; an
+      // untyped one becomes a 400 with the translated reason rather than a
+      // 500 that leaks internals.
+      if (error instanceof HttpException || error instanceof AppException) throw error;
+      throw new BadRequestException(userReason);
     }
   }
 
@@ -586,6 +612,7 @@ export class TradingService {
         totalAmount: totalCost.sub(fees).toFixed(2),
         status: o.status,
         queued: o.status === OrderLifecycleStatus.SUBMITTED,
+        rejectionReason: o.rejectionReason ?? null,
         fees: { totalCost: totalCost.toFixed(2) },
         createdAt: o.createdAt,
         executedAt: o.filledAt ?? o.settledAt ?? (executed ? o.updatedAt : null),
@@ -593,6 +620,48 @@ export class TradingService {
     });
 
     return { orders, count: orders.length };
+  }
+
+  /**
+   * Response for a repeated submission (same idempotency key) of an order
+   * that already went through the pipeline - the client is retrying after a
+   * timeout and needs the truth about the first attempt, not a second one.
+   */
+  private async replayExistingOrder(order: any, side: 'BUY' | 'SELL') {
+    const status = order.status as OrderLifecycleStatus;
+    const full = (await this.repo.findOrderById(order.id)) ?? order;
+
+    if (status === OrderLifecycleStatus.REJECTED) {
+      throw new BadRequestException(
+        full.rejectionReason ?? 'This order could not be processed. Please try again.',
+      );
+    }
+    if (status === OrderLifecycleStatus.CANCELLED || status === OrderLifecycleStatus.EXPIRED) {
+      throw new BadRequestException(
+        `This order was ${status.toLowerCase()} and cannot be resubmitted. Place a new order.`,
+      );
+    }
+
+    // Anything else is in flight or done: queued with the broker, executed,
+    // or settled. Report it as the successful submission it was.
+    const queued = ACTIVE_STATES.has(status);
+    const marketOpen = await this.validationService.checkIsMarketOpen();
+    const message = queued
+      ? 'Your order has already been submitted and is with your broker.'
+      : `Your ${side.toLowerCase()} order has already been ${status === OrderLifecycleStatus.COMPLETED ? 'completed' : 'executed'}.`;
+    this.logger.log({ orderId: order.id, status }, 'Idempotent resubmission - replaying existing order');
+    return this.buildContractResponse(full, full.totalCost ?? null, queued, message, undefined, marketOpen);
+  }
+
+  /** Translate a pipeline failure into something an investor can act on. */
+  private userFacingRejectionReason(error: unknown): string {
+    if (error instanceof AppException || error instanceof HttpException) {
+      const res = error.getResponse();
+      const msg = typeof res === 'string' ? res : (res as any)?.message;
+      const text = Array.isArray(msg) ? msg.join('. ') : (msg ?? error.message);
+      if (typeof text === 'string' && text.trim()) return text;
+    }
+    return 'This order could not be processed. Please try again.';
   }
 
   /**

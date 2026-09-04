@@ -39,6 +39,28 @@ export class AdminAuthService {
     private readonly auditLogService: AuditLogService,
   ) {}
 
+  /**
+   * The user object every auth response returns. Carries the two things the
+   * dashboard must know before it renders anything: whether this person is
+   * broker STAFF limited to certain sections, and whether they are still on
+   * a temporary password and must set their own first.
+   */
+  private staffProfile(user: {
+    id: string; email: string | null; firstName: string; lastName: string; role: string;
+    isBrokerStaff: boolean; staffSections: string[]; mustChangePassword: boolean;
+  }) {
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+      isBrokerStaff: user.isBrokerStaff,
+      sections: user.isBrokerStaff ? user.staffSections : null,
+      mustChangePassword: user.mustChangePassword,
+    };
+  }
+
   async login(
     email: string,
     password: string,
@@ -125,13 +147,7 @@ export class AdminAuthService {
       return {
         mfaRequired: 'setup' as const,
         mfaToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-        },
+        user: this.staffProfile(user),
       };
     }
 
@@ -139,13 +155,7 @@ export class AdminAuthService {
     return {
       mfaRequired: 'verify' as const,
       mfaToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-      },
+      user: this.staffProfile(user),
     };
   }
 
@@ -229,13 +239,7 @@ export class AdminAuthService {
     return {
       accessToken,
       refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-      },
+      user: this.staffProfile(user),
     };
   }
 
@@ -286,13 +290,7 @@ export class AdminAuthService {
     return {
       accessToken,
       refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-      },
+      user: this.staffProfile(user),
     };
   }
 
