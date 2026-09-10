@@ -48,6 +48,20 @@ export class MarketSyncService {
   /** stockId → trading-day key of the last price-move notification sent. */
   private readonly priceMoveNotified = new Map<string, string>();
 
+  /**
+   * How far a stock must move before its holders and watchers are told.
+   *
+   * The MSE closes barely wobble on most days — over a recent 45-day window
+   * 293 of 342 recorded changes were under 0.5%, many of them decimal drift
+   * of a fraction of a tenth of a percent. Notifying on those would train
+   * people to ignore the alerts. A 1% move is roughly one a day across the
+   * whole exchange, which is news.
+   */
+  private static readonly MIN_MOVE_PCT = (() => {
+    const raw = parseFloat(process.env.PRICE_MOVE_ALERT_PCT ?? '');
+    return Number.isFinite(raw) && raw >= 0 ? raw : 1;
+  })();
+
   constructor(
     @Inject(MARKET_DATA_SOURCE)
     private readonly dataSource: IMarketDataSource,
@@ -190,8 +204,19 @@ export class MarketSyncService {
       for (const rec of priceRecords) {
         const prev = prevCloses.get(rec.stockId);
         const close = parseFloat(rec.closePrice);
-        const changePct = parseFloat(rec.changePct ?? '0') || 0;
-        if (prev === undefined || !isFinite(close) || close === prev || changePct === 0) continue;
+        if (prev === undefined || !isFinite(close) || !isFinite(prev) || prev <= 0) continue;
+
+        // The MSE mainboard's "% Change" column renders 0 in the static HTML
+        // we scrape — EVERY stored changePct is 0.0000 — so it cannot be the
+        // test for whether a price moved. Testing it meant no price alert was
+        // ever sent, for any stock, on any day. Derive the move from the
+        // previous close instead, which is what the stocks list already does
+        // for display; the feed's own figure is used only if it is populated.
+        const feedPct = parseFloat(rec.changePct ?? '0') || 0;
+        const derivedPct = ((close - prev) / prev) * 100;
+        const changePct = Math.abs(feedPct) > 0.001 ? feedPct : derivedPct;
+
+        if (Math.abs(changePct) < MarketSyncService.MIN_MOVE_PCT) continue;
         if (this.priceMoveNotified.get(rec.stockId) === todayKey) continue;
         this.priceMoveNotified.set(rec.stockId, todayKey);
 
