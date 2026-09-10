@@ -22,7 +22,7 @@ export class InitiateBankCardPaymentDto {
   /** Amount to charge in the selected currency */
   @ApiProperty({ description: 'Amount to charge', example: 5000 })
   @IsNumber()
-  @Min(1)
+  @Min(1000, { message: 'The minimum deposit is MWK 1,000.' })
   amount: number;
 
   /** Currency code */
@@ -187,7 +187,7 @@ export class BankCardRefundRequest {
 export class CreateCardSessionDto {
   @ApiProperty({ description: 'Amount to charge', example: 50000 })
   @IsNumber()
-  @Min(1)
+  @Min(1000, { message: 'The minimum deposit is MWK 1,000.' })
   amount: number;
 
   @ApiProperty({ enum: ['MWK', 'USD'], default: 'MWK' })
@@ -256,7 +256,7 @@ export class SavedCardPaymentDto {
   @ApiProperty() @IsString() @IsNotEmpty()
   savedCardId: string;
 
-  @ApiProperty({ example: 50000 }) @IsNumber() @Min(1)
+  @ApiProperty({ example: 50000 }) @IsNumber() @Min(1000, { message: 'The minimum deposit is MWK 1,000.' })
   amount: number;
 
   @ApiProperty({ enum: ['MWK', 'USD'], default: 'MWK' })

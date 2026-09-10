@@ -1785,6 +1785,10 @@ model BrokerRiskConfig {
 model PlatformConfig {
   id                    String   @id @default("default")
   platformCommissionPct Decimal  @default(0) @db.Decimal(7, 4)
+  /// The broker every NEW investor is placed with at registration. Pine has
+  /// one broker partner, so investors no longer choose; the platform admin
+  /// sets this once. Null = investors are created without a broker (legacy).
+  defaultBrokerId       String?  @db.Uuid
   updatedById           String?  @db.Uuid
   updatedAt             DateTime @updatedAt
   createdAt             DateTime @default(now())

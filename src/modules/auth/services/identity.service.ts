@@ -83,6 +83,13 @@ export class IdentityService {
     // Hash password
     const passwordHash = await this.passwordService.hash(data.password);
 
+    // Investors are placed with Pine's broker partner automatically. The
+    // platform admin sets it once (PlatformConfig.defaultBrokerId); nobody
+    // chooses a broker in the app any more. A missing or deactivated default
+    // leaves brokerId null, exactly as before, so registration never fails
+    // because of platform configuration.
+    const defaultBrokerId = await this.resolveDefaultBrokerId();
+
     // Create user + default preferences in a transaction
     const user = await this.prisma.user.create({
       data: {
@@ -93,6 +100,7 @@ export class IdentityService {
         email: data.email,
         dateOfBirth: data.dateOfBirth,
         gender: data.gender,
+        ...(defaultBrokerId ? { brokerId: defaultBrokerId, brokerSelectedAt: new Date() } : {}),
         preferences: {
           create: {}, // defaults defined in schema
         },
@@ -112,6 +120,25 @@ export class IdentityService {
 
     this.logger.log({ userId: user.id, phone }, 'User created');
     return user;
+  }
+
+  /** The active broker new investors are placed with, or null if none is set. */
+  private async resolveDefaultBrokerId(): Promise<string | null> {
+    try {
+      const cfg = await this.prisma.platformConfig.findUnique({
+        where: { id: 'default' },
+        select: { defaultBrokerId: true },
+      });
+      if (!cfg?.defaultBrokerId) return null;
+      const broker = await this.prisma.broker.findUnique({
+        where: { id: cfg.defaultBrokerId },
+        select: { isActive: true },
+      });
+      return broker?.isActive ? cfg.defaultBrokerId : null;
+    } catch (error) {
+      this.logger.warn({ err: error }, 'Could not resolve the default broker — registering without one');
+      return null;
+    }
   }
 
   /**

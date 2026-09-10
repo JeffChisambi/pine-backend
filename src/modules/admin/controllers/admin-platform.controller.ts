@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Put, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsNumber, Max, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import { RequirePermissions } from '../../../core/decorators/require-permissions.decorator';
 import { Permission } from '../../auth/constants/permissions.constant';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
@@ -8,6 +8,15 @@ import type { AuthenticatedUser, RequestWithUser } from '../../../core/types/req
 import { PlatformFeeService } from '../../brokers/services/platform-fee.service';
 import { AdminFinanceService } from '../services/admin-finance.service';
 import { AuditLogService } from '../../audit/services/audit-log.service';
+
+class SetDefaultBrokerDto {
+  @IsUUID()
+  brokerId!: string;
+
+  /** Also place every investor who currently has no broker with this one. */
+  @IsOptional() @IsBoolean()
+  applyToUnassigned?: boolean;
+}
 
 class UpdatePlatformCommissionDto {
   /** Percent of each broker's commission that Pine earns (0–100). */
@@ -58,6 +67,35 @@ export class AdminPlatformController {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
       metadata: { before: before.platformCommissionPct, after: after.platformCommissionPct },
+    });
+    return after;
+  }
+
+  @Get('default-broker')
+  @ApiOperation({ summary: 'The broker new investors are placed with' })
+  getDefaultBroker() {
+    return this.platformFee.getDefaultBroker();
+  }
+
+  @Put('default-broker')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Set the default broker for new investors (audited)' })
+  async setDefaultBroker(
+    @Body() dto: SetDefaultBrokerDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const before = await this.platformFee.getDefaultBroker();
+    const after = await this.platformFee.setDefaultBroker(dto.brokerId, admin.id, !!dto.applyToUnassigned);
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'PLATFORM_DEFAULT_BROKER_UPDATED',
+      resourceType: 'PLATFORM_CONFIG',
+      resourceId: 'default',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { before: before.broker?.id ?? null, after: after.broker.id, assigned: after.assigned },
     });
     return after;
   }

@@ -5,7 +5,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export class DepositDto {
   @ApiProperty({ example: 50000, description: 'Amount in MWK' })
   @IsNumber()
-  @Min(100)
+  // Smallest deposit accepted; the app shows the same floor up front.
+  @Min(1000, { message: 'The minimum deposit is MWK 1,000.' })
   @Max(5_000_000)
   amount: number;
 
