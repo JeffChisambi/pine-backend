@@ -200,7 +200,14 @@ export class KycReconciliationService {
    */
   resolveCsdFields(
     input: ReconciliationInput,
-    bank: { bankName?: string | null; accountName?: string | null; accountNumberMasked?: string | null } | null,
+    bank: {
+      bankName?: string | null;
+      accountName?: string | null;
+      accountNumberMasked?: string | null;
+      /** Decrypted full number. The broker opens the CSD account with it, so
+       *  the form shows it in full; masked is only the fallback. */
+      accountNumber?: string | null;
+    } | null,
     overrides: Record<string, string> = {},
   ): CsdFieldValues {
     const r = this.reconcile(input);
@@ -233,7 +240,7 @@ export class KycReconciliationService {
       email: (r.email.value ?? '').toUpperCase(),
       bankName: (bank?.bankName ?? '').toUpperCase(),
       bankBranchCode: '',
-      accountNumber: bank?.accountNumberMasked ?? '',
+      accountNumber: bank?.accountNumber ?? bank?.accountNumberMasked ?? '',
       accountName: (bank?.accountName ?? '').toUpperCase(),
     };
 

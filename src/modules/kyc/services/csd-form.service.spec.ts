@@ -2,10 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { CsdFormService } from './csd-form.service';
 import { KycReconciliationService } from './kyc-reconciliation.service';
+import type { BankAccountCryptoService } from './bank-account-crypto.service';
 import type { PrismaService } from '../../../infrastructure/database/prisma.service';
 
+/** Decryption is exercised in the crypto service's own spec; here it only has
+ *  to hand back a full account number so the form can render one. */
+const cryptoStub = {
+  decrypt: (payload: string | null | undefined) => (payload ? payload.replace('enc:', '') : null),
+} as unknown as BankAccountCryptoService;
+
 const makeService = (prisma: PrismaService) =>
-  new CsdFormService(prisma, new KycReconciliationService());
+  new CsdFormService(prisma, new KycReconciliationService(), cryptoStub);
 
 /** Minimal Prisma mock covering the two queries the service makes. */
 function prismaMock(overrides?: { bank?: unknown }): PrismaService {
@@ -49,6 +56,7 @@ function prismaMock(overrides?: { bank?: unknown }): PrismaService {
               bankName: 'National Bank of Malawi',
               accountName: 'Thelmer Chisambi',
               accountNumberMasked: '****4321',
+              accountNumberEncrypted: 'enc:1000123454321',
             },
     },
   } as unknown as PrismaService;

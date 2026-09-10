@@ -5,6 +5,7 @@ import {
   KycReconciliationService,
   type CsdFieldValues,
 } from './kyc-reconciliation.service';
+import { BankAccountCryptoService } from './bank-account-crypto.service';
 
 /**
  * Generates a filled Reserve Bank of Malawi "Securities Account Opening/Update
@@ -20,8 +21,10 @@ import {
  *   1. OCR/MRZ-verified identity fields from the KYC pipeline
  *   2. The applicant's profile (phone, email, names)
  *   3. Extracted proof-of-residency address
- *   4. Primary linked bank for the Dividend Disposal instruction
- *      (account number is masked — broker confirms the full number at signing)
+ *   4. Primary linked bank for the Dividend Disposal instruction. The account
+ *      number is shown IN FULL: this is the broker's own surface, and the
+ *      number is exactly what they need to open the CSD account. Only the
+ *      customer-facing app sees the masked form.
  */
 const CSD_OVERRIDES_KEY = '_csdOverrides';
 
@@ -32,6 +35,7 @@ export class CsdFormService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly reconciliation: KycReconciliationService,
+    private readonly bankCrypto: BankAccountCryptoService,
   ) {}
 
   /**
@@ -87,7 +91,7 @@ export class CsdFormService {
   /** Shared loader: application + user + primary bank + saved overrides. */
   private async load(applicationId: string): Promise<{
     input: Parameters<KycReconciliationService['resolveCsdFields']>[0];
-    bank: { bankName?: string | null; accountName?: string | null; accountNumberMasked?: string | null } | null;
+    bank: Parameters<KycReconciliationService['resolveCsdFields']>[1];
     overrides: Record<string, string>;
   }> {
     const app = await this.prisma.kycApplication.findUnique({
@@ -131,7 +135,9 @@ export class CsdFormService {
           ocrExtractedData: app.ocrExtractedData,
         },
       },
-      bank,
+      bank: bank
+        ? { ...bank, accountNumber: this.bankCrypto.decrypt(bank.accountNumberEncrypted) }
+        : null,
       overrides,
     };
   }
