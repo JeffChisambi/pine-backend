@@ -32,8 +32,11 @@ export class CreateNewsDto {
   summary?: string;
 
   @ApiProperty({
-    description: 'Ordered paragraphs of plain text (one per array element).',
-    example: ['First paragraph…', 'Second paragraph…'],
+    description:
+      'Ordered body blocks, one per element. Plain text is a paragraph; ' +
+      '"## " starts a heading, "![caption](url)" is an inline image, "> " a ' +
+      'quote and "- " lines a list. **bold** and _italic_ are the inline marks.',
+    example: ['First paragraph…', '![Trading floor](https://…/floor.jpg)', '## Outlook', 'Second paragraph…'],
     type: [String],
   })
   @IsArray()
