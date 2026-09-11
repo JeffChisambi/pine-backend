@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { IdentityService } from '../../auth/services/identity.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Decimal } from '@prisma/client/runtime/library';
 import { OrderService } from './order.service';
@@ -48,6 +49,7 @@ export class TradingService {
     private readonly eventEmitter: EventEmitter2,
     private readonly reservationService: ReservationService,
     private readonly feePolicy: FeePolicyService,
+    private readonly identity: IdentityService,
     private readonly riskPolicy: RiskPolicyService,
   ) {}
 
@@ -228,7 +230,10 @@ export class TradingService {
 
     // A valid broker relationship is required before any trade: orders are
     // routed to (and executed by) the investor's selected broker. Derived
-    // from the persisted user record — never from client input.
+    // from the persisted user record — never from client input. An account
+    // with no broker is placed with Pine's default first; only when that is
+    // impossible does the order get refused.
+    await this.identity.ensureBroker(userId);
     const trader = await this.repo.prismaClient.user.findUnique({
       where: { id: userId },
       select: { role: true, brokerId: true, broker: { select: { isActive: true } } },
@@ -236,7 +241,7 @@ export class TradingService {
     if (trader?.role === 'CUSTOMER') {
       if (!trader.brokerId) {
         throw new ValidationException(
-          'Select a broker in your profile before placing an order. (BROKER_REQUIRED)',
+          'Your account is not linked to a broker yet. Contact support. (BROKER_REQUIRED)',
         );
       }
       if (trader.broker && !trader.broker.isActive) {

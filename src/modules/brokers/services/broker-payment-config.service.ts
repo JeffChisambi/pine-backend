@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { IdentityService } from '../../auth/services/identity.service';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { BrokerSecretsService } from './broker-secrets.service';
 import { MastercardGatewayService } from '../../mastercard-gateway/services/mastercard-gateway.service';
@@ -62,6 +63,7 @@ export class BrokerPaymentConfigService {
     private readonly secrets: BrokerSecretsService,
     private readonly auditLog: AuditLogService,
     private readonly gateway: MastercardGatewayService,
+    private readonly identity: IdentityService,
   ) {}
 
   // ── Super Admin: read (masked) ────────────────────────────────────
@@ -238,6 +240,7 @@ export class BrokerPaymentConfigService {
    *   - Conflict if the broker is inactive or payments are not configured.
    */
   async resolveGatewayConfigForUser(userId: string): Promise<ResolvedBrokerGatewayConfig> {
+    await this.identity.ensureBroker(userId);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -248,7 +251,7 @@ export class BrokerPaymentConfigService {
 
     if (!user?.brokerId || !user.broker) {
       throw new ConflictException(
-        'Select a broker in your profile before making a deposit.',
+        'Your account is not linked to a broker yet. Contact support.',
         undefined,
         { reason: 'BROKER_REQUIRED' },
       );

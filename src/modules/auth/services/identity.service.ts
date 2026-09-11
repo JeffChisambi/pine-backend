@@ -122,6 +122,53 @@ export class IdentityService {
     return user;
   }
 
+  /**
+   * Make sure a customer has a broker, placing them with Pine's default if
+   * they have none. Returns true when the account has a broker afterwards.
+   *
+   * Pine has one broker partner and investors never choose, so an account
+   * without a broker is only ever a gap in configuration — a sign-up from
+   * before the default existed, or a record created some other way. Those
+   * used to surface as "Account not linked" in the app until an admin ran
+   * "apply to unassigned". Every place that needs a broker now calls this
+   * first, so the gap closes itself the moment it would otherwise be seen.
+   * Nothing is touched for accounts that already have a broker.
+   */
+  async ensureBroker(userId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, brokerId: true, deletedAt: true },
+    });
+    if (!user || user.deletedAt) return false;
+    if (user.role !== 'CUSTOMER') return true;
+    if (user.brokerId) return true;
+
+    const brokerId = await this.resolveDefaultBrokerId();
+    if (!brokerId) return false;
+
+    try {
+      // updateMany with brokerId: null as a guard, so two concurrent calls
+      // (profile load + order placement) cannot both write.
+      const placed = await this.prisma.user.updateMany({
+        where: { id: userId, brokerId: null },
+        data: { brokerId, brokerSelectedAt: new Date() },
+      });
+      // Wallets mirror the owner's broker (the same mirror selectBroker and
+      // the admin "apply to unassigned" action maintain).
+      await this.prisma.wallet.updateMany({
+        where: { userId, brokerId: null },
+        data: { brokerId },
+      });
+      if (placed.count > 0) {
+        this.logger.log({ userId, brokerId }, 'Placed investor with the default broker');
+      }
+      return true;
+    } catch (error) {
+      this.logger.warn({ err: error, userId }, 'Could not place investor with the default broker');
+      return false;
+    }
+  }
+
   /** The active broker new investors are placed with, or null if none is set. */
   private async resolveDefaultBrokerId(): Promise<string | null> {
     try {

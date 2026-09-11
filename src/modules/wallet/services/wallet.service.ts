@@ -1,4 +1,5 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { IdentityService } from '../../auth/services/identity.service';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron } from '@nestjs/schedule';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -52,6 +53,7 @@ export class WalletService {
     private readonly eventEmitter: EventEmitter2,
     private readonly feePolicy: FeePolicyService,
     private readonly riskPolicy: RiskPolicyService,
+    private readonly identity: IdentityService,
   ) {}
 
   /** Called by PaymentsModule to wire the TradingService without circular DI. */
@@ -144,7 +146,9 @@ export class WalletService {
     // always land in the investor's selected broker's account, so a
     // deposit without a broker has no destination. The broker is read
     // from the authenticated user's persisted relationship — never from
-    // the request.
+    // the request. An account with no broker is placed with Pine's default
+    // first; only when that is impossible is the deposit refused.
+    await this.identity.ensureBroker(params.userId);
     const depositor = await this.repo.prismaClient.user.findUnique({
       where: { id: params.userId },
       select: { role: true, brokerId: true, broker: { select: { isActive: true } } },
@@ -152,7 +156,7 @@ export class WalletService {
     if (depositor?.role === 'CUSTOMER') {
       if (!depositor.brokerId) {
         throw new BadRequestException(
-          'Select a broker in your profile before making a deposit. (BROKER_REQUIRED)',
+          'Your account is not linked to a broker yet. Contact support. (BROKER_REQUIRED)',
         );
       }
       if (depositor.broker && !depositor.broker.isActive) {

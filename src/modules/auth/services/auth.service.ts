@@ -462,6 +462,10 @@ export class AuthService {
   // ──────────────────────────────────────────────────────────────
 
   async getProfile(userId: string): Promise<AuthUserDto> {
+    // The app decides whether trading is allowed from this payload, so an
+    // account that can be placed with the default broker is placed now
+    // rather than shown as "not linked".
+    await this.identity.ensureBroker(userId);
     const user = await this.identity.getUserById(userId);
     return {
       id: user.id,
