@@ -425,7 +425,9 @@ export class AuthService {
   async sendOtp(
     destination: string,
     purpose: string,
+    requesterId: string,
   ): Promise<{ message: string; expiresInSeconds: number }> {
+    await this.assertOwnContact(requesterId, destination, purpose);
     const { code, expiresInSeconds } = await this.otp.generate(destination, purpose);
 
     // Dispatch the code over the destination's channel. Email is delivered
@@ -442,7 +444,9 @@ export class AuthService {
     destination: string,
     purpose: string,
     code: string,
+    requesterId: string,
   ): Promise<{ verified: boolean }> {
+    await this.assertOwnContact(requesterId, destination, purpose);
     await this.otp.verify(destination, purpose, code);
 
     // A successfully verified OTP is proof of ownership — stamp the matching
@@ -455,6 +459,24 @@ export class AuthService {
 
     this.events.emit('auth.otp.verified', { destination, purpose });
     return { verified: true };
+  }
+
+  /**
+   * A verification code only ever goes to the contact on the caller's own
+   * account. Without this, a logged-in session could have codes sent to any
+   * address, or stamp someone else's email as verified on their record.
+   */
+  private async assertOwnContact(userId: string, destination: string, purpose: string): Promise<void> {
+    if (purpose !== 'email_verification' && purpose !== 'phone_verification') return;
+    const user = await this.identity.getUserById(userId);
+    const own = purpose === 'email_verification' ? user.email?.trim().toLowerCase() : user.phone;
+    if (!own || own !== destination) {
+      throw new ValidationException(
+        purpose === 'email_verification'
+          ? 'That is not the email address on your account.'
+          : 'That is not the phone number on your account.',
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -480,6 +502,8 @@ export class AuthService {
       hasPinSet: !!user.pinHash,
       avatarUrl: null,
       isActive: user.isActive,
+      emailVerified: !!user.emailVerifiedAt,
+      phoneVerified: !!user.phoneVerifiedAt,
       broker: user.broker
         ? {
             id: user.broker.id,

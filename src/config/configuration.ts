@@ -81,7 +81,9 @@ export const securityConfig = registerAs('security', () => ({
 
 export const otpConfig = registerAs('otp', () => ({
   length: parseInt(process.env.OTP_LENGTH ?? '6', 10),
-  ttlSeconds: parseInt(process.env.OTP_TTL_SECONDS ?? '300', 10),
+  // An hour: verification codes go out by email, and mail is not instant on
+  // every network here. Five minutes made valid codes arrive already dead.
+  ttlSeconds: parseInt(process.env.OTP_TTL_SECONDS ?? '3600', 10),
   maxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS ?? '5', 10),
   resendCooldownSeconds: parseInt(process.env.OTP_RESEND_COOLDOWN_SECONDS ?? '60', 10),
 }));

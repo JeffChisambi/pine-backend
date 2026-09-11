@@ -293,6 +293,8 @@ export class IdentityService {
         dateOfBirth: true,
         gender: true,
         avatarKey: true,
+        emailVerifiedAt: true,
+        phoneVerifiedAt: true,
         isActive: true,
         brokerSelectedAt: true,
         broker: {

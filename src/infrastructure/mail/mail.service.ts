@@ -61,6 +61,13 @@ export class MailService {
     font: "-apple-system, 'Segoe UI', Roboto, Arial, Helvetica, sans-serif",
   };
 
+  /** "1 hour", "45 minutes", "90 seconds" — for the expiry line in emails. */
+  private describeDuration(seconds: number): string {
+    if (seconds % 3600 === 0) { const h = seconds / 3600; return `${h} hour${h === 1 ? '' : 's'}`; }
+    if (seconds % 60 === 0) { const m = seconds / 60; return `${m} minute${m === 1 ? '' : 's'}`; }
+    return `${seconds} seconds`;
+  }
+
   private fromAddress(): string {
     return this.from.replace(/^.*<|>$/g, '');
   }
@@ -148,9 +155,10 @@ export class MailService {
    */
   async sendVerificationCode(to: string, code: string): Promise<boolean> {
     const subject = 'Your Pine verification code';
+    const expiry = this.describeDuration(this.config.otp.ttlSeconds);
     const text =
       `Your Pine verification code is: ${code}\n\n` +
-      `This code expires in 5 minutes. If you didn't request it, you can ignore this email.` +
+      `This code expires in ${expiry}. If you didn't request it, you can ignore this email.` +
       this.signatureText();
     const B = MailService.BRAND;
     const html = this.renderShell(
@@ -166,7 +174,7 @@ export class MailService {
         </td></tr>
       </table>
       <p style="font-family:${B.font}; font-size:13px; line-height:20px; color:${B.muted}; margin:0;">
-        This code expires in <strong style="color:${B.ink};">5 minutes</strong>.
+        This code expires in <strong style="color:${B.ink};">${expiry}</strong>.
         If you didn't request it, you can safely ignore this email.
       </p>`,
     );

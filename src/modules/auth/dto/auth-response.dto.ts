@@ -13,6 +13,9 @@ export class AuthUserDto {
   @ApiPropertyOptional() gender: string | null;
   @ApiPropertyOptional() avatarUrl: string | null;
   @ApiPropertyOptional() isActive?: boolean;
+  /** Whether the email on the account has been confirmed with a code. */
+  @ApiPropertyOptional() emailVerified?: boolean;
+  @ApiPropertyOptional() phoneVerified?: boolean;
   /** The investor's selected broker (core account relationship). */
   @ApiPropertyOptional()
   broker?: {

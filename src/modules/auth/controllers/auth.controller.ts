@@ -207,8 +207,9 @@ export class AuthController {
   @ApiOperation({ summary: 'Send an OTP to phone or email' })
   async sendOtp(
     @Body() dto: SendOtpDto,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ message: string; expiresInSeconds: number }> {
-    return this.authService.sendOtp(dto.destination, dto.purpose);
+    return this.authService.sendOtp(dto.destination, dto.purpose, user.id);
   }
 
   @Post('otp/verify')
@@ -216,8 +217,9 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify an OTP code' })
   async verifyOtp(
     @Body() dto: VerifyOtpDto,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ verified: boolean }> {
-    return this.authService.verifyOtp(dto.destination, dto.purpose, dto.code);
+    return this.authService.verifyOtp(dto.destination, dto.purpose, dto.code, user.id);
   }
 
   // ── Sessions ──────────────────────────────────────────────────
