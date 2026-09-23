@@ -383,6 +383,20 @@ export class IdentityService {
    * Reset password (after OTP verification — OTP verification
    * is handled by the AuthService orchestrator before calling this).
    */
+  /**
+   * The verified email on the account with this phone, or null when there is
+   * no such account or it has no email. Used to deliver a password-reset
+   * code: SMS is not wired to a provider, email is.
+   */
+  async findResetEmailByPhone(phone: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { phone: normalizeMalawiPhoneNumber(phone) },
+      select: { email: true, deletedAt: true, isActive: true },
+    });
+    if (!user || user.deletedAt || !user.isActive) return null;
+    return user.email?.trim().toLowerCase() || null;
+  }
+
   async resetPassword(phone: string, newPassword: string): Promise<void> {
     const normalizedPhone = normalizeMalawiPhoneNumber(phone);
     const newHash = await this.passwordService.hash(newPassword);

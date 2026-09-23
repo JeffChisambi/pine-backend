@@ -282,17 +282,25 @@ export class AuthService {
   // ──────────────────────────────────────────────────────────────
 
   async forgotPassword(phone: string): Promise<{ message: string }> {
-    // Generate OTP — even if the phone doesn't exist, return success
-    // (prevents user enumeration)
+    // The code goes to the EMAIL on the account: there is no SMS provider,
+    // so a code "sent to the phone" never arrived and nobody could reset a
+    // password. The response is the same whether or not the phone is
+    // registered, so this cannot be used to enumerate accounts.
     try {
-      await this.otp.generate(phone, 'password_reset');
+      const email = await this.identity.findResetEmailByPhone(phone);
+      if (email) {
+        const { code } = await this.otp.generate(phone, 'password_reset');
+        await this.mail.sendPasswordResetCode(email, code);
+      } else {
+        this.logger.debug('Forgot password for unknown phone or account without email (silent)');
+      }
     } catch (error) {
       // Rate limit errors should still be thrown
       if (error instanceof Error && error.message.includes('wait')) throw error;
-      this.logger.debug('Forgot password for non-existent phone (silent)');
+      this.logger.warn({ err: error }, 'Password reset code could not be sent');
     }
 
-    return { message: 'If this phone is registered, a reset code has been sent' };
+    return { message: 'If this phone is registered, a reset code has been sent to the email on the account' };
   }
 
   async resetPassword(

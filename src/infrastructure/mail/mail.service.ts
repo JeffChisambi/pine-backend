@@ -153,6 +153,48 @@ export class MailService {
    * the OTP flow surfaces its own errors and the code stays retrievable
    * from dev logs; a mail outage must not 500 the auth endpoint.
    */
+  /** Password-reset code. Same shape as the verification email, different words. */
+  async sendPasswordResetCode(to: string, code: string): Promise<boolean> {
+    const subject = 'Reset your Pine password';
+    const expiry = this.describeDuration(this.config.otp.ttlSeconds);
+    const text =
+      `Your Pine password reset code is: ${code}\n\n` +
+      `Enter it in the app with your new password. It expires in ${expiry}. ` +
+      `If you didn't ask to reset your password, ignore this email — your password has not changed.` +
+      this.signatureText();
+    const B = MailService.BRAND;
+    const html = this.renderShell(
+      `Your Pine password reset code is ${code}`,
+      `
+      <div style="font-family:${B.font}; font-size:20px; font-weight:800; color:${B.ink};">Reset your password</div>
+      <p style="font-family:${B.font}; font-size:15px; line-height:24px; color:${B.ink}; margin:14px 0 0;">
+        Enter this code in the Pine app together with your new password:
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:24px 0;">
+        <tr><td align="center" style="background:${B.panel}; border:1px solid ${B.border}; border-radius:12px; padding:22px;">
+          <span style="font-family:'Courier New', Courier, monospace; font-size:34px; font-weight:800; letter-spacing:10px; color:${B.teal};">${code}</span>
+        </td></tr>
+      </table>
+      <p style="font-family:${B.font}; font-size:13px; line-height:20px; color:${B.muted}; margin:0;">
+        This code expires in <strong style="color:${B.ink};">${expiry}</strong>.
+        If you didn't ask to reset your password, you can ignore this email — your password has not changed.
+      </p>`,
+    );
+
+    if (!this.transporter) {
+      this.logger.warn({ to, code }, '📧 DEV ONLY — email not sent (no SMTP host); code logged');
+      return false;
+    }
+    try {
+      await this.transporter.sendMail({ from: this.from, to, subject, text, html });
+      this.logger.log({ to }, 'Password reset email sent');
+      return true;
+    } catch (error) {
+      this.logger.error({ err: error, to }, 'Failed to send password reset email');
+      return false;
+    }
+  }
+
   async sendVerificationCode(to: string, code: string): Promise<boolean> {
     const subject = 'Your Pine verification code';
     const expiry = this.describeDuration(this.config.otp.ttlSeconds);
