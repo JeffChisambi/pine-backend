@@ -14,6 +14,7 @@ import { OrderLifecycleStatus, ACTIVE_STATES, assertTransition } from '../domain
 import { OrderCreatedEvent, OrderCancelledEvent, OrderRejectedEvent } from '../events/trading.events';
 import { HttpException } from '@nestjs/common';
 import { AppException } from '../../../core/exceptions/app.exception';
+import { AppConfigService } from '../../../config/app-config.service';
 import {
   ConflictException,
   ResourceNotFoundException,
@@ -51,6 +52,7 @@ export class TradingService {
     private readonly feePolicy: FeePolicyService,
     private readonly identity: IdentityService,
     private readonly riskPolicy: RiskPolicyService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /**
@@ -412,6 +414,39 @@ export class TradingService {
         { orderId: order.id, durationMs },
         'Order queued — awaiting broker execution',
       );
+
+      // Practice mode: no broker to wait for. Fill now at the latest market
+      // price. A LIMIT order fills only when that price is at or better
+      // than the limit; otherwise it is turned down with the reason, since
+      // nothing would ever come along to fill it later.
+      if (this.appConfig.app.virtualTrading) {
+        const latest = await this.repo.getLatestClosePrice(order.stockId);
+        if (!latest) {
+          throw new ValidationException('No market price is available for this stock right now.');
+        }
+        if (dto.orderType === 'LIMIT' && dto.limitPrice) {
+          const limit = new Decimal(dto.limitPrice);
+          const marketable = dto.side === 'BUY' ? latest.lte(limit) : latest.gte(limit);
+          if (!marketable) {
+            throw new ValidationException(
+              `In practice mode orders fill straight away at the market price (MK ${latest.toFixed(2)}), ` +
+                `which is ${dto.side === 'BUY' ? 'above' : 'below'} your limit of MK ${limit.toFixed(2)}.`,
+            );
+          }
+        }
+        const result = await this.executionEngine.execute(order.id, latest);
+        const filled = await this.repo.findOrderById(order.id);
+        return this.buildContractResponse(
+          filled,
+          fees.totalCost,
+          false,
+          result.status === 'REJECTED'
+            ? 'Your practice order could not be filled.'
+            : `Filled at MK ${latest.toFixed(2)} a share.`,
+          latest,
+          true,
+        );
+      }
 
       const queuedOrder = await this.repo.findOrderById(order.id);
       // Same broker-gated flow either way — only the message/visuals differ so

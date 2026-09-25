@@ -5,6 +5,7 @@ import { MarketService } from './market.service';
 import { calculateTradingFees } from '../domain/trading-fee.calculator';
 import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 import { RiskPolicyService } from '../../brokers/services/risk-policy.service';
+import { AppConfigService } from '../../../config/app-config.service';
 
 /**
  * Validation Service — Pre-trade gate checks.
@@ -37,6 +38,7 @@ export class ValidationService {
     private readonly marketService: MarketService,
     private readonly feePolicy: FeePolicyService,
     private readonly riskPolicy: RiskPolicyService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /**
@@ -71,7 +73,8 @@ export class ValidationService {
     const stock = await this.checkStockActive(order.stockId);
 
     // 2. User KYC approved?
-    this.checkKycStatus(order.userKycStatus);
+    // Practice mode trades play money: nobody's identity is at stake.
+    if (!this.appConfig.app.virtualTrading) this.checkKycStatus(order.userKycStatus);
 
     // 3. Account not frozen?
     await this.checkAccountNotFrozen(order.userId);

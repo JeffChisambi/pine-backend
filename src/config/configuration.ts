@@ -21,6 +21,17 @@ export const appConfig = registerAs('app', () => ({
    * the mock gateway credits real wallets without charging a card.
    */
   allowTestTransactions: process.env.ALLOW_TEST_TRANSACTIONS === 'true',
+  /**
+   * Virtual (practice) trading. The whole instance runs on play money:
+   * no KYC, orders fill instantly at the market price, deposits are
+   * credited immediately with no payment, withdrawals are off, and each
+   * investor may deposit at most VIRTUAL_DEPOSIT_CAP in any rolling
+   * VIRTUAL_DEPOSIT_WINDOW_DAYS. MUST run on its own database — never
+   * point a virtual instance at the real ledger.
+   */
+  virtualTrading: process.env.VIRTUAL_TRADING === 'true',
+  virtualDepositCap: parseFloat(process.env.VIRTUAL_DEPOSIT_CAP ?? '500000'),
+  virtualDepositWindowDays: parseInt(process.env.VIRTUAL_DEPOSIT_WINDOW_DAYS ?? '365', 10),
   apiPrefix: process.env.API_PREFIX ?? 'v1',
   timezone: process.env.APP_TIMEZONE ?? 'Africa/Blantyre',
   isProduction: process.env.NODE_ENV === 'production',

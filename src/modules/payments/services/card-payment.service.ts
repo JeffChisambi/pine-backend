@@ -74,6 +74,10 @@ export class CardPaymentService {
       dto.expiryYear = saved.expiryYear;
     }
 
+    if (this.appConfig.app.virtualTrading) {
+      throw new BadRequestException('Card payments are not used in practice mode. Deposit from the wallet instead.');
+    }
+
     this.validateCard(dto);
 
     // Production guard: Test Transaction mode is a client-controlled flag

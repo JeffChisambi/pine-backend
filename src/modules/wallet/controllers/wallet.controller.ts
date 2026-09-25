@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -18,6 +19,7 @@ import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
 import { PinGuard } from '../../auth/guards/pin.guard';
 import { WalletService } from '../services/wallet.service';
+import { AppConfigService } from '../../../config/app-config.service';
 import { DepositDto, WithdrawDto, StatementQueryDto } from '../dto/wallet.dto';
 
 /**
@@ -45,7 +47,10 @@ import { DepositDto, WithdrawDto, StatementQueryDto } from '../dto/wallet.dto';
 @ApiBearerAuth()
 @Controller('wallet')
 export class WalletController {
-  constructor(private readonly walletService: WalletService) {}
+  constructor(
+    private readonly walletService: WalletService,
+    private readonly appConfig: AppConfigService,
+  ) {}
 
   // ── Balance ─────────────────────────────────────────────────
 
@@ -151,6 +156,15 @@ export class WalletController {
 
   // ── Deposit ─────────────────────────────────────────────────
 
+  @Get('virtual-allowance')
+  @ApiOperation({ summary: 'Practice mode: deposit allowance used and remaining in the rolling window' })
+  async virtualAllowance(@CurrentUser() user: AuthenticatedUser) {
+    if (!this.appConfig.app.virtualTrading) {
+      throw new BadRequestException('This server is not running in practice mode.');
+    }
+    return this.walletService.virtualAllowance(user.id);
+  }
+
   @Get('deposit/preview')
   @ApiOperation({
     summary: 'Preview a deposit fee breakdown',
@@ -182,6 +196,10 @@ export class WalletController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: DepositDto,
   ) {
+    // Practice mode: no payment step — the play money is credited at once.
+    if (this.appConfig.app.virtualTrading) {
+      return this.walletService.depositVirtual(user.id, dto.amount, dto.idempotencyKey);
+    }
     return this.walletService.initiateDeposit({
       userId: user.id,
       amount: dto.amount,
@@ -207,6 +225,10 @@ export class WalletController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: WithdrawDto,
   ) {
+    // Play money has nowhere to go.
+    if (this.appConfig.app.virtualTrading) {
+      throw new BadRequestException('Withdrawals are not available in practice mode.');
+    }
     return this.walletService.initiateWithdrawal({
       userId: user.id,
       amount: dto.amount,

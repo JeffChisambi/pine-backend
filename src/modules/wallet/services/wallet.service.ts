@@ -12,6 +12,7 @@ import { FeePolicyService } from '../../brokers/services/fee-policy.service';
 import { RiskPolicyService } from '../../brokers/services/risk-policy.service';
 import { FINANCIAL_TRANSACTION_OPTIONS } from '../../../infrastructure/database/prisma.service';
 import type { TradingService } from '../../trading/services/trading.service';
+import { AppConfigService } from '../../../config/app-config.service';
 
 /**
  * Wallet Service — the orchestrator.
@@ -54,6 +55,7 @@ export class WalletService {
     private readonly feePolicy: FeePolicyService,
     private readonly riskPolicy: RiskPolicyService,
     private readonly identity: IdentityService,
+    private readonly appConfig: AppConfigService,
   ) {}
 
   /** Called by PaymentsModule to wire the TradingService without circular DI. */
@@ -177,15 +179,33 @@ export class WalletService {
       throw new BadRequestException('Deposit amount must be positive');
     }
 
+    // Practice mode: play money, capped per rolling window. The cap replaces
+    // the broker's real-money risk limits, which exist to stop fraud and
+    // mean nothing here.
+    if (this.appConfig.app.virtualTrading) {
+      const allowance = await this.virtualAllowance(params.userId);
+      if (params.amount > allowance.remaining) {
+        throw new BadRequestException(
+          allowance.remaining <= 0
+            ? `You've used your full MWK ${allowance.cap.toLocaleString()} practice allowance for this period. ` +
+              `More becomes available on ${allowance.nextReleaseAt?.slice(0, 10) ?? 'a later date'}.`
+            : `You can deposit up to MWK ${allowance.remaining.toLocaleString()} more in this period ` +
+              `(MWK ${allowance.cap.toLocaleString()} per ${allowance.windowDays} days).`,
+        );
+      }
+    }
+
     // Broker risk constraints — per-transaction/daily/monthly/velocity
     // deposit limits (RiskPolicyService). The system-wide wallet daily
     // limit is evaluated inside the same check; where bounds overlap the
     // MOST RESTRICTIVE one wins. Server-side — the client is never trusted.
-    const riskCheck = await this.riskPolicy.checkDeposit(
-      params.userId,
-      new Decimal(params.amount),
-      params.method ?? null,
-    );
+    const riskCheck = this.appConfig.app.virtualTrading
+      ? { allowed: true as const, reason: undefined as string | undefined }
+      : await this.riskPolicy.checkDeposit(
+          params.userId,
+          new Decimal(params.amount),
+          params.method ?? null,
+        );
     if (!riskCheck.allowed) {
       throw new BadRequestException(riskCheck.reason ?? 'Deposit exceeds your broker\'s limits.');
     }
@@ -207,7 +227,16 @@ export class WalletService {
     // Transaction.amount = NET (what moves into the wallet), the breakdown
     // lives in metadata + ledger legs.
     const policy = await this.feePolicy.forUser(params.userId);
-    const breakdown = this.feePolicy.depositBreakdown(policy, new Decimal(params.amount));
+    // Play money carries no processing fee: the practice balance should be
+    // exactly what the investor chose to deposit.
+    const breakdown = this.appConfig.app.virtualTrading
+      ? {
+          grossAmount: new Decimal(params.amount),
+          processingFee: new Decimal(0),
+          netAmount: new Decimal(params.amount),
+          description: undefined as string | undefined,
+        }
+      : this.feePolicy.depositBreakdown(policy, new Decimal(params.amount));
 
     const tx = await this.repo.createTransaction({
       walletId: wallet.id,
@@ -454,6 +483,61 @@ export class WalletService {
    *   CREDIT USER_WALLET          net    (user's balance increases)
    *   CREDIT PLATFORM_FEE_REVENUE fee    (deposit processing fee, if any)
    */
+  /**
+   * Practice-mode deposit allowance: how much of the rolling cap is used,
+   * what is left, and when the oldest deposit in the window rolls off.
+   * Counts COMPLETED and still-PENDING deposits so two quick requests
+   * cannot both squeeze under the cap.
+   */
+  async virtualAllowance(userId: string): Promise<{
+    cap: number;
+    windowDays: number;
+    used: number;
+    remaining: number;
+    nextReleaseAt: string | null;
+  }> {
+    const cap = this.appConfig.app.virtualDepositCap;
+    const windowDays = this.appConfig.app.virtualDepositWindowDays;
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+    const deposits = await this.repo.prismaClient.transaction.findMany({
+      where: {
+        type: 'DEPOSIT',
+        status: { in: ['COMPLETED', 'PENDING'] },
+        createdAt: { gte: since },
+        wallet: { userId },
+      },
+      select: { amount: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const used = deposits.reduce((sum, d) => sum + Number(d.amount), 0);
+    const oldest = deposits[0]?.createdAt;
+    return {
+      cap,
+      windowDays,
+      used,
+      remaining: Math.max(0, cap - used),
+      nextReleaseAt: oldest
+        ? new Date(oldest.getTime() + windowDays * 24 * 60 * 60 * 1000).toISOString()
+        : null,
+    };
+  }
+
+  /**
+   * Practice-mode deposit: create and credit in one step. There is no
+   * payment to wait for, so the money is in the wallet when this returns.
+   */
+  async depositVirtual(userId: string, amount: number, idempotencyKey?: string) {
+    const { transactionId, status } = await this.initiateDeposit({
+      userId,
+      amount,
+      idempotencyKey,
+      method: 'VIRTUAL',
+      metadata: { purpose: 'wallet_deposit', method: 'VIRTUAL', virtual: true },
+    });
+    if (status === 'PENDING') await this.processDeposit(transactionId);
+    return { transactionId, status: 'COMPLETED', allowance: await this.virtualAllowance(userId) };
+  }
+
   async processDeposit(transactionId: string): Promise<void> {
     const prisma = this.repo.prismaClient;
 

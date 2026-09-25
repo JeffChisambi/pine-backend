@@ -7,6 +7,12 @@ export interface AppConfig {
   dashboardUrl: string;
   /** Pre-launch: permit Test Transactions in production (ALLOW_TEST_TRANSACTIONS=true). */
   allowTestTransactions: boolean;
+  /** Practice-money instance (VIRTUAL_TRADING=true). See configuration.ts. */
+  virtualTrading: boolean;
+  /** Most an investor may deposit in any rolling window (MWK). */
+  virtualDepositCap: number;
+  /** Length of that rolling window, in days. */
+  virtualDepositWindowDays: number;
   apiPrefix: string;
   timezone: string;
   isProduction: boolean;
