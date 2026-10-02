@@ -220,33 +220,33 @@ enum MarketStatus {
 /// isolation is enforceable at the database/authorization layer and
 /// never inferred from frontend state.
 model Broker {
-  id          String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid()) @db.Uuid
   /// Display name shown to investors in the mobile app.
-  name        String
+  name         String
   /// Short unique machine code, e.g. "FDH", "CEDAR".
-  code        String   @unique
-  description String?
-  logoUrl     String?
+  code         String   @unique
+  description  String?
+  logoUrl      String?
   /// Contact/registration info shown to Super Admin.
   contactEmail String?
   contactPhone String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  users           User[]
-  paymentConfig   BrokerPaymentConfig?
-  feeConfig       BrokerFeeConfig?
-  riskConfig      BrokerRiskConfig?
-  apiConfigs      BrokerApiConfig[]
-  adminInvitations BrokerAdminInvitation[]
+  users             User[]
+  paymentConfig     BrokerPaymentConfig?
+  feeConfig         BrokerFeeConfig?
+  riskConfig        BrokerRiskConfig?
+  apiConfigs        BrokerApiConfig[]
+  adminInvitations  BrokerAdminInvitation[]
   migratedInvestors MigratedInvestor[]
-  wallets         Wallet[]
-  transactions    Transaction[]
-  orders          Order[]
-  holdings        Holding[]
-  kycApplications KycApplication[]
-  payments        Payment[]
+  wallets           Wallet[]
+  transactions      Transaction[]
+  orders            Order[]
+  holdings          Holding[]
+  kycApplications   KycApplication[]
+  payments          Payment[]
 
   @@index([isActive])
   @@map("brokers")
@@ -257,20 +257,20 @@ model Broker {
 /// through a central account. Secrets are AES-256-GCM encrypted at rest
 /// and never returned to any frontend after saving.
 model BrokerPaymentConfig {
-  id             String   @id @default(uuid()) @db.Uuid
-  brokerId       String   @unique @db.Uuid
-  broker         Broker   @relation(fields: [brokerId], references: [id], onDelete: Cascade)
-  provider       String   @default("MPGS")
+  id                      String   @id @default(uuid()) @db.Uuid
+  brokerId                String   @unique @db.Uuid
+  broker                  Broker   @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  provider                String   @default("MPGS")
   /// Gateway base URL, e.g. https://test-nbm.mtf.gateway.mastercard.com
-  baseUrl        String?
-  apiVersion     Int      @default(100)
+  baseUrl                 String?
+  apiVersion              Int      @default(100)
   /// 'test' | 'production'
-  environment    String   @default("test")
-  merchantId     String?
+  environment             String   @default("test")
+  merchantId              String?
   /// AES-256-GCM encrypted gateway API password.
-  apiPasswordEnc String?
-  apiPasswordIv  String?
-  apiPasswordTag String?
+  apiPasswordEnc          String?
+  apiPasswordIv           String?
+  apiPasswordTag          String?
   /// Settlement account (broker's own bank account funds land in).
   settlementBankName      String?
   settlementAccountName   String?
@@ -278,15 +278,15 @@ model BrokerPaymentConfig {
   settlementAccountEnc    String?
   settlementAccountIv     String?
   settlementAccountTag    String?
-  isEnabled      Boolean  @default(false)
+  isEnabled               Boolean  @default(false)
   /// Refuse card deposits that cannot be 3DS authenticated. Off by default so
   /// a broker whose acquirer has not switched 3DS on can still take payments.
   /// Turning it on moves chargeback liability to the issuer on every deposit —
   /// worth it here because the merchant of record is the BROKER.
-  require3ds     Boolean  @default(false)
-  updatedById    String?  @db.Uuid
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  require3ds              Boolean  @default(false)
+  updatedById             String?  @db.Uuid
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   @@map("broker_payment_configs")
 }
@@ -348,9 +348,9 @@ model BrokerAdminInvitation {
 /// can pre-fill registration — they still choose their own password and go
 /// through KYC themselves.
 model MigratedInvestor {
-  id          String                 @id @default(uuid()) @db.Uuid
-  brokerId    String                 @db.Uuid
-  broker      Broker                 @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid()) @db.Uuid
+  brokerId String @db.Uuid
+  broker   Broker @relation(fields: [brokerId], references: [id], onDelete: Cascade)
 
   firstName   String
   lastName    String
@@ -365,22 +365,22 @@ model MigratedInvestor {
   /// notes. Carried for reference only; nothing here is trusted for KYC.
   extra       Json?
 
-  status      MigratedInvestorStatus @default(PENDING)
+  status         MigratedInvestorStatus @default(PENDING)
   /// SHA-256 of the invitation token. The token itself is only ever emailed.
-  tokenHash   String?                @unique
+  tokenHash      String?                @unique
   tokenExpiresAt DateTime?
-  invitedAt   DateTime?
-  inviteCount Int                    @default(0)
-  claimedAt   DateTime?
+  invitedAt      DateTime?
+  inviteCount    Int                    @default(0)
+  claimedAt      DateTime?
   /// Set once the person has registered on Pine from this invitation.
-  userId      String?                @unique @db.Uuid
-  user        User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId         String?                @unique @db.Uuid
+  user           User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   /// Groups every row that came from one uploaded sheet.
-  batchId     String?                @db.Uuid
-  importedById String?               @db.Uuid
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
+  batchId      String?  @db.Uuid
+  importedById String?  @db.Uuid
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@unique([brokerId, phone])
   @@index([brokerId, status])
@@ -404,66 +404,71 @@ enum MigratedInvestorStatus {
 // ============================================================
 
 model User {
-  id                String     @id @default(uuid()) @db.Uuid
-  phone             String     @unique
-  phoneVerifiedAt   DateTime?
-  email             String?    @unique
-  emailVerifiedAt   DateTime?
-  firstName         String
-  lastName          String
+  id                 String    @id @default(uuid()) @db.Uuid
+  phone              String    @unique
+  phoneVerifiedAt    DateTime?
+  email              String?   @unique
+  emailVerifiedAt    DateTime?
+  firstName          String
+  lastName           String
   /// Date of birth captured at registration — a trusted anchor the KYC
   /// pipeline reconciles OCR/MRZ extraction against.
-  dateOfBirth       DateTime?
+  dateOfBirth        DateTime?
   /// 'M' | 'F' captured at registration (trusted anchor for reconciliation).
-  gender            String?
-  passwordHash      String
-  pinHash           String?
-  pinFailedAttempts Int        @default(0)
-  pinLockedUntil    DateTime?
-  role              Role       @default(CUSTOMER)
-  kycStatus         KycStatus  @default(NOT_SUBMITTED)
+  gender             String?
+  passwordHash       String
+  pinHash            String?
+  pinFailedAttempts  Int       @default(0)
+  pinLockedUntil     DateTime?
+  role               Role      @default(CUSTOMER)
+  kycStatus          KycStatus @default(NOT_SUBMITTED)
   /// Core account relationship: the broker this user belongs to.
   /// CUSTOMER → the broker they selected to trade with (required before
   /// any deposit or order). BROKER (broker admin) → the broker they
   /// administer (always required). Platform staff → null.
-  brokerId          String?    @db.Uuid
-  broker            Broker?    @relation(fields: [brokerId], references: [id], onDelete: Restrict)
-  brokerSelectedAt  DateTime?
+  brokerId           String?   @db.Uuid
+  broker             Broker?   @relation(fields: [brokerId], references: [id], onDelete: Restrict)
+  brokerSelectedAt   DateTime?
   /// Broker STAFF: a colleague a broker administrator let in with access to
   /// chosen dashboard sections only (see brokers/staff/dashboard-sections.ts).
   /// Administrators are role BROKER with this false and full access.
-  isBrokerStaff     Boolean    @default(false)
-  staffSections     String[]   @default([])
+  isBrokerStaff      Boolean   @default(false)
+  staffSections      String[]  @default([])
   /// Set when a temporary password was issued; cleared by the first change.
   mustChangePassword Boolean   @default(false)
-  avatarKey         String?
-  isActive          Boolean    @default(true)
-  deactivatedAt     DateTime?
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
-  deletedAt         DateTime?
+  avatarKey          String?
+  isActive           Boolean   @default(true)
+  deactivatedAt      DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
-  devices           Device[]
-  sessions          Session[]
-  otps              OtpCode[]
-  kycApplications   KycApplication[]
-  wallet            Wallet?
-  linkedBanks       LinkedBank[]
-  preferences       UserPreference?
-  orders            Order[]
-  holdings          Holding[]
-  notifications     Notification[]
-  payments          Payment[]
-  auditLogsAsActor  AuditLog[]        @relation("AuditActor")
-  kycReviewsAsAdmin KycApplication[]  @relation("KycReviewer")
-  migratedFrom      MigratedInvestor?
-  faceEmbeddings    FaceEmbedding[]   @relation("UserFaceEmbeddings")
-  mfaConfig         MfaConfig?
-  watchlistEntries      WatchlistEntry[]
-  treasuryInvestments   TreasuryInvestment[]
-  supportTickets        SupportTicket[]
-  savedCards            SavedCard[]
+  devices                Device[]
+  sessions               Session[]
+  otps                   OtpCode[]
+  kycApplications        KycApplication[]
+  wallet                 Wallet?
+  linkedBanks            LinkedBank[]
+  preferences            UserPreference?
+  orders                 Order[]
+  holdings               Holding[]
+  notifications          Notification[]
+  payments               Payment[]
+  auditLogsAsActor       AuditLog[]              @relation("AuditActor")
+  kycReviewsAsAdmin      KycApplication[]        @relation("KycReviewer")
+  migratedFrom           MigratedInvestor?
+  faceEmbeddings         FaceEmbedding[]         @relation("UserFaceEmbeddings")
+  mfaConfig              MfaConfig?
+  watchlistEntries       WatchlistEntry[]
+  treasuryInvestments    TreasuryInvestment[]
+  supportTickets         SupportTicket[]
+  savedCards             SavedCard[]
   brokerAdminInvitations BrokerAdminInvitation[]
+  pointEvents            PointEvent[]
+  pointBalances          PointBalance[]
+  pointStreaks           PointStreak[]
+  lessonCompletions      LessonCompletion[]
+  notificationOpens      NotificationOpen[]
 
   @@index([role])
   @@index([brokerId])
@@ -520,24 +525,24 @@ model UserPreference {
 }
 
 model Device {
-  id             String           @id @default(uuid()) @db.Uuid
-  userId         String           @db.Uuid
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  fingerprint    String
-  platform       String
-  osVersion      String?
-  appVersion     String?
-  pushToken      String?
-  trustLevel     DeviceTrustLevel @default(UNKNOWN)
-  trustScore     Int              @default(50)
-  firstSeenAt    DateTime         @default(now())
-  lastSeenAt     DateTime         @default(now())
-  lastSeenIp     String?
+  id              String           @id @default(uuid()) @db.Uuid
+  userId          String           @db.Uuid
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint     String
+  platform        String
+  osVersion       String?
+  appVersion      String?
+  pushToken       String?
+  trustLevel      DeviceTrustLevel @default(UNKNOWN)
+  trustScore      Int              @default(50)
+  firstSeenAt     DateTime         @default(now())
+  lastSeenAt      DateTime         @default(now())
+  lastSeenIp      String?
   lastSeenCountry String?
-  isRevoked      Boolean          @default(false)
-  revokedAt      DateTime?
+  isRevoked       Boolean          @default(false)
+  revokedAt       DateTime?
 
-  sessions       Session[]
+  sessions Session[]
 
   @@unique([userId, fingerprint])
   @@index([userId])
@@ -546,29 +551,29 @@ model Device {
 }
 
 model Session {
-  id                String    @id @default(uuid()) @db.Uuid
-  userId            String    @db.Uuid
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceId          String    @db.Uuid
-  device            Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  refreshTokenHash  String
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId         String    @db.Uuid
+  device           Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  refreshTokenHash String
   /// Rotation family id — reused across a chain of rotated refresh
   /// tokens so reuse of a superseded token can be detected and the
   /// whole family revoked (refresh token theft mitigation).
-  familyId          String    @db.Uuid
-  ipAddress         String?
-  userAgent         String?
-  isRevoked         Boolean   @default(false)
-  revokedAt         DateTime?
-  revokedReason      String?
-  expiresAt         DateTime
-  createdAt         DateTime  @default(now())
+  familyId         String    @db.Uuid
+  ipAddress        String?
+  userAgent        String?
+  isRevoked        Boolean   @default(false)
+  revokedAt        DateTime?
+  revokedReason    String?
+  expiresAt        DateTime
+  createdAt        DateTime  @default(now())
   /// Last time the refresh token was rotated. NOT a sign of a person being
   /// present — the client rotates on a timer.
-  lastUsedAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
   /// Last time a HUMAN did something (heartbeat from real interaction).
   /// Staff sessions expire when this goes stale; see SessionService.
-  lastActivityAt    DateTime  @default(now())
+  lastActivityAt   DateTime  @default(now())
 
   @@index([userId])
   @@index([familyId])
@@ -577,16 +582,16 @@ model Session {
 }
 
 model OtpCode {
-  id            String    @id @default(uuid()) @db.Uuid
-  userId        String    @db.Uuid
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  purpose       String
-  codeHash      String
-  attempts      Int       @default(0)
-  maxAttempts   Int       @default(5)
-  consumedAt    DateTime?
-  expiresAt     DateTime
-  createdAt     DateTime  @default(now())
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose     String
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  consumedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
 
   @@index([userId, purpose])
   @@map("otp_codes")
@@ -597,49 +602,49 @@ model OtpCode {
 // ============================================================
 
 model KycApplication {
-  id                String            @id @default(uuid()) @db.Uuid
-  userId            String            @db.Uuid
-  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String             @id @default(uuid()) @db.Uuid
+  userId           String             @db.Uuid
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Broker ownership stamped at submission from the user's broker
   /// relationship (never client-supplied).
-  brokerId          String?           @db.Uuid
-  broker            Broker?           @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  status            KycStatus         @default(PENDING)
-  nationalIdNumber  String?
-  dateOfBirth       DateTime?
-  addressLine1      String?
-  addressLine2      String?
-  city              String?
-  district          String?
-  submittedAt       DateTime          @default(now())
-  reviewedAt        DateTime?
-  reviewedById      String?           @db.Uuid
-  reviewedBy        User?             @relation("KycReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  reviewDecision    KycReviewDecision?
-  rejectionReason   String?
-  ocrExtractedData  Json?
-  facialMatchScore  Decimal?          @db.Decimal(5, 4)
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  brokerId         String?            @db.Uuid
+  broker           Broker?            @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  status           KycStatus          @default(PENDING)
+  nationalIdNumber String?
+  dateOfBirth      DateTime?
+  addressLine1     String?
+  addressLine2     String?
+  city             String?
+  district         String?
+  submittedAt      DateTime           @default(now())
+  reviewedAt       DateTime?
+  reviewedById     String?            @db.Uuid
+  reviewedBy       User?              @relation("KycReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewDecision   KycReviewDecision?
+  rejectionReason  String?
+  ocrExtractedData Json?
+  facialMatchScore Decimal?           @db.Decimal(5, 4)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   // ── New fields required by the Kusata broker dashboard API contract ──
   /// KYC tier requested: TIER_1 or TIER_2
-  tier              String?
+  tier               String?
   /// Anti-spoofing / liveness score (0–1). Stored here after face pipeline.
-  livenessScore     Decimal?          @db.Decimal(5, 4)
+  livenessScore      Decimal? @db.Decimal(5, 4)
   /// Machine-readable risk flag codes raised by automated checks (string[]).
-  riskFlags         Json?
+  riskFlags          Json?
   /// Display name of the admin who last reviewed the application (denormalised).
-  reviewerName      String?
+  reviewerName       String?
   /// Internal reviewer notes not shown to the applicant.
-  reviewNotes       String?
+  reviewNotes        String?
   /// Document slot codes the applicant must resubmit (string[]).
-  requiredDocuments Json?
+  requiredDocuments  Json?
   /// Optional message shown to the applicant when docs are requested.
   requestDocsMessage String?
 
-  documents         KycDocument[]
-  faceEmbeddings    FaceEmbedding[]
+  documents      KycDocument[]
+  faceEmbeddings FaceEmbedding[]
 
   @@index([userId])
   @@index([status])
@@ -697,28 +702,28 @@ model FaceEmbedding {
 // ============================================================
 
 model Wallet {
-  id            String   @id @default(uuid()) @db.Uuid
-  userId        String   @unique @db.Uuid
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                   String   @id @default(uuid()) @db.Uuid
+  userId               String   @unique @db.Uuid
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Broker ownership — mirrors user.brokerId; stamped when the wallet
   /// is created or when the investor's broker relationship is set.
-  brokerId      String?  @db.Uuid
-  broker        Broker?  @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  brokerId             String?  @db.Uuid
+  broker               Broker?  @relation(fields: [brokerId], references: [id], onDelete: SetNull)
   /// Denormalized running balance for fast reads. Always derived from
   /// — and reconciled nightly against — the sum of `LedgerEntry` rows
   /// for this wallet's `USER_WALLET` account; never the sole source of
   /// truth. Every mutation happens inside the same DB transaction as
   /// the ledger insert that justifies it (see
   /// `FINANCIAL_TRANSACTION_OPTIONS`, `infrastructure/database`).
-  balance       Decimal  @default(0) @db.Decimal(18, 4)
-  currency      String   @default("MWK")
-  isFrozen      Boolean  @default(false)
-  frozenReason  String?
-  dailyDepositLimit    Decimal @default(5000000) @db.Decimal(18, 4)
-  dailyWithdrawalLimit Decimal @default(2000000) @db.Decimal(18, 4)
-  version       Int      @default(0) // optimistic-lock guard alongside pessimistic row locks
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  balance              Decimal  @default(0) @db.Decimal(18, 4)
+  currency             String   @default("MWK")
+  isFrozen             Boolean  @default(false)
+  frozenReason         String?
+  dailyDepositLimit    Decimal  @default(5000000) @db.Decimal(18, 4)
+  dailyWithdrawalLimit Decimal  @default(2000000) @db.Decimal(18, 4)
+  version              Int      @default(0) // optimistic-lock guard alongside pessimistic row locks
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   transactions  Transaction[]
   ledgerEntries LedgerEntry[]
@@ -731,18 +736,18 @@ model Wallet {
 /// Fund reservation — holds cash for a pending order.
 /// Status: ACTIVE → CONSUMED (order filled) | RELEASED (cancelled/expired)
 model WalletReservation {
-  id          String            @id @default(uuid()) @db.Uuid
-  walletId    String            @db.Uuid
-  wallet      Wallet            @relation(fields: [walletId], references: [id])
-  orderId     String?           @db.Uuid
-  amount      Decimal           @db.Decimal(18, 4)
-  currency    String            @default("MWK")
-  status      ReservationStatus @default(ACTIVE)
-  reason      String?
-  expiresAt   DateTime?
-  releasedAt  DateTime?
-  consumedAt  DateTime?
-  createdAt   DateTime          @default(now())
+  id         String            @id @default(uuid()) @db.Uuid
+  walletId   String            @db.Uuid
+  wallet     Wallet            @relation(fields: [walletId], references: [id])
+  orderId    String?           @db.Uuid
+  amount     Decimal           @db.Decimal(18, 4)
+  currency   String            @default("MWK")
+  status     ReservationStatus @default(ACTIVE)
+  reason     String?
+  expiresAt  DateTime?
+  releasedAt DateTime?
+  consumedAt DateTime?
+  createdAt  DateTime          @default(now())
 
   @@index([walletId])
   @@index([walletId, status])
@@ -770,33 +775,33 @@ model WalletSnapshot {
 /// `Transaction` is backed by exactly two or more balanced
 /// `LedgerEntry` rows (double-entry).
 model Transaction {
-  id              String            @id @default(uuid()) @db.Uuid
-  walletId        String            @db.Uuid
-  wallet          Wallet            @relation(fields: [walletId], references: [id])
+  id               String            @id @default(uuid()) @db.Uuid
+  walletId         String            @db.Uuid
+  wallet           Wallet            @relation(fields: [walletId], references: [id])
   /// Broker ownership stamped at creation from the wallet owner's broker
   /// relationship — a Broker A deposit can never surface under Broker B.
-  brokerId        String?           @db.Uuid
-  broker          Broker?           @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  type            TransactionType
-  status          TransactionStatus @default(PENDING)
-  amount          Decimal           @db.Decimal(18, 4)
-  currency        String            @default("MWK")
+  brokerId         String?           @db.Uuid
+  broker           Broker?           @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  type             TransactionType
+  status           TransactionStatus @default(PENDING)
+  amount           Decimal           @db.Decimal(18, 4)
+  currency         String            @default("MWK")
   /// Client-supplied Idempotency-Key — unique per wallet so retried
   /// requests (network timeout + client retry) never double-process.
-  idempotencyKey  String?
-  reference       String            @unique @default(uuid())
-  relatedOrderId  String?           @db.Uuid
-  relatedPaymentId String?          @db.Uuid
-  description     String?
+  idempotencyKey   String?
+  reference        String            @unique @default(uuid())
+  relatedOrderId   String?           @db.Uuid
+  relatedPaymentId String?           @db.Uuid
+  description      String?
   /// Structured metadata for this transaction, e.g.
   /// { purpose: "BUY_SHARES", stockSymbol: "NBM", quantity: 10 }
-  metadata        Json?
-  failureReason   String?
-  processedAt     DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  metadata         Json?
+  failureReason    String?
+  processedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
-  ledgerEntries   LedgerEntry[]
+  ledgerEntries LedgerEntry[]
 
   @@unique([walletId, idempotencyKey])
   @@index([walletId])
@@ -832,18 +837,18 @@ model LedgerEntry {
 }
 
 model LinkedBank {
-  id            String   @id @default(uuid()) @db.Uuid
-  userId        String   @db.Uuid
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bankName      String
-  accountName   String
-  accountNumberMasked String
+  id                     String    @id @default(uuid()) @db.Uuid
+  userId                 String    @db.Uuid
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankName               String
+  accountName            String
+  accountNumberMasked    String
   accountNumberEncrypted String
-  isVerified    Boolean  @default(false)
-  isPrimary     Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  deletedAt     DateTime?
+  isVerified             Boolean   @default(false)
+  isPrimary              Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  deletedAt              DateTime?
 
   @@index([userId])
   @@map("linked_banks")
@@ -880,21 +885,21 @@ model SavedCard {
 // ============================================================
 
 model Stock {
-  id              String   @id @default(uuid()) @db.Uuid
-  symbol          String   @unique
-  name            String
-  sector          String
-  description     String?
-  logoKey         String?
-  listedShares    BigInt?
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String   @id @default(uuid()) @db.Uuid
+  symbol       String   @unique
+  name         String
+  sector       String
+  description  String?
+  logoKey      String?
+  listedShares BigInt?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  prices          StockPrice[]
-  dividends       Dividend[]
-  orders          Order[]
-  holdings        Holding[]
+  prices           StockPrice[]
+  dividends        Dividend[]
+  orders           Order[]
+  holdings         Holding[]
   corporateActions CorporateAction[]
   watchlistEntries WatchlistEntry[]
 
@@ -921,19 +926,19 @@ model WatchlistEntry {
 /// Market Sync). `(stockId, tradedAt)` uniqueness makes daily-sync
 /// upserts idempotent regardless of how many times a sync job re-runs.
 model StockPrice {
-  id           String   @id @default(uuid()) @db.Uuid
-  stockId      String   @db.Uuid
-  stock        Stock    @relation(fields: [stockId], references: [id])
-  openPrice    Decimal  @db.Decimal(18, 4)
-  highPrice    Decimal  @db.Decimal(18, 4)
-  lowPrice     Decimal  @db.Decimal(18, 4)
-  closePrice   Decimal  @db.Decimal(18, 4)
-  volume       BigInt   @default(0)
-  turnover     Decimal? @db.Decimal(24, 4)
-  changePct    Decimal? @db.Decimal(8, 4)
-  tradedAt     DateTime @db.Date
-  source       String   @default("mse")
-  createdAt    DateTime @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  stockId    String   @db.Uuid
+  stock      Stock    @relation(fields: [stockId], references: [id])
+  openPrice  Decimal  @db.Decimal(18, 4)
+  highPrice  Decimal  @db.Decimal(18, 4)
+  lowPrice   Decimal  @db.Decimal(18, 4)
+  closePrice Decimal  @db.Decimal(18, 4)
+  volume     BigInt   @default(0)
+  turnover   Decimal? @db.Decimal(24, 4)
+  changePct  Decimal? @db.Decimal(8, 4)
+  tradedAt   DateTime @db.Date
+  source     String   @default("mse")
+  createdAt  DateTime @default(now())
 
   @@unique([stockId, tradedAt])
   @@index([stockId, tradedAt])
@@ -956,40 +961,40 @@ model MarketCalendar {
 // ============================================================
 
 model Order {
-  id              String      @id @default(uuid()) @db.Uuid
-  userId          String      @db.Uuid
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String      @id @default(uuid()) @db.Uuid
+  userId           String      @db.Uuid
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Broker ownership stamped at order creation from the investor's
   /// broker relationship (server-derived, never client-supplied).
-  brokerId        String?     @db.Uuid
-  broker          Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  stockId         String      @db.Uuid
-  stock           Stock       @relation(fields: [stockId], references: [id])
-  side            OrderSide
-  type            OrderType
-  status          OrderStatus @default(DRAFT)
-  quantity        Decimal     @db.Decimal(18, 4)
-  filledQuantity  Decimal     @default(0) @db.Decimal(18, 4)
-  limitPrice      Decimal?    @db.Decimal(18, 4)
-  averageFillPrice Decimal?   @db.Decimal(18, 4)
-  totalFees       Decimal     @default(0) @db.Decimal(18, 4)
-  totalCost       Decimal     @default(0) @db.Decimal(18, 4)
-  idempotencyKey  String?
-  rejectionReason String?
-  brokerRef       String?
-  validatedAt     DateTime?
-  submittedAt     DateTime?
-  acceptedAt      DateTime?
-  filledAt        DateTime?
-  settledAt       DateTime?
-  cancelledAt     DateTime?
-  expiresAt       DateTime?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  brokerId         String?     @db.Uuid
+  broker           Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  stockId          String      @db.Uuid
+  stock            Stock       @relation(fields: [stockId], references: [id])
+  side             OrderSide
+  type             OrderType
+  status           OrderStatus @default(DRAFT)
+  quantity         Decimal     @db.Decimal(18, 4)
+  filledQuantity   Decimal     @default(0) @db.Decimal(18, 4)
+  limitPrice       Decimal?    @db.Decimal(18, 4)
+  averageFillPrice Decimal?    @db.Decimal(18, 4)
+  totalFees        Decimal     @default(0) @db.Decimal(18, 4)
+  totalCost        Decimal     @default(0) @db.Decimal(18, 4)
+  idempotencyKey   String?
+  rejectionReason  String?
+  brokerRef        String?
+  validatedAt      DateTime?
+  submittedAt      DateTime?
+  acceptedAt       DateTime?
+  filledAt         DateTime?
+  settledAt        DateTime?
+  cancelledAt      DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  trades          Trade[]
-  executions      OrderExecution[]
-  audits          TradeAudit[]
+  trades     Trade[]
+  executions OrderExecution[]
+  audits     TradeAudit[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId])
@@ -1001,24 +1006,24 @@ model Order {
 }
 
 model Trade {
-  id           String   @id @default(uuid()) @db.Uuid
-  orderId      String   @db.Uuid
-  order        Order    @relation(fields: [orderId], references: [id])
-  quantity     Decimal  @db.Decimal(18, 4)
-  price        Decimal  @db.Decimal(18, 4)
-  fee          Decimal  @default(0) @db.Decimal(18, 4)
+  id          String    @id @default(uuid()) @db.Uuid
+  orderId     String    @db.Uuid
+  order       Order     @relation(fields: [orderId], references: [id])
+  quantity    Decimal   @db.Decimal(18, 4)
+  price       Decimal   @db.Decimal(18, 4)
+  fee         Decimal   @default(0) @db.Decimal(18, 4)
   /// Broker-revenue component of  (tiered commission).
-  commission   Decimal  @default(0) @db.Decimal(18, 4)
+  commission  Decimal   @default(0) @db.Decimal(18, 4)
   /// Statutory component of  (SEC + MSE levies) — not broker revenue.
-  levies       Decimal  @default(0) @db.Decimal(18, 4)
+  levies      Decimal   @default(0) @db.Decimal(18, 4)
   /// Pine's platform commission on this trade: a percentage of the BROKER's
   /// commission, frozen at execution under the platform rate in force then.
   /// The broker owes Pine the sum of these — settled monthly.
-  platformFee  Decimal  @default(0) @db.Decimal(18, 4)
-  settledAt    DateTime?
-  createdAt    DateTime @default(now())
+  platformFee Decimal   @default(0) @db.Decimal(18, 4)
+  settledAt   DateTime?
+  createdAt   DateTime  @default(now())
 
-  settlement   SettlementRecord?
+  settlement SettlementRecord?
 
   @@index([orderId])
   @@map("trades")
@@ -1027,15 +1032,15 @@ model Trade {
 /// Records each partial or full execution against an order.
 /// Multiple executions can exist for a single order (partial fills).
 model OrderExecution {
-  id            String   @id @default(uuid()) @db.Uuid
-  orderId       String   @db.Uuid
-  order         Order    @relation(fields: [orderId], references: [id])
-  quantity      Decimal  @db.Decimal(18, 4)
-  price         Decimal  @db.Decimal(18, 4)
-  fee           Decimal  @default(0) @db.Decimal(18, 4)
-  brokerRef     String?
-  executedAt    DateTime @default(now())
-  createdAt     DateTime @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  order      Order    @relation(fields: [orderId], references: [id])
+  quantity   Decimal  @db.Decimal(18, 4)
+  price      Decimal  @db.Decimal(18, 4)
+  fee        Decimal  @default(0) @db.Decimal(18, 4)
+  brokerRef  String?
+  executedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 
   @@index([orderId])
   @@map("order_executions")
@@ -1061,16 +1066,16 @@ model SettlementRecord {
 /// Immutable audit trail for every order state transition. Used for
 /// compliance reporting and dispute resolution.
 model TradeAudit {
-  id          String   @id @default(uuid()) @db.Uuid
-  orderId     String   @db.Uuid
-  order       Order    @relation(fields: [orderId], references: [id])
-  userId      String   @db.Uuid
-  action      String
-  fromStatus  String?
-  toStatus    String?
-  metadata    Json?
-  ipAddress   String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  order      Order    @relation(fields: [orderId], references: [id])
+  userId     String   @db.Uuid
+  action     String
+  fromStatus String?
+  toStatus   String?
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
 
   @@index([orderId])
   @@index([userId])
@@ -1081,29 +1086,29 @@ model TradeAudit {
 /// Tracks daily MSE trading sessions — opened/closed times,
 /// used by MarketService to determine if trading is active.
 model TradingSession {
-  id         String       @id @default(uuid()) @db.Uuid
-  date       DateTime     @unique @db.Date
-  status     MarketStatus
-  openedAt   DateTime?
-  closedAt   DateTime?
-  createdAt  DateTime     @default(now())
+  id        String       @id @default(uuid()) @db.Uuid
+  date      DateTime     @unique @db.Date
+  status    MarketStatus
+  openedAt  DateTime?
+  closedAt  DateTime?
+  createdAt DateTime     @default(now())
 
   @@map("trading_sessions")
 }
 
 model Holding {
-  id               String   @id @default(uuid()) @db.Uuid
-  userId           String   @db.Uuid
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Broker ownership — stamped at settlement from the order's broker.
-  brokerId         String?  @db.Uuid
-  broker           Broker?  @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  stockId          String   @db.Uuid
-  stock            Stock    @relation(fields: [stockId], references: [id])
-  quantity         Decimal  @default(0) @db.Decimal(18, 4)
-  averageCost      Decimal  @default(0) @db.Decimal(18, 4)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  brokerId    String?  @db.Uuid
+  broker      Broker?  @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  stockId     String   @db.Uuid
+  stock       Stock    @relation(fields: [stockId], references: [id])
+  quantity    Decimal  @default(0) @db.Decimal(18, 4)
+  averageCost Decimal  @default(0) @db.Decimal(18, 4)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([userId, stockId])
   @@index([userId])
@@ -1137,20 +1142,20 @@ model PortfolioSnapshot {
 /// Pre-calculated performance metrics per user per day.
 /// Materialized projection — can be rebuilt from ledger + market data.
 model PortfolioPerformance {
-  id              String   @id @default(uuid()) @db.Uuid
-  userId          String   @db.Uuid
-  date            DateTime @db.Date
-  dailyReturn     Decimal  @default(0) @db.Decimal(18, 4)
-  dailyReturnPct  Decimal  @default(0) @db.Decimal(10, 4)
-  weeklyReturn    Decimal  @default(0) @db.Decimal(18, 4)
-  weeklyReturnPct Decimal  @default(0) @db.Decimal(10, 4)
-  monthlyReturn   Decimal  @default(0) @db.Decimal(18, 4)
-  monthlyReturnPct Decimal @default(0) @db.Decimal(10, 4)
-  yearlyReturn    Decimal  @default(0) @db.Decimal(18, 4)
-  yearlyReturnPct Decimal  @default(0) @db.Decimal(10, 4)
-  lifetimeReturn  Decimal  @default(0) @db.Decimal(18, 4)
-  lifetimeReturnPct Decimal @default(0) @db.Decimal(10, 4)
-  createdAt       DateTime @default(now())
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @db.Uuid
+  date              DateTime @db.Date
+  dailyReturn       Decimal  @default(0) @db.Decimal(18, 4)
+  dailyReturnPct    Decimal  @default(0) @db.Decimal(10, 4)
+  weeklyReturn      Decimal  @default(0) @db.Decimal(18, 4)
+  weeklyReturnPct   Decimal  @default(0) @db.Decimal(10, 4)
+  monthlyReturn     Decimal  @default(0) @db.Decimal(18, 4)
+  monthlyReturnPct  Decimal  @default(0) @db.Decimal(10, 4)
+  yearlyReturn      Decimal  @default(0) @db.Decimal(18, 4)
+  yearlyReturnPct   Decimal  @default(0) @db.Decimal(10, 4)
+  lifetimeReturn    Decimal  @default(0) @db.Decimal(18, 4)
+  lifetimeReturnPct Decimal  @default(0) @db.Decimal(10, 4)
+  createdAt         DateTime @default(now())
 
   @@unique([userId, date])
   @@index([userId, date])
@@ -1160,36 +1165,37 @@ model PortfolioPerformance {
 /// Asset allocation breakdown per user — stored as a snapshot so
 /// allocation pie charts load instantly without recomputation.
 model PortfolioAllocation {
-  id              String   @id @default(uuid()) @db.Uuid
-  userId          String   @db.Uuid
-  date            DateTime @db.Date
-  assetType       String   // 'STOCK', 'CASH', 'BOND', etc.
-  sector          String?  // stock sector when assetType = 'STOCK'
-  symbol          String?  // stock symbol when applicable
-  value           Decimal  @db.Decimal(18, 4)
-  percentage      Decimal  @db.Decimal(10, 4)
-  createdAt       DateTime @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  date       DateTime @db.Date
+  assetType  String // 'STOCK', 'CASH', 'BOND', etc.
+  sector     String? // stock sector when assetType = 'STOCK'
+  symbol     String? // stock symbol when applicable
+  value      Decimal  @db.Decimal(18, 4)
+  percentage Decimal  @db.Decimal(10, 4)
+  createdAt  DateTime @default(now())
 
   @@index([userId, date])
   @@map("portfolio_allocations")
 }
+
 // Corporate Actions
 // ============================================================
 
 /// Parent model for all corporate actions. Every action type
 /// (dividend, split, bonus, rights) references this.
 model CorporateAction {
-  id          String                @id @default(uuid()) @db.Uuid
-  stockId     String                @db.Uuid
-  stock       Stock                 @relation(fields: [stockId], references: [id])
-  type        CorporateActionType
-  title       String
-  description String?
-  status      CorporateActionStatus @default(ANNOUNCED)
-  effectiveDate DateTime            @db.Date
-  processedAt DateTime?
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
+  id            String                @id @default(uuid()) @db.Uuid
+  stockId       String                @db.Uuid
+  stock         Stock                 @relation(fields: [stockId], references: [id])
+  type          CorporateActionType
+  title         String
+  description   String?
+  status        CorporateActionStatus @default(ANNOUNCED)
+  effectiveDate DateTime              @db.Date
+  processedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
 
   dividend    Dividend?
   stockSplit  StockSplit?
@@ -1204,21 +1210,21 @@ model CorporateAction {
 }
 
 model Dividend {
-  id                String         @id @default(uuid()) @db.Uuid
-  corporateActionId String         @unique @db.Uuid
+  id                String          @id @default(uuid()) @db.Uuid
+  corporateActionId String          @unique @db.Uuid
   corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
-  stockId           String         @db.Uuid
-  stock             Stock          @relation(fields: [stockId], references: [id])
-  amountPerShare    Decimal        @db.Decimal(18, 4)
-  withholdingTaxPct Decimal        @default(0) @db.Decimal(5, 2) // e.g., 10.00%
-  exDividendDate    DateTime       @db.Date
-  recordDate        DateTime       @db.Date
-  paymentDate       DateTime       @db.Date
-  status            DividendStatus @default(ANNOUNCED)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  stockId           String          @db.Uuid
+  stock             Stock           @relation(fields: [stockId], references: [id])
+  amountPerShare    Decimal         @db.Decimal(18, 4)
+  withholdingTaxPct Decimal         @default(0) @db.Decimal(5, 2) // e.g., 10.00%
+  exDividendDate    DateTime        @db.Date
+  recordDate        DateTime        @db.Date
+  paymentDate       DateTime        @db.Date
+  status            DividendStatus  @default(ANNOUNCED)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  distributions     DividendDistribution[]
+  distributions DividendDistribution[]
 
   @@index([stockId])
   @@index([paymentDate])
@@ -1249,8 +1255,8 @@ model StockSplit {
   corporateActionId String          @unique @db.Uuid
   corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
   stockId           String          @db.Uuid
-  ratioFrom         Int             // e.g., 1 (in 1-for-2)
-  ratioTo           Int             // e.g., 2 (in 1-for-2)
+  ratioFrom         Int // e.g., 1 (in 1-for-2)
+  ratioTo           Int // e.g., 2 (in 1-for-2)
   effectiveDate     DateTime        @db.Date
   createdAt         DateTime        @default(now())
 
@@ -1263,8 +1269,8 @@ model BonusIssue {
   corporateActionId String          @unique @db.Uuid
   corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
   stockId           String          @db.Uuid
-  ratioFrom         Int             // e.g., 10 (for every 10 shares)
-  ratioTo           Int             // e.g., 1  (get 1 bonus share)
+  ratioFrom         Int // e.g., 10 (for every 10 shares)
+  ratioTo           Int // e.g., 1  (get 1 bonus share)
   recordDate        DateTime        @db.Date
   effectiveDate     DateTime        @db.Date
   createdAt         DateTime        @default(now())
@@ -1278,8 +1284,8 @@ model RightsIssue {
   corporateActionId String          @unique @db.Uuid
   corporateAction   CorporateAction @relation(fields: [corporateActionId], references: [id])
   stockId           String          @db.Uuid
-  ratioFrom         Int             // For every N shares
-  ratioTo           Int             // Get M rights
+  ratioFrom         Int // For every N shares
+  ratioTo           Int // Get M rights
   subscriptionPrice Decimal         @db.Decimal(18, 4)
   openDate          DateTime        @db.Date
   closeDate         DateTime        @db.Date
@@ -1294,37 +1300,38 @@ model RightsIssue {
 // ============================================================
 
 model NotificationTemplate {
-  id        String   @id @default(uuid()) @db.Uuid
-  key       String   @unique
+  id        String              @id @default(uuid()) @db.Uuid
+  key       String              @unique
   channel   NotificationChannel
   subject   String?
   body      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
 
   @@map("notification_templates")
 }
 
 model Notification {
-  id              String              @id @default(uuid()) @db.Uuid
-  userId          String              @db.Uuid
-  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  channel         NotificationChannel
-  templateKey     String?
-  type            String              @default("INFORMATIONAL") // CRITICAL, IMPORTANT, INFORMATIONAL, PROMOTIONAL
-  priority        Int                 @default(2)               // 0=critical, 1=important, 2=info, 3=promo
-  category        String              @default("SYSTEM")        // SECURITY, TRADING, PORTFOLIO, WALLET, KYC, MARKET, SYSTEM, MARKETING
-  title           String
-  body            String
-  data            Json?
-  status          NotificationStatus  @default(QUEUED)
-  readAt          DateTime?
-  sentAt          DateTime?
-  failureReason   String?
-  retryCount      Int                 @default(0)
-  createdAt       DateTime            @default(now())
+  id            String              @id @default(uuid()) @db.Uuid
+  userId        String              @db.Uuid
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel       NotificationChannel
+  templateKey   String?
+  type          String              @default("INFORMATIONAL") // CRITICAL, IMPORTANT, INFORMATIONAL, PROMOTIONAL
+  priority      Int                 @default(2) // 0=critical, 1=important, 2=info, 3=promo
+  category      String              @default("SYSTEM") // SECURITY, TRADING, PORTFOLIO, WALLET, KYC, MARKET, SYSTEM, MARKETING
+  title         String
+  body          String
+  data          Json?
+  status        NotificationStatus  @default(QUEUED)
+  readAt        DateTime?
+  sentAt        DateTime?
+  failureReason String?
+  retryCount    Int                 @default(0)
+  createdAt     DateTime            @default(now())
 
-  deliveries      NotificationDelivery[]
+  deliveries NotificationDelivery[]
+  pointsOpen NotificationOpen?
 
   @@index([userId])
   @@index([userId, readAt])
@@ -1336,15 +1343,15 @@ model Notification {
 /// Per-user notification preferences. Each row maps a notification
 /// category (e.g. TRADING) to the channels the user wants to receive.
 model NotificationPreference {
-  id          String   @id @default(uuid()) @db.Uuid
-  userId      String   @db.Uuid
-  category    String   // SECURITY, TRADING, PORTFOLIO, WALLET, KYC, MARKET, SYSTEM, MARKETING
-  pushEnabled Boolean  @default(true)
-  emailEnabled Boolean @default(true)
-  smsEnabled  Boolean  @default(false)
-  inAppEnabled Boolean @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  category     String // SECURITY, TRADING, PORTFOLIO, WALLET, KYC, MARKET, SYSTEM, MARKETING
+  pushEnabled  Boolean  @default(true)
+  emailEnabled Boolean  @default(true)
+  smsEnabled   Boolean  @default(false)
+  inAppEnabled Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@unique([userId, category])
   @@index([userId])
@@ -1353,18 +1360,18 @@ model NotificationPreference {
 
 /// Tracks every delivery attempt for audit and retry logic.
 model NotificationDelivery {
-  id              String              @id @default(uuid()) @db.Uuid
-  notificationId  String              @db.Uuid
-  notification    Notification        @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  channel         NotificationChannel
-  provider        String              // 'firebase', 'smtp', 'sms_provider'
-  status          NotificationStatus  @default(QUEUED)
-  attemptCount    Int                 @default(0)
-  sentAt          DateTime?
-  deliveredAt     DateTime?
-  failureReason   String?
-  providerMsgId   String?
-  createdAt       DateTime            @default(now())
+  id             String              @id @default(uuid()) @db.Uuid
+  notificationId String              @db.Uuid
+  notification   Notification        @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  channel        NotificationChannel
+  provider       String // 'firebase', 'smtp', 'sms_provider'
+  status         NotificationStatus  @default(QUEUED)
+  attemptCount   Int                 @default(0)
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  failureReason  String?
+  providerMsgId  String?
+  createdAt      DateTime            @default(now())
 
   @@index([notificationId])
   @@index([status])
@@ -1376,25 +1383,25 @@ model NotificationDelivery {
 // ============================================================
 
 model Payment {
-  id               String        @id @default(uuid()) @db.Uuid
-  userId           String        @db.Uuid
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                String          @id @default(uuid()) @db.Uuid
+  userId            String          @db.Uuid
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Broker ownership stamped at initiation from the payer's broker.
-  brokerId         String?       @db.Uuid
-  broker           Broker?       @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  provider         PaymentProvider
-  status           PaymentStatus @default(INITIATED)
-  amount           Decimal       @db.Decimal(18, 4)
-  currency         String        @default("MWK")
-  providerReference String?      @unique
-  idempotencyKey   String?
-  failureReason    String?
-  initiatedAt      DateTime      @default(now())
-  completedAt      DateTime?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  brokerId          String?         @db.Uuid
+  broker            Broker?         @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  provider          PaymentProvider
+  status            PaymentStatus   @default(INITIATED)
+  amount            Decimal         @db.Decimal(18, 4)
+  currency          String          @default("MWK")
+  providerReference String?         @unique
+  idempotencyKey    String?
+  failureReason     String?
+  initiatedAt       DateTime        @default(now())
+  completedAt       DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  webhookEvents    WebhookEvent[]
+  webhookEvents WebhookEvent[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId])
@@ -1465,26 +1472,26 @@ enum TreasuryInvestmentStatus {
 
 /// A T-bill (or similar government security) product available for investment.
 model TreasuryProduct {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String    @id @default(uuid()) @db.Uuid
   label        String
   tenorDays    Int
-  yieldPercent Decimal  @db.Decimal(8, 4)
-  minAmount    Decimal  @db.Decimal(18, 4)
-  maxAmount    Decimal? @db.Decimal(18, 4)
-  currency     String   @default("MWK")
+  yieldPercent Decimal   @db.Decimal(8, 4)
+  minAmount    Decimal   @db.Decimal(18, 4)
+  maxAmount    Decimal?  @db.Decimal(18, 4)
+  currency     String    @default("MWK")
   /// 'Very Low' | 'Low' — displayed on the mobile T-bill card.
-  riskLevel    String   @default("Low")
+  riskLevel    String    @default("Low")
   /// Auction / issue / maturity dates surfaced in the mobile detail screen.
   auctionDate  DateTime? @db.Date
   issueDate    DateTime? @db.Date
   maturityDate DateTime? @db.Date
   /// 'open' | 'closing_soon' | 'closed' — drives the mobile status badge.
-  status       String   @default("open")
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  status       String    @default("open")
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  investments  TreasuryInvestment[]
+  investments TreasuryInvestment[]
 
   @@map("treasury_products")
 }
@@ -1518,16 +1525,16 @@ model TreasuryInvestment {
 /// Admin dashboards read one row per day instead of scanning raw
 /// transactional tables.
 model DailyMetric {
-  id                  String   @id @default(uuid()) @db.Uuid
-  date                DateTime @unique @db.Date
-  dailyActiveUsers    Int      @default(0)
-  newRegistrations    Int      @default(0)
-  totalTrades         Int      @default(0)
-  totalTradeVolume    Decimal  @default(0) @db.Decimal(18, 4)
-  totalDeposits       Decimal  @default(0) @db.Decimal(18, 4)
-  totalWithdrawals    Decimal  @default(0) @db.Decimal(18, 4)
-  platformRevenue     Decimal  @default(0) @db.Decimal(18, 4)
-  createdAt           DateTime @default(now())
+  id               String   @id @default(uuid()) @db.Uuid
+  date             DateTime @unique @db.Date
+  dailyActiveUsers Int      @default(0)
+  newRegistrations Int      @default(0)
+  totalTrades      Int      @default(0)
+  totalTradeVolume Decimal  @default(0) @db.Decimal(18, 4)
+  totalDeposits    Decimal  @default(0) @db.Decimal(18, 4)
+  totalWithdrawals Decimal  @default(0) @db.Decimal(18, 4)
+  platformRevenue  Decimal  @default(0) @db.Decimal(18, 4)
+  createdAt        DateTime @default(now())
 
   @@map("daily_metrics")
 }
@@ -1595,27 +1602,27 @@ enum SupportAuthorType {
 /// A customer support conversation opened from the mobile "Report a problem"
 /// flow. Backed by an append-only thread of SupportMessage rows.
 model SupportTicket {
-  id            String                @id @default(uuid()) @db.Uuid
+  id                   String                @id @default(uuid()) @db.Uuid
   /// Human-friendly reference shown in the app, e.g. "PN-2291".
-  reference     String                @unique
-  userId        String                @db.Uuid
-  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category      SupportTicketCategory  @default(OTHER)
-  subject       String
-  status        SupportTicketStatus    @default(OPEN)
+  reference            String                @unique
+  userId               String                @db.Uuid
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category             SupportTicketCategory @default(OTHER)
+  subject              String
+  status               SupportTicketStatus   @default(OPEN)
   /// Optional wallet Transaction this report relates to (deposit, trade, …).
-  relatedTransactionId String?         @db.Uuid
+  relatedTransactionId String?               @db.Uuid
   /// True when the newest message is from the customer and no staff member has
   /// replied since — drives the dashboard "needs attention" badge.
-  awaitingAdmin Boolean               @default(true)
+  awaitingAdmin        Boolean               @default(true)
   /// True when the newest message is from staff/system and the customer has not
   /// opened the thread since — drives the mobile "unread" dot.
-  awaitingUser  Boolean               @default(false)
-  lastMessageAt DateTime              @default(now())
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
+  awaitingUser         Boolean               @default(false)
+  lastMessageAt        DateTime              @default(now())
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
-  messages      SupportMessage[]
+  messages SupportMessage[]
 
   @@index([userId])
   @@index([status])
@@ -1683,24 +1690,24 @@ enum ErrorStatus {
 /// or the backend itself), surfaced in the admin System Errors console so
 /// issues are visible before users report them.
 model SystemErrorEvent {
-  id          String        @id @default(uuid()) @db.Uuid
-  source      ErrorSource
-  severity    ErrorSeverity
-  status      ErrorStatus   @default(OPEN)
-  message     String
-  stack       String?
+  id           String        @id @default(uuid()) @db.Uuid
+  source       ErrorSource
+  severity     ErrorSeverity
+  status       ErrorStatus   @default(OPEN)
+  message      String
+  stack        String?
   /// Where it happened: a route, screen name, or endpoint path.
-  location    String?
+  location     String?
   /// Free-form structured context (device, app version, request id, ...).
-  context     Json?
+  context      Json?
   /// The signed-in user at the time, if any.
-  userId      String?       @db.Uuid
+  userId       String?       @db.Uuid
   /// Same error signature seen again → count bumps instead of a new row.
-  occurrences Int           @default(1)
-  firstSeenAt DateTime      @default(now())
-  lastSeenAt  DateTime      @default(now())
-  resolvedAt  DateTime?
-  resolvedById String?      @db.Uuid
+  occurrences  Int           @default(1)
+  firstSeenAt  DateTime      @default(now())
+  lastSeenAt   DateTime      @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?       @db.Uuid
 
   @@index([source])
   @@index([severity])
@@ -1721,33 +1728,33 @@ enum FeeKind {
 /// default commission tier). Deposit fees are PAYMENT COSTS (owed to the
 /// bank/provider); trading commissions are BROKER REVENUE — never mixed.
 model BrokerFeeConfig {
-  id                    String   @id @default(uuid()) @db.Uuid
-  brokerId              String   @unique @db.Uuid
-  broker                Broker   @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid()) @db.Uuid
+  brokerId String @unique @db.Uuid
+  broker   Broker @relation(fields: [brokerId], references: [id], onDelete: Cascade)
 
-  depositFeeEnabled     Boolean  @default(false)
-  depositFeeKind        FeeKind  @default(PERCENT)
+  depositFeeEnabled     Boolean @default(false)
+  depositFeeKind        FeeKind @default(PERCENT)
   /// PERCENT: rate in percent (e.g. 2 = 2%). FIXED: flat MWK amount.
-  depositFeeValue       Decimal  @default(0) @db.Decimal(18, 4)
+  depositFeeValue       Decimal @default(0) @db.Decimal(18, 4)
   depositFeeDescription String?
 
-  commissionEnabled     Boolean  @default(true)
+  commissionEnabled Boolean @default(true)
   /// Ordered tiers: [{ "minAmount": 0, "maxAmount": 100000|null, "ratePct": 1.7, "minFee": 500 }]
   /// maxAmount null = open-ended top tier. Statutory levies below are applied
   /// separately and are never broker revenue.
-  commissionTiers       Json?
+  commissionTiers   Json?
 
   /// Statutory levies, in percent of gross trade value. Set by the regulator,
   /// not the broker's own pricing — but they DO change (and differ by market),
   /// so they are configured here rather than compiled in. Defaults are the
   /// MSE rates in force at launch: SEC 0.10%, MSE 0.10%, withholding 0%.
-  secLevyPct            Decimal  @default(0.1) @db.Decimal(9, 4)
-  mseLevyPct            Decimal  @default(0.1) @db.Decimal(9, 4)
+  secLevyPct        Decimal @default(0.1) @db.Decimal(9, 4)
+  mseLevyPct        Decimal @default(0.1) @db.Decimal(9, 4)
   /// Applied to SELL orders only (capital gains).
-  withholdingTaxPct     Decimal  @default(0) @db.Decimal(9, 4)
+  withholdingTaxPct Decimal @default(0) @db.Decimal(9, 4)
 
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("broker_fee_configs")
 }
@@ -1770,7 +1777,7 @@ model BrokerRiskConfig {
   ///    velocityMaxCount?, velocityWindowMinutes? }]
   /// Where several rules (or the system-wide wallet limit) apply, the MOST
   /// RESTRICTIVE bound wins.
-  depositRules         Json?
+  depositRules Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1794,4 +1801,143 @@ model PlatformConfig {
   createdAt             DateTime @default(now())
 
   @@map("platform_config")
+}
+
+// ============================================================================
+// Points / Gamification  (practice instances only — see POINTS_ENABLED)
+// ============================================================================
+
+/// One run of the Pine Points competition. The window is operational data,
+/// not a constant, so "has it closed?" is a query rather than a redeploy and
+/// a second season can start without touching code.
+model CompetitionSeason {
+  id        String    @id @default(uuid()) @db.Uuid
+  /// Shown in the dashboard, e.g. "Pine Points Season 1".
+  name      String
+  /// Stable handle the app may pin to, e.g. "season-1".
+  slug      String    @unique
+  startsAt  DateTime
+  endsAt    DateTime
+  /// Set once prizes are settled. Freezes the board and blocks new awards.
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  events   PointEvent[]
+  balances PointBalance[]
+  streaks  PointStreak[]
+
+  @@index([startsAt, endsAt])
+  @@map("competition_seasons")
+}
+
+/// Append-only points ledger. A balance is always SUM(points), which is what
+/// makes the nightly reconciliation meaningful.
+model PointEvent {
+  id        String            @id @default(uuid()) @db.Uuid
+  userId    String            @db.Uuid
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seasonId  String            @db.Uuid
+  season    CompetitionSeason @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  /// A RuleKey from domain/rule-catalogue.ts. Deliberately a String, not an
+  /// enum, so adding a rule is a code change rather than a migration.
+  ruleKey   String
+  /// Positive for an award; negative only for an audited admin reversal.
+  points    Int
+  /// The Malawi calendar day this award counts against. A DATE, not a
+  /// timestamp, so the daily-cap check is an equality probe on an index and
+  /// the cap rolls over at Blantyre midnight whatever the server's offset.
+  awardedOn DateTime          @db.Date
+  /// Deterministic idempotency key — every format lives in domain/dedupe-keys.ts.
+  dedupeKey String
+  /// Display and forensics: ticker, lesson id, streak day, notification latency.
+  metadata  Json?
+  createdAt DateTime          @default(now())
+
+  @@unique([dedupeKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, ruleKey, awardedOn])
+  @@index([seasonId, ruleKey])
+  @@map("point_events")
+}
+
+/// Materialised balance and rank cache. totalPoints is written in the same
+/// transaction as the event, so it never lags the ledger.
+model PointBalance {
+  id           String            @id @default(uuid()) @db.Uuid
+  userId       String            @db.Uuid
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seasonId     String            @db.Uuid
+  season       CompetitionSeason @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  totalPoints  Int               @default(0)
+  /// When totalPoints last CHANGED. The tie-break: equal points, whoever got
+  /// there first ranks higher. Never touched by a no-op write.
+  lastAwardAt  DateTime?
+  /// Snapshot rank, refreshed on a cron. Display garnish only — the
+  /// authoritative rank is computed live on every read.
+  cachedRank   Int?
+  previousRank Int?
+  cachedAt     DateTime?
+  updatedAt    DateTime          @updatedAt
+
+  @@unique([userId, seasonId])
+  @@index([seasonId, totalPoints(sort: Desc), lastAwardAt])
+  @@map("point_balances")
+}
+
+/// Daily check-in streak. Read on every app open and not cheaply derivable
+/// from the ledger, which would mean walking backwards a day at a time.
+model PointStreak {
+  id            String            @id @default(uuid()) @db.Uuid
+  userId        String            @db.Uuid
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seasonId      String            @db.Uuid
+  season        CompetitionSeason @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  /// Malawi calendar day of the most recent check-in.
+  lastCheckInOn DateTime          @db.Date
+  currentStreak Int               @default(1)
+  /// Best run this season, shown on the earn screen as something to beat.
+  longestStreak Int               @default(1)
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([userId, seasonId])
+  @@map("point_streaks")
+}
+
+/// Server-side lesson progress. Until this existed, progress lived only in
+/// the device's storage, so clearing it re-earned every lesson — and a new
+/// phone lost the course. Both problems end here.
+model LessonCompletion {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Slug from the mobile content pack, e.g. "what-is-a-stock".
+  lessonId    String
+  completedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@map("lesson_completions")
+}
+
+/// Proof that a notification was opened promptly. Rejected claims are stored
+/// too, so we can tell whether the 60-second window is too tight in the field.
+model NotificationOpen {
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationId String       @db.Uuid
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  /// Gap between the server's delivery timestamp and the claim's arrival.
+  /// Both ends are measured here; the device never sends a time.
+  latencyMs      Int
+  awarded        Boolean
+  /// TOO_SLOW | NOT_DELIVERED | CAPPED | DISABLED, when it missed.
+  rejectedReason String?
+  createdAt      DateTime     @default(now())
+
+  @@unique([notificationId])
+  @@index([userId, createdAt])
+  @@map("notification_opens")
 }

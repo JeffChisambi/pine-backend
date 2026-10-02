@@ -32,6 +32,15 @@ export const appConfig = registerAs('app', () => ({
   virtualTrading: process.env.VIRTUAL_TRADING === 'true',
   virtualDepositCap: parseFloat(process.env.VIRTUAL_DEPOSIT_CAP ?? '500000'),
   virtualDepositWindowDays: parseInt(process.env.VIRTUAL_DEPOSIT_WINDOW_DAYS ?? '365', 10),
+  /**
+   * Pine Points leaderboard. Anded with virtualTrading so the dependency is
+   * unforgeable rather than a documented convention: the competition awards
+   * play-money achievements and must never run against the real ledger.
+   */
+  pointsEnabled: process.env.POINTS_ENABLED === 'true' && process.env.VIRTUAL_TRADING === 'true',
+  /** Season window. Blank means "one year from the first boot that needs it". */
+  pointsSeasonStartsAt: process.env.POINTS_SEASON_STARTS_AT || undefined,
+  pointsSeasonEndsAt: process.env.POINTS_SEASON_ENDS_AT || undefined,
   apiPrefix: process.env.API_PREFIX ?? 'v1',
   timezone: process.env.APP_TIMEZONE ?? 'Africa/Blantyre',
   isProduction: process.env.NODE_ENV === 'production',

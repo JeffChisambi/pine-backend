@@ -28,6 +28,7 @@ import { PortfolioModule } from './modules/portfolio/portfolio.module';
 import { DividendsModule } from './modules/dividends/dividends.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { NewsModule } from './modules/news/news.module';
+import { PointsModule } from './modules/points/points.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -74,6 +75,7 @@ import { BrokersModule } from './modules/brokers/brokers.module';
     DividendsModule,
     NotificationsModule,
     NewsModule,
+    PointsModule,
     AdminModule,
     AuditModule,
     AnalyticsModule,
