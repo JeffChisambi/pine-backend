@@ -20,7 +20,7 @@
 export const dedupeKeys = {
   signUp: (userId: string) => `signup:${userId}`,
 
-  profile: (userId: string, field: 'email' | 'phone' | 'avatar', seasonId: string) =>
+  profile: (userId: string, field: 'email', seasonId: string) =>
     `profile:${field}:${userId}:${seasonId}`,
 
   /** Day-keyed: one deposit scores per day, however many are made. */

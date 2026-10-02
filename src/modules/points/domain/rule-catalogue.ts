@@ -58,26 +58,6 @@ export const RULE_CATALOGUE: Readonly<Record<RuleKey, PointRule>> = Object.freez
     icon: 'mail',
     group: 'GETTING_STARTED',
   },
-  PROFILE_PHONE_VERIFIED: {
-    key: 'PROFILE_PHONE_VERIFIED',
-    points: 10,
-    dailyCap: 1,
-    oneTime: true,
-    title: { en: 'Verify your phone number', ny: 'Tsimikizani nambala yanu ya foni' },
-    hint: { en: 'Once, after you confirm your number.', ny: 'Kamodzi, mukatsimikiza nambala yanu.' },
-    icon: 'phone',
-    group: 'GETTING_STARTED',
-  },
-  PROFILE_AVATAR_SET: {
-    key: 'PROFILE_AVATAR_SET',
-    points: 10,
-    dailyCap: 1,
-    oneTime: true,
-    title: { en: 'Add a profile photo', ny: 'Ikani chithunzi chanu' },
-    hint: { en: 'Once, the first time you set a photo.', ny: 'Kamodzi, mukaika chithunzi koyamba.' },
-    icon: 'camera',
-    group: 'GETTING_STARTED',
-  },
   DEPOSIT_FUNDS: {
     key: 'DEPOSIT_FUNDS',
     points: 15,
@@ -245,9 +225,7 @@ export const RULE_CATALOGUE: Readonly<Record<RuleKey, PointRule>> = Object.freez
 /** Rules the app shows on the earn screen, in display order. */
 export const PUBLIC_RULE_ORDER: RuleKey[] = [
   'SIGN_UP',
-  'PROFILE_PHONE_VERIFIED',
   'PROFILE_EMAIL_VERIFIED',
-  'PROFILE_AVATAR_SET',
   'DEPOSIT_FUNDS',
   'BUY_STOCK',
   'SELL_STOCK',
@@ -274,7 +252,13 @@ export const GROUP_TITLES: Record<RuleGroup, Record<'en' | 'ny', string>> = {
 
 /** The prizes, served to the app so the copy lives in one place. */
 export const PRIZES = [
-  { rank: 1, label: { en: 'MWK 100,000', ny: 'MWK 100,000' } },
+  {
+    rank: 1,
+    label: {
+      en: 'MWK 100,000 of investing on Pine',
+      ny: 'MWK 100,000 yoyika ndalama mu Pine',
+    },
+  },
   {
     rank: 2,
     label: {

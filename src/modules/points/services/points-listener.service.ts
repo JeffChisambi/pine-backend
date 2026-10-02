@@ -9,6 +9,7 @@ import { toMalawiDay, toMalawiDayString } from '../domain/malawi-day';
 import { MIN_SCORING_NOTIONAL } from '../domain/rule-catalogue';
 import { ClaimsService } from './claims.service';
 import { PointsAwardService } from './points-award.service';
+import { SeasonService } from './season.service';
 import { MilestoneService } from './milestone.service';
 
 interface WalletUpdatedPayload {
@@ -35,6 +36,7 @@ export class PointsListenerService {
     private readonly awards: PointsAwardService,
     private readonly claims: ClaimsService,
     private readonly milestones: MilestoneService,
+    private readonly seasons: SeasonService,
     @Inject(appConfig.KEY)
     private readonly app: ConfigType<typeof appConfig>,
   ) {}
@@ -46,6 +48,32 @@ export class PointsListenerService {
         userId: payload.userId,
         ruleKey: 'SIGN_UP',
         dedupeKey: dedupeKeys.signUp(payload.userId),
+      });
+    });
+  }
+
+  /**
+   * Verifying an email scores once per season.
+   *
+   * The event carries the address rather than the user, so this looks the
+   * account up by it. Without this handler the rule could only ever be earned
+   * by the backfill, which would make it a lie on the earn screen.
+   */
+  @OnEvent('auth.otp.verified')
+  async onOtpVerified(payload: { destination: string; purpose: string }): Promise<void> {
+    if (payload.purpose !== 'email_verification') return;
+    await this.safely('auth.otp.verified', async () => {
+      const season = await this.seasonId();
+      if (!season) return;
+      const user = await this.prisma.user.findUnique({
+        where: { email: payload.destination.toLowerCase() },
+        select: { id: true },
+      });
+      if (!user) return;
+      await this.awards.award({
+        userId: user.id,
+        ruleKey: 'PROFILE_EMAIL_VERIFIED',
+        dedupeKey: dedupeKeys.profile(user.id, 'email', season),
       });
     });
   }
@@ -160,6 +188,11 @@ export class PointsListenerService {
     const openedOn = toMalawiDay(holding.createdAt, this.app.timezone);
     const today = toMalawiDay(at, this.app.timezone);
     return openedOn.getTime() < today.getTime();
+  }
+
+  private async seasonId(): Promise<string | null> {
+    const season = await this.seasons.seasonFor();
+    return season?.id ?? null;
   }
 
   /** Points must never break the thing that earned them. */

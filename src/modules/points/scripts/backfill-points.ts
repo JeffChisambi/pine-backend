@@ -55,8 +55,6 @@ async function main(): Promise<void> {
         lastName: true,
         createdAt: true,
         emailVerifiedAt: true,
-        phoneVerifiedAt: true,
-        avatarKey: true,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -95,20 +93,6 @@ async function main(): Promise<void> {
           'PROFILE_EMAIL_VERIFIED',
           dedupeKeys.profile(user.id, 'email', season.id),
           user.emailVerifiedAt,
-        );
-      }
-      if (user.phoneVerifiedAt) {
-        await give(
-          'PROFILE_PHONE_VERIFIED',
-          dedupeKeys.profile(user.id, 'phone', season.id),
-          user.phoneVerifiedAt,
-        );
-      }
-      if (user.avatarKey) {
-        await give(
-          'PROFILE_AVATAR_SET',
-          dedupeKeys.profile(user.id, 'avatar', season.id),
-          user.createdAt,
         );
       }
 
