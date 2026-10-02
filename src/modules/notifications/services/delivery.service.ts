@@ -105,7 +105,10 @@ export class PushProvider implements IChannelProvider {
       sound: 'default' as const,
       title: payload.title,
       body: payload.body,
-      data: payload.data,
+      // The inbox row's id travels with the push so the app can name what it
+      // opened — the Pine Points claim sends only this id and lets the server
+      // time the gap from its own delivery record.
+      data: { ...(payload.data ?? {}), notificationId: payload.notificationId },
       ...(badge != null ? { badge } : {}),
       // Heads-up pop-up delivery: 'high' wakes the device promptly, and the
       // 'alerts' Android channel is created client-side with MAX importance
