@@ -255,15 +255,15 @@ export const PRIZES = [
   {
     rank: 1,
     label: {
-      en: 'MWK 100,000 of investing on Pine',
-      ny: 'MWK 100,000 yoyika ndalama mu Pine',
+      en: 'MWK 100,000 of investable cash',
+      ny: 'MWK 100,000 ndalama zoyikapo',
     },
   },
   {
     rank: 2,
     label: {
-      en: 'MWK 50,000 of investing on Pine',
-      ny: 'MWK 50,000 yoyika ndalama mu Pine',
+      en: 'MWK 50,000 of investable cash',
+      ny: 'MWK 50,000 ndalama zoyikapo',
     },
   },
   { rank: 3, label: { en: 'Pine branded merchandise', ny: 'Zovala za Pine' } },
