@@ -63,7 +63,7 @@ export const RULE_CATALOGUE: Readonly<Record<RuleKey, PointRule>> = Object.freez
     points: 15,
     dailyCap: 1,
     oneTime: false,
-    title: { en: 'Add practice money', ny: 'Onjezani ndalama zochitira masewera' },
+    title: { en: 'Add virtual money', ny: 'Onjezani ndalama zoyeserera' },
     hint: {
       en: 'Once a day, for a deposit of MK 1,000 or more.',
       ny: 'Kamodzi patsiku, ndalama zoyambira MK 1,000.',
