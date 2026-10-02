@@ -7,9 +7,9 @@ import { TradeSettledEvent } from '../../trading/events/trading.events';
 import { dedupeKeys } from '../domain/dedupe-keys';
 import { toMalawiDay, toMalawiDayString } from '../domain/malawi-day';
 import { MIN_SCORING_NOTIONAL } from '../domain/rule-catalogue';
+import { ClaimsService } from './claims.service';
 import { PointsAwardService } from './points-award.service';
 import { MilestoneService } from './milestone.service';
-import { SeasonService } from './season.service';
 
 interface WalletUpdatedPayload {
   userId: string;
@@ -33,8 +33,8 @@ export class PointsListenerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly awards: PointsAwardService,
+    private readonly claims: ClaimsService,
     private readonly milestones: MilestoneService,
-    private readonly seasons: SeasonService,
     @Inject(appConfig.KEY)
     private readonly app: ConfigType<typeof appConfig>,
   ) {}
@@ -126,19 +126,18 @@ export class PointsListenerService {
     });
   }
 
-  /** Daily check-in rides the login event as well as the explicit claim. */
+  /**
+   * Signing in counts as showing up for the day.
+   *
+   * It routes through the same claim the app makes, rather than awarding
+   * directly: awarding here would take the day's check-in, and the explicit
+   * claim would then find it already paid and never advance the streak — so
+   * nobody would ever reach a streak bonus.
+   */
   @OnEvent('auth.user.loggedin')
   async onLoggedIn(payload: { userId: string }): Promise<void> {
     await this.safely('auth.user.loggedin', async () => {
-      const now = new Date();
-      await this.awards.award({
-        userId: payload.userId,
-        ruleKey: 'DAILY_CHECK_IN',
-        dedupeKey: dedupeKeys.checkIn(
-          payload.userId,
-          toMalawiDayString(now, this.app.timezone),
-        ),
-      });
+      await this.claims.checkIn(payload.userId);
     });
   }
 
