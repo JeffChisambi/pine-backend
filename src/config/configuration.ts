@@ -26,12 +26,14 @@ export const appConfig = registerAs('app', () => ({
    * no KYC, orders fill instantly at the market price, deposits are
    * credited immediately with no payment, withdrawals are off, and each
    * investor may deposit at most VIRTUAL_DEPOSIT_CAP in any rolling
-   * VIRTUAL_DEPOSIT_WINDOW_DAYS. MUST run on its own database — never
+   * VIRTUAL_DEPOSIT_WINDOW_DAYS, and starts with VIRTUAL_WELCOME_CREDIT. MUST run on its own database — never
    * point a virtual instance at the real ledger.
    */
   virtualTrading: process.env.VIRTUAL_TRADING === 'true',
   virtualDepositCap: parseFloat(process.env.VIRTUAL_DEPOSIT_CAP ?? '500000'),
-  virtualDepositWindowDays: parseInt(process.env.VIRTUAL_DEPOSIT_WINDOW_DAYS ?? '365', 10),
+  virtualDepositWindowDays: parseInt(process.env.VIRTUAL_DEPOSIT_WINDOW_DAYS ?? '7', 10),
+  /** Credited on sign-up, and counted against that same allowance. */
+  virtualWelcomeCredit: parseFloat(process.env.VIRTUAL_WELCOME_CREDIT ?? '10000'),
   /**
    * Pine Points leaderboard. Anded with virtualTrading so the dependency is
    * unforgeable rather than a documented convention: the competition awards

@@ -538,6 +538,35 @@ export class WalletService {
     return { transactionId, status: 'COMPLETED', allowance: await this.virtualAllowance(userId) };
   }
 
+  /**
+   * Gives a new investor something to trade with on their first morning.
+   *
+   * Routed through the ordinary virtual deposit so it lands in the ledger
+   * like any other credit and counts against the weekly allowance — the
+   * opening balance is part of the allowance, not a bonus on top of it.
+   * Keyed on the user, so a replayed registration event credits nobody
+   * twice. It must never throw: failing to seed a wallet cannot be allowed
+   * to break signing up.
+   */
+  @OnEvent('auth.user.registered')
+  async onUserRegistered(payload: { userId: string }): Promise<void> {
+    if (!this.appConfig.app.virtualTrading) return;
+    const amount = this.appConfig.app.virtualWelcomeCredit;
+    if (!amount || amount <= 0) return;
+    try {
+      await this.depositVirtual(payload.userId, amount, `welcome:${payload.userId}`);
+      this.logger.log(
+        { userId: payload.userId, amount },
+        'Credited the opening virtual balance',
+      );
+    } catch (error) {
+      this.logger.error(
+        { err: error, userId: payload.userId },
+        'Could not credit the opening virtual balance',
+      );
+    }
+  }
+
   async processDeposit(transactionId: string): Promise<void> {
     const prisma = this.repo.prismaClient;
 

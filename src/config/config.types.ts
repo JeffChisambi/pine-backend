@@ -13,6 +13,8 @@ export interface AppConfig {
   virtualDepositCap: number;
   /** Length of that rolling window, in days. */
   virtualDepositWindowDays: number;
+  /** Credited to a new investor on sign-up, against the same allowance. */
+  virtualWelcomeCredit: number;
   /** Pine Points competition (POINTS_ENABLED=true AND VIRTUAL_TRADING=true). */
   pointsEnabled: boolean;
   /** ISO start of the competition; blank starts it on first boot. */
