@@ -8,7 +8,25 @@ import {
   StorageService,
   type StorageBucket,
 } from '../../../infrastructure/storage/storage.service';
-import { ResourceNotFoundException } from '../../../core/exceptions/app.exception';
+import {
+  ConflictException,
+  ResourceNotFoundException,
+} from '../../../core/exceptions/app.exception';
+
+/**
+ * Orders that are still moving: placed but not yet settled, cancelled,
+ * rejected or expired. An account cannot close under one of these, because
+ * the trade would complete against a user who no longer exists.
+ */
+const OPEN_ORDER_STATUSES = [
+  'PENDING_VALIDATION',
+  'VALIDATED',
+  'SUBMITTED',
+  'ACCEPTED',
+  'PARTIALLY_FILLED',
+  'FILLED',
+  'PENDING_SETTLEMENT',
+] as const;
 
 /**
  * AccountService — self-service account closure.
@@ -42,6 +60,18 @@ export class AccountService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.isActive) {
       throw new ResourceNotFoundException('User', userId);
+    }
+
+    // 0) Refuse while a trade is still in flight. Checked first, before the
+    //    audit row or any change, so a refusal leaves no trace to unwind.
+    const openOrders = await this.prisma.order.count({
+      where: { userId, status: { in: [...OPEN_ORDER_STATUSES] } },
+    });
+    if (openOrders > 0) {
+      throw new ConflictException(
+        `You have ${openOrders} trade${openOrders === 1 ? '' : 's'} still in progress. ` +
+          'Wait for them to complete, or cancel them, before closing your account.',
+      );
     }
 
     // 1) Audit BEFORE mutating (the audit row survives via SET NULL actor).
