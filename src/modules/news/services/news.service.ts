@@ -29,6 +29,8 @@ export interface PublicNewsItem {
   /** Hero image URL (string) — mobile's imgSrc() handles URI strings. */
   image: string | null;
   featured: boolean;
+  /** The original document or page, for imported articles. */
+  sourceUrl: string | null;
 }
 
 @Injectable()
@@ -241,7 +243,7 @@ export class NewsService {
   private toPublic(a: {
     id: string; category: string; title: string; summary: string | null;
     body: string[]; source: string; imageUrl: string | null;
-    featured: boolean; publishedAt: Date;
+    featured: boolean; publishedAt: Date; sourceUrl?: string | null;
   }): PublicNewsItem {
     return {
       id: a.id,
@@ -253,6 +255,7 @@ export class NewsService {
       source: a.source,
       image: this.publicImageUrl(a.imageUrl),
       featured: a.featured,
+      sourceUrl: a.sourceUrl ?? null,
     };
   }
 

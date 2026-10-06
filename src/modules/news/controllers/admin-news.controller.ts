@@ -23,6 +23,7 @@ import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser, RequestWithUser } from '../../../core/types/request-context.types';
 import { AuditLogService } from '../../audit/services/audit-log.service';
 import { NewsService } from '../services/news.service';
+import { MseNewsSyncService } from '../services/mse-news-sync.service';
 import { CreateNewsDto, ListNewsQueryDto, UpdateNewsDto } from '../dto/news.dto';
 import { ValidationException } from '../../../core/exceptions/app.exception';
 
@@ -39,7 +40,33 @@ export class AdminNewsController {
   constructor(
     private readonly newsService: NewsService,
     private readonly auditLogService: AuditLogService,
+    private readonly mseSync: MseNewsSyncService,
   ) {}
+
+  /**
+   * Run the MSE import now instead of waiting for Monday. Safe to repeat:
+   * articles already imported are skipped by their source address.
+   */
+  @Post('sync-mse')
+  @RequirePermissions(Permission.PLATFORM_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Import the latest announcements from the MSE website now' })
+  async syncMse(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Req() req: RequestWithUser,
+  ) {
+    const summary = await this.mseSync.sync();
+    await this.auditLogService.log({
+      actorId: admin.id,
+      actorRole: admin.role,
+      action: 'NEWS_MSE_SYNC',
+      resourceType: 'NEWS_ARTICLE',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { ...summary },
+    });
+    return summary;
+  }
 
   @Get()
   @RequirePermissions(Permission.PLATFORM_ADMIN)

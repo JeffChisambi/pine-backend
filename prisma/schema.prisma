@@ -1565,6 +1565,13 @@ model NewsArticle {
   publishedAt DateTime @default(now())
   /// Admin (User) who created it, if known. Nullable — survives user deletion.
   authorId    String?  @db.Uuid
+  /// Where an imported article came from, e.g. "mse". Null for articles
+  /// written in the dashboard.
+  origin      String?
+  /// The original document or page. Unique, which is what lets the weekly
+  /// import run over the same listings again without duplicating anything,
+  /// and what the app links to as "Read the original".
+  sourceUrl   String?  @unique
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

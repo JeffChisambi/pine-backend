@@ -43,6 +43,8 @@ export const appConfig = registerAs('app', () => ({
   /** Season window. Blank means "one year from the first boot that needs it". */
   pointsSeasonStartsAt: process.env.POINTS_SEASON_STARTS_AT || undefined,
   pointsSeasonEndsAt: process.env.POINTS_SEASON_ENDS_AT || undefined,
+  /** Weekly import of announcements from the MSE website into News. */
+  mseNewsSync: process.env.MSE_NEWS_SYNC === 'true',
   apiPrefix: process.env.API_PREFIX ?? 'v1',
   timezone: process.env.APP_TIMEZONE ?? 'Africa/Blantyre',
   isProduction: process.env.NODE_ENV === 'production',

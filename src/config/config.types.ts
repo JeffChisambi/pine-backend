@@ -21,6 +21,8 @@ export interface AppConfig {
   pointsSeasonStartsAt?: string;
   /** ISO end of the competition; blank is one year after the start. */
   pointsSeasonEndsAt?: string;
+  /** Weekly MSE announcement import into News (MSE_NEWS_SYNC=true). */
+  mseNewsSync: boolean;
   apiPrefix: string;
   timezone: string;
   isProduction: boolean;
