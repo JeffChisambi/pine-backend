@@ -284,7 +284,15 @@ export class MseNewsSyncService implements OnModuleInit {
     }
   }
 
-  /** The text of the first two pages, or '' if the PDF has none to give. */
+  /**
+   * The text of the first two pages, laid out as paragraphs separated by a
+   * blank line, or '' if the PDF has none to give.
+   *
+   * Joining pdfjs's text items with spaces is not enough: some notices place
+   * every glyph separately, which came out as "N o t i c e i s h e r e b y".
+   * So the text is rebuilt from where each piece sits on the page — see
+   * layoutText().
+   */
   private async pdfText(url: string): Promise<string> {
     const buffer = await this.fetchBuffer(url);
     if (buffer.length > MAX_PDF_BYTES || buffer.subarray(0, 5).toString() !== '%PDF-') return '';
@@ -293,12 +301,24 @@ export class MseNewsSyncService implements OnModuleInit {
       data: new Uint8Array(buffer),
       verbosity: 0,
     }).promise;
-    let text = '';
+    const pages: string[] = [];
     for (let p = 1; p <= Math.min(doc.numPages, 2); p++) {
       const content = await (await doc.getPage(p)).getTextContent();
-      text += content.items.map((i) => ('str' in i ? i.str : '')).join(' ') + '\n';
+      const glyphs: Glyph[] = [];
+      for (const item of content.items) {
+        if (!('str' in item) || !('transform' in item)) continue;
+        const t = item.transform as number[];
+        glyphs.push({
+          str: item.str,
+          x: t[4],
+          y: t[5],
+          w: item.width,
+          size: Math.hypot(t[0], t[1]) || item.height || 10,
+        });
+      }
+      pages.push(layoutText(glyphs));
     }
-    return text.replace(/\s+/g, ' ').trim();
+    return pages.filter(Boolean).join('\n\n');
   }
 
   private async stockIndex(): Promise<StockRef[]> {
@@ -420,8 +440,8 @@ export function tidyTitle(raw: string, stocks: StockRef[]): string {
     .replace(/\s*-\s*/g, ' – ')
     .split(/\s+/)
     .map((w, i) => {
-      const bare = w.replace(/[^A-Za-z0-9]/g, '');
-      if (keep(bare)) return w;
+      const bare = w.replace(/[’']S$/i, '').replace(/[^A-Za-z0-9]/g, '');
+      if (keep(bare)) return w.replace(/([’'])S$/, '$1s');
       const lower = w.toLowerCase();
       if (i > 0 && SMALL.has(lower)) return lower;
       return lower.charAt(0).toUpperCase() + lower.slice(1);
@@ -436,32 +456,165 @@ export function readable(text: string): boolean {
   if (text.length < 160) return false;
   const letters = (text.match(/[A-Za-z]/g) ?? []).length;
   const digits = (text.match(/[0-9]/g) ?? []).length;
-  return letters / Math.max(1, letters + digits) > 0.75;
+  if (letters / Math.max(1, letters + digits) <= 0.75) return false;
+  // "N o t i c e" survived the layout repair: not something to publish.
+  const words = text.split(/\s+/).filter(Boolean);
+  const single = words.filter((w) => w.length === 1).length;
+  if (single / Math.max(1, words.length) >= 0.3) return false;
+  // ...nor is "ContinentalHoldingsPlcNotice", the opposite failure.
+  const avg = words.reduce((n, w) => n + w.length, 0) / Math.max(1, words.length);
+  return avg < 11;
 }
 
-/** Sentences grouped three to a paragraph, at most five paragraphs. */
-export function paragraphs(text: string, title: string): string[] {
-  // Many notices repeat their heading as the first line; the app already shows it.
-  let body = text;
-  const head = title.replace(/[^A-Za-z]/g, '').toLowerCase().slice(0, 30);
-  const start = body.replace(/[^A-Za-z]/g, '').toLowerCase();
-  if (head && start.startsWith(head.slice(0, 20))) {
-    const firstStop = body.search(/(?<=[a-z0-9)])\.\s+[A-Z]/);
-    if (firstStop > 0 && firstStop < 260) body = body.slice(firstStop + 1).trim();
+export interface Glyph {
+  str: string;
+  x: number;
+  y: number;
+  w: number;
+  size: number;
+}
+
+/**
+ * Rebuilds readable text from positioned pieces of text.
+ *
+ * Pieces on the same baseline form a line; a space goes in only where there
+ * is a real horizontal gap, which is what repairs letter-by-letter PDFs.
+ * A line spacing noticeably larger than usual starts a new paragraph, and a
+ * word split across lines with a hyphen is joined back up.
+ */
+export function layoutText(glyphs: Glyph[]): string {
+  const pieces = glyphs.filter((g) => g.str !== '');
+  if (!pieces.length) return '';
+
+  // PDF y grows upwards: top of the page first, then left to right.
+  pieces.sort((a, b) => b.y - a.y || a.x - b.x);
+
+  const lines: Array<{ y: number; size: number; parts: Glyph[] }> = [];
+  for (const g of pieces) {
+    const line = lines[lines.length - 1];
+    if (line && Math.abs(line.y - g.y) < Math.max(line.size, g.size) * 0.5) {
+      line.parts.push(g);
+      line.size = Math.max(line.size, g.size);
+    } else {
+      lines.push({ y: g.y, size: g.size, parts: [g] });
+    }
   }
 
-  const sentences = body.match(/[^.!?]+[.!?]+(?=\s|$)/g)?.map((s) => s.trim()).filter(Boolean) ?? [body];
+  // Some PDFs report every glyph as being as wide as the font is tall, so
+  // neighbours appear to overlap and no gap can be measured. Spacing cannot be
+  // recovered from those; say so rather than return words run together.
+  let measured = 0;
+  let overlapping = 0;
+  for (const line of lines) {
+    const ps = [...line.parts].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < ps.length; i++) {
+      measured += 1;
+      if (ps[i].x - (ps[i - 1].x + ps[i - 1].w) < -0.3 * ps[i].size) overlapping += 1;
+    }
+  }
+  if (measured > 20 && overlapping / measured > 0.4) return '';
+
+  const text = lines.map((line) => {
+    line.parts.sort((a, b) => a.x - b.x);
+    let out = '';
+    let prev: Glyph | null = null;
+    for (const g of line.parts) {
+      if (prev) {
+        const gap = g.x - (prev.x + prev.w);
+        const needsSpace = gap > Math.min(prev.size, g.size) * 0.18;
+        if (needsSpace && !out.endsWith(' ') && !g.str.startsWith(' ')) out += ' ';
+      }
+      out += g.str;
+      prev = g;
+    }
+    return out.replace(/\s+/g, ' ').trim();
+  });
+
+  // The usual gap between lines; anything clearly larger is a paragraph break.
+  const gaps = lines.slice(1).map((l, i) => lines[i].y - l.y).filter((g) => g > 0);
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const usual = sorted[Math.floor(sorted.length / 2)] ?? 0;
+
+  let result = '';
+  text.forEach((line, i) => {
+    if (!line) return;
+    if (!result) {
+      result = line;
+      return;
+    }
+    const gap = lines[i - 1].y - lines[i].y;
+    if (usual > 0 && gap > usual * 1.45) {
+      result += '\n\n' + line;
+    } else if (/[A-Za-z]-$/.test(result) && /^[a-z]/.test(line)) {
+      result = result.slice(0, -1) + line;
+    } else {
+      result += ' ' + line;
+    }
+  });
+  return result.trim();
+}
+
+const ABBREVIATIONS = /\b(Mr|Mrs|Ms|Dr|Prof|Hon|Rev|Messrs|No|Nos|Ltd|Co|Inc|St|vs|etc|e\.g|i\.e)\./g;
+const DOT = '\u2024';
+
+/** Sentences, without breaking after "Mr." or "Ltd.". */
+export function sentences(text: string): string[] {
+  const guarded = text.replace(ABBREVIATIONS, (m) => m.slice(0, -1) + DOT);
+  const parts = guarded.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) ?? [guarded];
+  return parts.map((p) => p.replace(new RegExp(DOT, 'g'), '.').trim()).filter(Boolean);
+}
+
+function isHeading(para: string): boolean {
+  const letters = para.replace(/[^A-Za-z]/g, '');
+  if (!letters) return true;
+  const upper = para.replace(/[^A-Z]/g, '').length / letters.length;
+  // A shouted line, or a short label with no full stop: a title, a name, a date.
+  // "(Incorporated in the Republic of Mauritius) (Registration No. …)" is
+  // letterhead, not news.
+  const parenthetical = /^\(.*\)$/.test(para);
+  return upper > 0.7 || parenthetical || (para.length < 70 && !/[.!?:]$/.test(para));
+}
+
+/**
+ * The notice's own paragraphs, cleaned for a phone screen: the heading block
+ * it opens with is dropped (the app shows the title already), long blocks are
+ * split three sentences at a time, and it stops at five paragraphs with a
+ * pointer to the original.
+ */
+export function paragraphs(text: string, _title: string): string[] {
+  let blocks = text.split(/\n{2,}/).map((b) => b.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  while (blocks.length > 1 && isHeading(blocks[0])) blocks.shift();
+
+  // A notice laid out as one block still opens with its heading run into the
+  // first sentence; drop leading shouted words up to the first normal one.
+  if (blocks.length) {
+    blocks[0] = blocks[0].replace(/^(?:[A-Z0-9][A-Z0-9&,'’()\-–.]*\s+){3,}(?=[A-Z][a-z])/, '').trim();
+  }
+
   const out: string[] = [];
   let total = 0;
-  for (let i = 0; i < sentences.length && out.length < 5; i += 3) {
-    const para = sentences.slice(i, i + 3).join(' ');
-    if (total + para.length > 1600) break;
-    out.push(para);
-    total += para.length;
+  let truncated = false;
+  for (const block of blocks) {
+    const chunks =
+      block.length > 650
+        ? (() => {
+            const ss = sentences(block);
+            const cs: string[] = [];
+            for (let i = 0; i < ss.length; i += 3) cs.push(ss.slice(i, i + 3).join(' '));
+            return cs;
+          })()
+        : [block];
+    for (const chunk of chunks) {
+      if (out.length >= 5 || total + chunk.length > 1600) {
+        truncated = true;
+        break;
+      }
+      out.push(chunk);
+      total += chunk.length;
+    }
+    if (truncated) break;
   }
-  if (out.join(' ').length < body.length - 40) {
-    out.push('The full notice continues in the original document.');
-  }
+  if (truncated) out.push('The full notice continues in the original document.');
   return out;
 }
 

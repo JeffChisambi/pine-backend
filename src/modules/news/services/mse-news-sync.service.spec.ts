@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MseNewsSyncService,
   companyKey,
+  layoutText,
   matchStock,
   noticeSummary,
   paragraphs,
@@ -113,3 +114,37 @@ describe('helpers', () => {
     expect(explain).toMatch(/paid out to shareholders/);
   });
 });
+
+describe('rebuilding text from a PDF page', () => {
+  /** Lays a word out letter by letter, as some notices do. */
+  const word = (w: string, x0: number, y: number, size = 10, advance = 6) =>
+    [...w].map((ch, i) => ({ str: ch, x: x0 + i * advance, y, w: advance * 0.9, size }));
+
+  it('joins letter-by-letter glyphs into words, with spaces only at real gaps', () => {
+    const glyphs = [...word('Notice', 0, 700), ...word('given', 50, 700)];
+    expect(layoutText(glyphs)).toBe('Notice given');
+  });
+
+  it('starts a paragraph where the line spacing opens up', () => {
+    const glyphs = [
+      { str: 'First line of a paragraph.', x: 0, y: 700, w: 150, size: 10 },
+      { str: 'Second line.', x: 0, y: 688, w: 70, size: 10 },
+      { str: 'A new paragraph.', x: 0, y: 660, w: 90, size: 10 },
+      { str: 'And its second line.', x: 0, y: 648, w: 110, size: 10 },
+    ];
+    expect(layoutText(glyphs)).toBe('First line of a paragraph. Second line.\n\nA new paragraph. And its second line.');
+  });
+
+  it('gives up on a PDF whose glyph widths are nonsense, rather than run words together', () => {
+    // Every glyph claims the full font size as its width, so neighbours overlap.
+    const glyphs = [...'ContinentalHoldingsPlcNoticeOfDividendPayment'].map((ch, i) => ({
+      str: ch, x: i * 7, y: 700, w: 13.7, size: 13.7,
+    }));
+    expect(layoutText(glyphs)).toBe('');
+  });
+
+  it('refuses text whose words have run together', () => {
+    expect(readable('ContinentalHoldingsPlc NOTICEOFTHIRDINTERIMDIVIDEND RegistrationNumber '.repeat(4))).toBe(false);
+  });
+});
+
