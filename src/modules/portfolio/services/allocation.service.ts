@@ -35,14 +35,8 @@ export class AllocationService {
     const wallet = await this.repo.findWalletByUserId(userId);
     const cashBalance = wallet?.balance.toNumber() ?? 0;
 
-    const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValue, 0);
-    const totalPortfolioValue = cashBalance + totalMarketValue;
-
-    const allocations = this.calculator.calculateAllocation(
-      holdings,
-      cashBalance,
-      totalPortfolioValue,
-    );
+    // Every share is of cash + stocks, so the entries sum to 100.
+    const allocations = this.calculator.calculateAllocation(holdings, cashBalance);
 
     const sectorAllocation = this.calculator.calculateSectorAllocation(holdings);
 

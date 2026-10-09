@@ -10,6 +10,7 @@ import {
   ApiParam,
   ApiResponse,
   ApiTags,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../../core/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../../core/types/request-context.types';
@@ -126,14 +127,22 @@ export class PortfolioController {
 
   @Get('performance')
   @ApiOperation({
-    summary: 'Get portfolio performance metrics',
+    summary: 'Get portfolio performance',
     description:
-      'Returns daily, weekly, monthly, yearly, and lifetime returns ' +
-      'both as absolute MWK values and percentage.',
+      'Time-weighted returns on the stocks held — purchases and sales are netted out, so ' +
+      'investing more money is not reported as growth. Includes a daily series for the ' +
+      'requested period (1W, 1M, 3M, 1Y, ALL; default 1M). A return is null when there is ' +
+      'not enough history to measure it.',
   })
-  @ApiResponse({ status: 200, description: 'Performance metrics' })
-  async getPerformance(@CurrentUser() user: AuthenticatedUser) {
-    return this.portfolioService.getPerformance(user.id);
+  @ApiQuery({ name: 'period', required: false, enum: ['1W', '1M', '3M', '1Y', 'ALL'] })
+  @ApiResponse({ status: 200, description: 'Performance metrics and series' })
+  async getPerformance(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('period') period?: string,
+  ) {
+    const allowed = ['1W', '1M', '3M', '1Y', 'ALL'] as const;
+    const p = (allowed as readonly string[]).includes(period ?? '') ? (period as (typeof allowed)[number]) : '1M';
+    return this.portfolioService.getPerformance(user.id, p);
   }
 
   // ── Allocation ──────────────────────────────────────────────

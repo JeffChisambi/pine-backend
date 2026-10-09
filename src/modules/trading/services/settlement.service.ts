@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Decimal } from '@prisma/client/runtime/library';
+import { applyTrade, emptyPosition, type Position } from '../../../shared/portfolio/position';
 import { TradingRepository } from '../repositories/trading.repository';
 import { OrderExecutedEvent, TradeSettledEvent } from '../events/trading.events';
 import { OrderLifecycleStatus } from '../domain/order-lifecycle';
@@ -213,60 +214,58 @@ export class SettlementService {
         where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
       });
 
-      if (event.side === 'BUY') {
-        const prevQty = holding?.quantity ?? new Decimal(0);
-        const prevAvg = holding?.averageCost ?? new Decimal(0);
-        const newQty = prevQty.add(qty);
-        // Cost basis includes fees: what the buyer ACTUALLY paid per share
-        // (gross + commission + levies) — so P&L on the position reflects
-        // true cost, not just the exchange price.
-        const newAvg = prevQty.mul(prevAvg).add(totalCost).div(newQty);
-        const buyOrderBroker = await tx.order.findUnique({
-          where: { id: event.orderId },
-          select: { brokerId: true },
-        });
-        await tx.holding.upsert({
-          where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
-          create: {
-            userId: event.userId,
-            stockId: event.stockId,
-            quantity: newQty,
-            averageCost: newAvg,
-            brokerId: buyOrderBroker?.brokerId ?? null,
-          },
-          update: {
-            quantity: newQty,
-            averageCost: newAvg,
-            // Backfill broker ownership on legacy holdings created before
-            // the multi-broker migration.
-            brokerId: buyOrderBroker?.brokerId ?? undefined,
-          },
-        });
-      } else {
-        const prevQty = holding?.quantity ?? new Decimal(0);
-        // INTEGRITY: never settle a sell of more shares than the user holds.
-        // Aborting the transaction rolls back the cash credit too — a
-        // phantom sell must not pay out. (Validation blocks this upstream;
-        // this is the last line of defense.)
-        if (!holding || prevQty.lt(qty)) {
-          throw new Error(
-            `Sell settlement aborted for order ${event.orderId}: ` +
-            `selling ${qty.toString()} but holding ${prevQty.toString()} shares`,
-          );
-        }
-        const newQty = prevQty.sub(qty);
-        const sellOrderBroker = await tx.order.findUnique({
-          where: { id: event.orderId },
-          select: { brokerId: true },
-        });
-        await tx.holding.update({
-          where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
-          data: {
-            quantity: newQty,
-            brokerId: sellOrderBroker?.brokerId ?? undefined,
-          },
-        });
+      // One implementation of the average method, shared with the backfill
+      // and tested on its own (src/shared/portfolio/position.ts). It keeps
+      // the fee-free averagePrice beside the fee-inclusive averageCost, and
+      // records what a sale realises.
+      const before: Position = holding
+        ? {
+            quantity: holding.quantity,
+            averagePrice: holding.averagePrice,
+            averageCost: holding.averageCost,
+            realizedPnl: holding.realizedPnl,
+            realizedPricePnl: holding.realizedPricePnl,
+          }
+        : emptyPosition();
+
+      // INTEGRITY: never settle a sell of more shares than the user holds.
+      // Aborting the transaction rolls back the cash credit too — a phantom
+      // sell must not pay out. (Validation blocks this upstream; this is the
+      // last line of defense.)
+      if (event.side === 'SELL' && (!holding || before.quantity.lt(qty))) {
+        throw new Error(
+          `Sell settlement aborted for order ${event.orderId}: ` +
+          `selling ${qty.toString()} but holding ${before.quantity.toString()} shares`,
+        );
       }
+
+      const after = applyTrade(before, { side: event.side, quantity: qty, price, fees: totalFees });
+      const orderBroker = await tx.order.findUnique({
+        where: { id: event.orderId },
+        select: { brokerId: true },
+      });
+      const values = {
+        quantity: after.quantity,
+        averagePrice: after.averagePrice,
+        averageCost: after.averageCost,
+        realizedPnl: after.realizedPnl,
+        realizedPricePnl: after.realizedPricePnl,
+      };
+      await tx.holding.upsert({
+        where: { userId_stockId: { userId: event.userId, stockId: event.stockId } },
+        create: {
+          userId: event.userId,
+          stockId: event.stockId,
+          ...values,
+          brokerId: orderBroker?.brokerId ?? null,
+        },
+        update: {
+          ...values,
+          // Backfill broker ownership on legacy holdings created before the
+          // multi-broker migration.
+          brokerId: orderBroker?.brokerId ?? undefined,
+        },
+      });
 
       // ── 4. Settlement record + order status + audit ───────────
       const settlement = await tx.settlementRecord.create({

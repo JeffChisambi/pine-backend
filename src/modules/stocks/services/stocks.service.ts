@@ -1,3 +1,5 @@
+import { Decimal } from '@prisma/client/runtime/library';
+import { quoteFrom } from '../../../shared/portfolio/market-reference';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { StocksRepository, StockRow } from '../repositories/stocks.repository';
 
@@ -10,13 +12,6 @@ function fmtPrice(raw: string | null): string {
 }
 
 /** Calculates percentage change between two price strings. */
-function calcChangePct(current: string | null, previous: string | null): number | null {
-  if (!current || !previous) return null;
-  const cur = parseFloat(current);
-  const prev = parseFloat(previous);
-  if (!prev) return null;
-  return ((cur - prev) / prev) * 100;
-}
 
 /**
  * Maps a period string to a number of calendar days.
@@ -75,30 +70,25 @@ export interface StockDetailItem extends StockListItem {
 
 function toListItem(row: StockRow): StockListItem {
   const priceRaw = parseFloat(row.latestPrice?.closePrice ?? '0');
-  const open = parseFloat(row.latestPrice?.openPrice ?? '0');
-  const close = parseFloat(row.latestPrice?.closePrice ?? '0');
 
-  // The MSE mainboard table's % Change column renders 0 in static HTML;
-  // the true intraday value is computed from open vs close.
-  // Priority:
-  //   1. Stored MSE changePct if it is genuinely non-zero
-  //   2. Calculated from (close - open) / open × 100
-  //   3. Fall back to prevClose comparison
-  //   4. Zero
-  const storedChangePct = row.latestPrice?.changePct != null
-    ? parseFloat(row.latestPrice.changePct)
-    : null;
-
-  const intradayPct = open > 0 ? ((close - open) / open) * 100 : 0;
-  const prevClosePct = calcChangePct(
-    row.latestPrice?.closePrice ?? null,
-    row.prevClosePrice,
-  ) ?? 0;
-
-  // Use stored if genuinely non-zero; else intraday; else prev-close comparison
-  const changePct = (storedChangePct !== null && Math.abs(storedChangePct) > 0.001)
-    ? storedChangePct
-    : (Math.abs(intradayPct) > 0.001 ? intradayPct : prevClosePct);
+  // Today's move comes from the same definition the portfolio uses
+  // (src/shared/portfolio/market-reference.ts): the exchange's published
+  // move when it has one, otherwise the previous session's close. It used to
+  // fall back to the open-to-close move first, which is not a daily change,
+  // so this screen and the portfolio could show the same stock moving by
+  // different amounts.
+  const quote = quoteFrom(
+    row.latestPrice
+      ? {
+          closePrice: new Decimal(row.latestPrice.closePrice),
+          changePct: row.latestPrice.changePct != null ? new Decimal(row.latestPrice.changePct) : null,
+          tradedAt: row.latestPrice.tradedAt,
+        }
+      : undefined,
+    row.prevClosePrice ? { closePrice: new Decimal(row.prevClosePrice), tradedAt: new Date(0) } : undefined,
+  );
+  const known = quote.changePct !== null;
+  const changePct = quote.changePct ?? 0;
 
   const positive = changePct >= 0;
 
@@ -109,7 +99,8 @@ function toListItem(row: StockRow): StockListItem {
     sector: row.sector,
     price: fmtPrice(row.latestPrice?.closePrice ?? null),
     priceRaw,
-    change: `${positive ? '+' : ''}${changePct.toFixed(2)}%`,
+    // No earlier price means no move to report — shown as a dash, not 0%.
+    change: known ? `${positive ? '+' : ''}${changePct.toFixed(2)}%` : '—',
     changePct,
     positive,
     volume: row.latestPrice

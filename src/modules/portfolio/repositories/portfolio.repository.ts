@@ -268,6 +268,61 @@ export class PortfolioRepository {
     });
   }
 
+  /**
+   * Buys made since `since`, for measuring today's move on newly bought
+   * shares from their purchase price rather than yesterday's close.
+   */
+  async findBuysSince(userId: string, since: Date) {
+    const trades = await this.prisma.trade.findMany({
+      where: { createdAt: { gte: since }, order: { userId, side: 'BUY' } },
+      select: { quantity: true, price: true, createdAt: true, order: { select: { stockId: true } } },
+    });
+    return trades.map((t) => ({
+      stockId: t.order.stockId,
+      quantity: t.quantity,
+      price: t.price,
+      executedAt: t.createdAt,
+    }));
+  }
+
+  /**
+   * Every trade as money moving into (+) or out of (−) the stocks, at
+   * execution value. The performance series nets these out so that buying
+   * shares never reads as a gain.
+   */
+  async findTradeFlows(userId: string) {
+    const trades = await this.prisma.trade.findMany({
+      where: { order: { userId } },
+      select: { quantity: true, price: true, createdAt: true, order: { select: { side: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return trades.map((t) => {
+      const value = t.quantity.mul(t.price);
+      return { date: t.createdAt, amount: t.order.side === 'BUY' ? value : value.neg() };
+    });
+  }
+
+  /** What sales have realised, across every position including closed ones. */
+  async sumRealized(userId: string) {
+    const agg = await this.prisma.holding.aggregate({
+      where: { userId },
+      _sum: { realizedPnl: true, realizedPricePnl: true },
+    });
+    return {
+      realizedPnl: agg._sum.realizedPnl ?? new Decimal(0),
+      realizedPricePnl: agg._sum.realizedPricePnl ?? new Decimal(0),
+    };
+  }
+
+  /** All snapshots, oldest first — the performance chain needs the whole history. */
+  async findAllSnapshots(userId: string) {
+    return this.prisma.portfolioSnapshot.findMany({
+      where: { userId },
+      orderBy: { snapshotDate: 'asc' },
+      select: { snapshotDate: true, holdingsValue: true },
+    });
+  }
+
   // ── Stock lookup ────────────────────────────────────────────
 
   async findStockById(stockId: string) {

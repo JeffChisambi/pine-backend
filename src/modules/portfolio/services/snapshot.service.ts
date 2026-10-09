@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PortfolioRepository } from '../repositories/portfolio.repository';
-import { PortfolioCalculator } from './portfolio-calculator.service';
+import { ValuationService } from './valuation.service';
 import { PerformanceService } from './performance.service';
 import { AllocationService } from './allocation.service';
 
@@ -22,7 +22,7 @@ export class SnapshotService {
 
   constructor(
     private readonly repo: PortfolioRepository,
-    private readonly calculator: PortfolioCalculator,
+    private readonly valuation: ValuationService,
     private readonly performanceService: PerformanceService,
     private readonly allocationService: AllocationService,
   ) {}
@@ -33,12 +33,13 @@ export class SnapshotService {
    */
   async generateSnapshot(userId: string): Promise<void> {
     try {
-      const holdings = await this.repo.findUserHoldings(userId);
-      const wallet = await this.repo.findWalletByUserId(userId);
+      const [valued, wallet] = await Promise.all([
+        this.valuation.valuePortfolio(userId),
+        this.repo.findWalletByUserId(userId),
+      ]);
       const cashBalance = wallet?.balance ?? new Decimal(0);
-
-      const summary = this.calculator.calculateSummary(holdings, cashBalance);
-      const totalValue = cashBalance.add(summary.totalMarketValue);
+      const totals = valued.totals;
+      const totalValue = cashBalance.add(totals.marketValue);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -50,10 +51,10 @@ export class SnapshotService {
         totalValue,
         // The series investors actually see: stocks only. Cash is recorded
         // beside it, never inside it — a deposit must not look like growth.
-        holdingsValue: summary.totalMarketValue,
+        holdingsValue: totals.marketValue,
         cashBalance,
-        totalCost: summary.totalInvested,
-        unrealizedPnl: summary.totalUnrealizedPnl,
+        totalCost: totals.totalInvested,
+        unrealizedPnl: totals.unrealizedPnl,
       });
 
       // Update performance metrics

@@ -1,28 +1,57 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
+import { quoteFrom, type PriceStatus } from '../../../shared/portfolio/market-reference';
+import { ZERO } from '../../../shared/portfolio/position';
+import {
+  aggregate,
+  round2,
+  valueHolding,
+  type PortfolioTotals,
+} from '../../../shared/portfolio/valuation';
 
 /**
- * Portfolio Calculator — the heart of the portfolio module.
+ * Portfolio Calculator — turns holdings and prices into what the investor sees.
  *
- * Pure computation. No side effects. No database writes.
+ * Pure computation, no I/O. The arithmetic itself lives in
+ * src/shared/portfolio, where it is tested against worked scenarios; this
+ * class only maps database rows onto it and shapes the response.
  *
- * Inputs:  Ledger data + Market prices + Corporate actions
- * Outputs: Portfolio summary, holdings table, performance metrics
+ * Every figure here has one meaning, everywhere it appears:
  *
- * Every other service in the portfolio module calls this calculator
- * rather than doing scattered calculations.
+ *   marketValue      quantity × current price
+ *   costBasis        quantity × average execution price, fees excluded
+ *   fees             buying costs still attached to the shares held
+ *   totalInvested    costBasis + fees: what the investor actually paid
+ *   unrealizedPnl    marketValue − costBasis: the price gain or loss.
+ *                    Zero right after a purchase at an unchanged price.
+ *   netUnrealizedPnl marketValue − totalInvested: the result after fees
+ *   pnlPercent       unrealizedPnl ÷ costBasis
+ *   stockChangePct   the stock's own move today, as the Market tab shows it
+ *   dailyChange      the investor's money move today, counting shares bought
+ *                    today from their purchase price, not yesterday's close
+ *
+ * Portfolio totals are sums of money and their percentages divide by the
+ * summed basis, never an average of per-stock percentages.
  */
 
-export interface PortfolioSummary {
-  cashBalance: number;
-  totalInvested: number;
-  totalMarketValue: number;
-  totalUnrealizedPnl: number;
-  totalPnlPercent: number;
-  portfolioValue: number;
-  dailyChange: number;
-  dailyChangePct: number;
-  holdingsCount: number;
+export interface HoldingRow {
+  stockId: string;
+  quantity: Decimal;
+  averageCost: Decimal;
+  averagePrice: Decimal;
+  stock: {
+    symbol: string;
+    name: string;
+    sector: string;
+    prices: Array<{ closePrice: Decimal; changePct: Decimal | null; tradedAt: Date }>;
+  };
+}
+
+export interface RecentBuy {
+  stockId: string;
+  quantity: Decimal;
+  price: Decimal;
+  executedAt: Date;
 }
 
 export interface HoldingDetail {
@@ -31,17 +60,61 @@ export interface HoldingDetail {
   name: string;
   sector: string;
   quantity: number;
+  /** Per share, fees included: what was paid. */
   averageCost: number;
-  currentPrice: number;
-  previousClose: number;
-  marketValue: number;
+  /** Per share, fees excluded: the exchange price paid. */
+  averagePrice: number;
+  /** Null when the stock has no price at all. */
+  currentPrice: number | null;
+  /** What today's move is measured from; null when there is no earlier price. */
+  previousClose: number | null;
+  priceStatus: PriceStatus;
+  priceDate: string | null;
+  marketValue: number | null;
   costBasis: number;
-  unrealizedPnl: number;
-  pnlPercent: number;
-  dailyChange: number;
-  dailyChangePct: number;
-  /** Percentage of total portfolio this holding represents */
+  fees: number;
+  totalInvested: number;
+  unrealizedPnl: number | null;
+  pnlPercent: number | null;
+  netUnrealizedPnl: number | null;
+  netPnlPercent: number | null;
+  /** The stock's own move today — matches the Market tab. */
+  stockChangePct: number | null;
+  /** The investor's move today on this holding. */
+  dailyChange: number | null;
+  dailyChangePct: number | null;
+  /** Share of the priced stocks' market value. */
   weight: number;
+}
+
+export interface PortfolioSummary {
+  cashBalance: number;
+  /** What was paid for the shares held, fees included. */
+  totalInvested: number;
+  /** What the shares held cost at the exchange, fees excluded. */
+  costBasis: number;
+  /** Buying fees attached to the shares held. */
+  fees: number;
+  totalMarketValue: number;
+  /** Price gain or loss on the shares held. */
+  totalUnrealizedPnl: number;
+  /** totalUnrealizedPnl ÷ costBasis; null when there is nothing invested. */
+  totalPnlPercent: number | null;
+  /** After fees: totalMarketValue − totalInvested. */
+  netUnrealizedPnl: number;
+  netPnlPercent: number | null;
+  /** What sales have made, after all costs. */
+  realizedPnl: number;
+  realizedPricePnl: number;
+  portfolioValue: number;
+  dailyChange: number | null;
+  dailyChangePct: number | null;
+  holdingsCount: number;
+  pricedHoldings: number;
+  unpricedHoldings: number;
+  staleHoldings: number;
+  /** The newest price date used, so the screen can say "as of". */
+  asOf: string | null;
 }
 
 export interface AllocationEntry {
@@ -50,19 +123,6 @@ export interface AllocationEntry {
   symbol?: string;
   value: number;
   percentage: number;
-}
-
-export interface PerformanceMetrics {
-  dailyReturn: number;
-  dailyReturnPct: number;
-  weeklyReturn: number;
-  weeklyReturnPct: number;
-  monthlyReturn: number;
-  monthlyReturnPct: number;
-  yearlyReturn: number;
-  yearlyReturnPct: number;
-  lifetimeReturn: number;
-  lifetimeReturnPct: number;
 }
 
 export interface AnalyticsData {
@@ -75,253 +135,182 @@ export interface AnalyticsData {
   averageHoldingSize: number;
 }
 
+export interface Valued {
+  details: HoldingDetail[];
+  totals: PortfolioTotals;
+  asOf: Date | null;
+}
+
+const num = (d: Decimal | null): number | null => (d === null ? null : d.toNumber());
+
 @Injectable()
 export class PortfolioCalculator {
-  private readonly logger = new Logger(PortfolioCalculator.name);
-
   /**
-   * Calculate the full portfolio summary from raw holdings + wallet data.
+   * Values every holding and the portfolio as a whole, from one set of
+   * prices, so the holdings list and the totals cannot disagree.
+   *
+   * @param recentBuys buys made recently (any stock); each holding uses those
+   *                   on or after its own price's session date
    */
-  calculateSummary(
-    holdings: Array<{
-      quantity: Decimal;
-      averageCost: Decimal;
-      stock: {
-        prices: Array<{ closePrice: Decimal }>;
-      };
-    }>,
-    cashBalance: Decimal,
-  ): { totalInvested: Decimal; totalMarketValue: Decimal; totalUnrealizedPnl: Decimal; dailyChange: Decimal } {
-    let totalInvested = new Decimal(0);
-    let totalMarketValue = new Decimal(0);
-    let dailyChange = new Decimal(0);
-
-    for (const h of holdings) {
-      const currentPrice = h.stock.prices[0]?.closePrice ?? h.averageCost;
-      const previousClose = h.stock.prices[1]?.closePrice ?? currentPrice;
-
-      const costBasis = h.quantity.mul(h.averageCost);
-      const marketValue = h.quantity.mul(currentPrice);
-      const holdingDailyChange = h.quantity.mul(currentPrice.sub(previousClose));
-
-      totalInvested = totalInvested.add(costBasis);
-      totalMarketValue = totalMarketValue.add(marketValue);
-      dailyChange = dailyChange.add(holdingDailyChange);
-    }
-
-    const totalUnrealizedPnl = totalMarketValue.sub(totalInvested);
-
-    return { totalInvested, totalMarketValue, totalUnrealizedPnl, dailyChange };
-  }
-
-  /**
-   * Calculate detailed holding entries.
-   */
-  calculateHoldings(
-    holdings: Array<{
-      stockId: string;
-      quantity: Decimal;
-      averageCost: Decimal;
-      stock: {
-        symbol: string;
-        name: string;
-        sector: string;
-        prices: Array<{ closePrice: Decimal }>;
-      };
-    }>,
-    totalPortfolioValue: Decimal,
-  ): HoldingDetail[] {
-    return holdings.map((h) => {
-      const currentPrice = h.stock.prices[0]?.closePrice ?? h.averageCost;
-      const previousClose = h.stock.prices[1]?.closePrice ?? currentPrice;
-
-      const marketValue = h.quantity.mul(currentPrice);
-      const costBasis = h.quantity.mul(h.averageCost);
-      const unrealizedPnl = marketValue.sub(costBasis);
-      const pnlPercent = costBasis.gt(0)
-        ? unrealizedPnl.div(costBasis).mul(100).toNumber()
-        : 0;
-
-      const dailyChange = currentPrice.sub(previousClose).mul(h.quantity);
-      const dailyChangePct = previousClose.gt(0)
-        ? currentPrice.sub(previousClose).div(previousClose).mul(100).toNumber()
-        : 0;
-
-      const weight = totalPortfolioValue.gt(0)
-        ? marketValue.div(totalPortfolioValue).mul(100).toNumber()
-        : 0;
-
+  value(holdings: HoldingRow[], recentBuys: RecentBuy[] = [], now: Date = new Date()): Valued {
+    const valuations = holdings.map((h) => {
+      const quote = quoteFrom(h.stock.prices[0], h.stock.prices[1], now);
+      const since = quote.priceDate;
+      let quantity = ZERO;
+      let gross = ZERO;
+      if (since) {
+        for (const b of recentBuys) {
+          if (b.stockId !== h.stockId || b.executedAt < since) continue;
+          quantity = quantity.add(b.quantity);
+          gross = gross.add(b.quantity.mul(b.price));
+        }
+      }
       return {
-        stockId: h.stockId,
-        symbol: h.stock.symbol,
-        name: h.stock.name,
-        sector: h.stock.sector,
-        quantity: h.quantity.toNumber(),
-        averageCost: h.averageCost.toNumber(),
-        currentPrice: currentPrice.toNumber(),
-        previousClose: previousClose.toNumber(),
-        marketValue: marketValue.toNumber(),
-        costBasis: costBasis.toNumber(),
-        unrealizedPnl: unrealizedPnl.toNumber(),
-        pnlPercent: round2(pnlPercent),
-        dailyChange: dailyChange.toNumber(),
-        dailyChangePct: round2(dailyChangePct),
-        weight: round2(weight),
+        row: h,
+        quote,
+        v: valueHolding({
+          quantity: h.quantity,
+          // A holding not yet backfilled has no fee-free average. Falling back
+          // to the cost average is conservative (fees then read as a small
+          // loss); leaving it at zero would report the whole value as profit.
+          averagePrice: h.averagePrice.gt(0) ? h.averagePrice : h.averageCost,
+          averageCost: h.averageCost,
+          quote,
+          buysSinceSession: quantity.gt(0) ? { quantity, gross } : undefined,
+        }),
       };
     });
+
+    const totals = aggregate(valuations.map((x) => x.v));
+    const asOf = valuations.reduce<Date | null>(
+      (latest, x) => (x.quote.priceDate && (!latest || x.quote.priceDate > latest) ? x.quote.priceDate : latest),
+      null,
+    );
+
+    const details: HoldingDetail[] = valuations.map(({ row, quote, v }) => ({
+      stockId: row.stockId,
+      symbol: row.stock.symbol,
+      name: row.stock.name,
+      sector: row.stock.sector,
+      quantity: v.quantity.toNumber(),
+      averageCost: v.averageCost.toNumber(),
+      averagePrice: v.averagePrice.toNumber(),
+      currentPrice: num(v.price),
+      previousClose: num(quote.reference),
+      priceStatus: v.priceStatus,
+      priceDate: v.priceDate ? v.priceDate.toISOString().slice(0, 10) : null,
+      marketValue: num(v.marketValue),
+      costBasis: v.costBasis.toNumber(),
+      fees: v.fees.toNumber(),
+      totalInvested: v.totalInvested.toNumber(),
+      unrealizedPnl: num(v.unrealizedPnl),
+      pnlPercent: round2(v.unrealizedPnlPct),
+      netUnrealizedPnl: num(v.netUnrealizedPnl),
+      netPnlPercent: round2(v.netUnrealizedPnlPct),
+      stockChangePct: round2(v.stockChangePct),
+      dailyChange: num(v.dailyChange),
+      dailyChangePct: round2(v.dailyChangePct),
+      weight:
+        v.marketValue && totals.marketValue.gt(0)
+          ? round2(v.marketValue.div(totals.marketValue).mul(100).toNumber()) ?? 0
+          : 0,
+    }));
+
+    return { details, totals, asOf };
+  }
+
+  summarize(
+    valued: Valued,
+    cashBalance: Decimal,
+    realized: { realizedPnl: Decimal; realizedPricePnl: Decimal },
+  ): PortfolioSummary {
+    const t = valued.totals;
+    return {
+      cashBalance: cashBalance.toNumber(),
+      totalInvested: t.totalInvested.toNumber(),
+      costBasis: t.costBasis.toNumber(),
+      fees: t.fees.toNumber(),
+      totalMarketValue: t.marketValue.toNumber(),
+      totalUnrealizedPnl: t.unrealizedPnl.toNumber(),
+      totalPnlPercent: round2(t.unrealizedPnlPct),
+      netUnrealizedPnl: t.netUnrealizedPnl.toNumber(),
+      netPnlPercent: round2(t.netUnrealizedPnlPct),
+      realizedPnl: realized.realizedPnl.toNumber(),
+      realizedPricePnl: realized.realizedPricePnl.toNumber(),
+      // Stocks only. Wallet cash is separate money and never part of it.
+      portfolioValue: t.marketValue.toNumber(),
+      dailyChange: num(t.dailyChange),
+      dailyChangePct: round2(t.dailyChangePct),
+      holdingsCount: valued.details.length,
+      pricedHoldings: t.pricedHoldings,
+      unpricedHoldings: t.unpricedHoldings,
+      staleHoldings: t.staleHoldings,
+      asOf: valued.asOf ? valued.asOf.toISOString().slice(0, 10) : null,
+    };
   }
 
   /**
-   * Calculate asset allocation breakdown.
+   * Allocation across cash and stocks. Every percentage is of the same total
+   * (cash + stocks), so they sum to 100. Previously cash was a share of
+   * cash + stocks while each stock was a share of stocks alone.
    */
-  calculateAllocation(
-    holdingDetails: HoldingDetail[],
-    cashBalance: number,
-    totalPortfolioValue: number,
-  ): AllocationEntry[] {
+  calculateAllocation(details: HoldingDetail[], cashBalance: number): AllocationEntry[] {
+    const stocks = details.reduce((s, h) => s + (h.marketValue ?? 0), 0);
+    const total = cashBalance + stocks;
+    if (total <= 0) return [];
+
     const allocations: AllocationEntry[] = [];
-
-    // Cash allocation
-    if (cashBalance > 0 && totalPortfolioValue > 0) {
-      allocations.push({
-        assetType: 'CASH',
-        value: cashBalance,
-        percentage: round2((cashBalance / totalPortfolioValue) * 100),
-      });
+    if (cashBalance > 0) {
+      allocations.push({ assetType: 'CASH', value: cashBalance, percentage: round2((cashBalance / total) * 100) ?? 0 });
     }
-
-    // Per-stock allocations
-    for (const h of holdingDetails) {
+    for (const h of details) {
+      if (h.marketValue === null) continue;
       allocations.push({
         assetType: 'STOCK',
         sector: h.sector,
         symbol: h.symbol,
         value: h.marketValue,
-        percentage: round2(h.weight),
+        percentage: round2((h.marketValue / total) * 100) ?? 0,
       });
     }
-
-    // Sort by percentage descending
-    allocations.sort((a, b) => b.percentage - a.percentage);
-    return allocations;
+    return allocations.sort((a, b) => b.percentage - a.percentage);
   }
 
-  /**
-   * Calculate sector allocation (aggregated by sector).
-   */
-  calculateSectorAllocation(holdingDetails: HoldingDetail[]): Array<{ sector: string; percentage: number }> {
-    const sectorMap = new Map<string, number>();
-    for (const h of holdingDetails) {
-      const current = sectorMap.get(h.sector) ?? 0;
-      sectorMap.set(h.sector, current + h.weight);
-    }
-
-    return Array.from(sectorMap.entries())
-      .map(([sector, percentage]) => ({ sector, percentage: round2(percentage) }))
+  /** Sector shares of the stocks alone (cash has no sector). */
+  calculateSectorAllocation(details: HoldingDetail[]): Array<{ sector: string; percentage: number }> {
+    const bySector = new Map<string, number>();
+    for (const h of details) bySector.set(h.sector, (bySector.get(h.sector) ?? 0) + h.weight);
+    return [...bySector.entries()]
+      .map(([sector, percentage]) => ({ sector, percentage: round2(percentage) ?? 0 }))
       .sort((a, b) => b.percentage - a.percentage);
   }
 
-  /**
-   * Calculate performance metrics by comparing current value to historical snapshots.
-   */
-  calculatePerformance(
-    currentValue: Decimal,
-    currentCost: Decimal,
-    snapshots: Array<{
-      snapshotDate: Date;
-      /** Stocks only — the basis for every return below. */
-      holdingsValue: Decimal;
-      totalCost: Decimal;
-    }>,
-  ): PerformanceMetrics {
-    const now = new Date();
-    const oneDay = 24 * 60 * 60 * 1000;
-
-    const findSnapshot = (daysAgo: number) => {
-      const target = new Date(now.getTime() - daysAgo * oneDay);
-      // Find nearest snapshot
-      return snapshots.find((s) => {
-        const diff = Math.abs(s.snapshotDate.getTime() - target.getTime());
-        return diff < 2 * oneDay; // within 2 days
-      });
-    };
-
-    const calcReturn = (pastValue: Decimal | undefined) => {
-      if (!pastValue || pastValue.eq(0)) return { abs: new Decimal(0), pct: new Decimal(0) };
-      const ret = currentValue.sub(pastValue);
-      const pct = ret.div(pastValue).mul(100);
-      return { abs: ret, pct };
-    };
-
-    const daily = calcReturn(findSnapshot(1)?.holdingsValue);
-    const weekly = calcReturn(findSnapshot(7)?.holdingsValue);
-    const monthly = calcReturn(findSnapshot(30)?.holdingsValue);
-    const yearly = calcReturn(findSnapshot(365)?.holdingsValue);
-
-    // Lifetime = current value vs total cost (all-time P&L)
-    const lifetimeReturn = currentValue.sub(currentCost);
-    const lifetimeReturnPct = currentCost.gt(0)
-      ? lifetimeReturn.div(currentCost).mul(100)
-      : new Decimal(0);
+  calculateAnalytics(details: HoldingDetail[]): AnalyticsData {
+    // Only holdings with a known return can be ranked.
+    const ranked = details
+      .filter((h): h is HoldingDetail & { pnlPercent: number } => h.pnlPercent !== null)
+      .sort((a, b) => b.pnlPercent - a.pnlPercent);
+    const byWeight = [...details].sort((a, b) => b.weight - a.weight);
+    const valued = details.filter((h) => h.marketValue !== null);
+    const avgSize = valued.length
+      ? valued.reduce((s, h) => s + (h.marketValue ?? 0), 0) / valued.length
+      : 0;
 
     return {
-      dailyReturn: daily.abs.toNumber(),
-      dailyReturnPct: round2(daily.pct.toNumber()),
-      weeklyReturn: weekly.abs.toNumber(),
-      weeklyReturnPct: round2(weekly.pct.toNumber()),
-      monthlyReturn: monthly.abs.toNumber(),
-      monthlyReturnPct: round2(monthly.pct.toNumber()),
-      yearlyReturn: yearly.abs.toNumber(),
-      yearlyReturnPct: round2(yearly.pct.toNumber()),
-      lifetimeReturn: lifetimeReturn.toNumber(),
-      lifetimeReturnPct: round2(lifetimeReturnPct.toNumber()),
+      topPerformer: ranked[0]
+        ? { symbol: ranked[0].symbol, name: ranked[0].name, pnlPercent: ranked[0].pnlPercent }
+        : null,
+      worstPerformer:
+        ranked.length > 1
+          ? { symbol: ranked[ranked.length - 1].symbol, name: ranked[ranked.length - 1].name, pnlPercent: ranked[ranked.length - 1].pnlPercent }
+          : null,
+      largestPosition: byWeight[0]
+        ? { symbol: byWeight[0].symbol, name: byWeight[0].name, weight: byWeight[0].weight }
+        : null,
+      sectorAllocation: this.calculateSectorAllocation(details),
+      totalDividendsEarned: 0,
+      numberOfTrades: 0,
+      averageHoldingSize: round2(avgSize) ?? 0,
     };
   }
-
-  /**
-   * Calculate analytics data from holdings.
-   */
-  calculateAnalytics(holdingDetails: HoldingDetail[]): AnalyticsData {
-    if (holdingDetails.length === 0) {
-      return {
-        topPerformer: null,
-        worstPerformer: null,
-        largestPosition: null,
-        sectorAllocation: [],
-        totalDividendsEarned: 0,
-        numberOfTrades: 0,
-        averageHoldingSize: 0,
-      };
-    }
-
-    const sorted = [...holdingDetails].sort((a, b) => b.pnlPercent - a.pnlPercent);
-    const topPerformer = sorted[0];
-    const worstPerformer = sorted[sorted.length - 1];
-
-    const byWeight = [...holdingDetails].sort((a, b) => b.weight - a.weight);
-    const largestPosition = byWeight[0];
-
-    const sectorAllocation = this.calculateSectorAllocation(holdingDetails);
-    const avgSize = holdingDetails.reduce((s, h) => s + h.marketValue, 0) / holdingDetails.length;
-
-    return {
-      topPerformer: topPerformer
-        ? { symbol: topPerformer.symbol, name: topPerformer.name, pnlPercent: topPerformer.pnlPercent }
-        : null,
-      worstPerformer: worstPerformer
-        ? { symbol: worstPerformer.symbol, name: worstPerformer.name, pnlPercent: worstPerformer.pnlPercent }
-        : null,
-      largestPosition: largestPosition
-        ? { symbol: largestPosition.symbol, name: largestPosition.name, weight: largestPosition.weight }
-        : null,
-      sectorAllocation,
-      totalDividendsEarned: 0, // TODO: sum from DividendDistribution
-      numberOfTrades: 0, // Set by caller
-      averageHoldingSize: round2(avgSize),
-    };
-  }
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }

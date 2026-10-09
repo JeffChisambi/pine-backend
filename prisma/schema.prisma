@@ -1106,7 +1106,16 @@ model Holding {
   stockId     String   @db.Uuid
   stock       Stock    @relation(fields: [stockId], references: [id])
   quantity    Decimal  @default(0) @db.Decimal(18, 4)
+  /// Weighted-average cost per share INCLUDING buying fees: what was paid.
   averageCost Decimal  @default(0) @db.Decimal(18, 4)
+  /// Weighted-average execution price per share, EXCLUDING fees. The basis
+  /// for price gain or loss, so a purchase at an unchanged price shows no
+  /// loss. See src/shared/portfolio/position.ts.
+  averagePrice     Decimal @default(0) @db.Decimal(18, 6)
+  /// Cumulative result of sales after all costs (net proceeds − averageCost).
+  realizedPnl      Decimal @default(0) @db.Decimal(18, 4)
+  /// Cumulative result of sales on price alone (sale − averagePrice).
+  realizedPricePnl Decimal @default(0) @db.Decimal(18, 4)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

@@ -1,54 +1,45 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Decimal } from '@prisma/client/runtime/library';
+import { Injectable } from '@nestjs/common';
 import { PortfolioRepository } from '../repositories/portfolio.repository';
-import { PortfolioCalculator, HoldingDetail } from './portfolio-calculator.service';
+import { HoldingDetail, PortfolioCalculator, Valued } from './portfolio-calculator.service';
 
 /**
- * Valuation Service — calculates current market value of holdings.
+ * The one place holdings are valued.
  *
- * Uses live market prices. Calculates:
- * - Current value per holding
- * - Gain/loss per holding
- * - Daily change
- * - Percentage return
- *
- * Never stores prices. Always reads from market data.
+ * The summary, the holdings list, allocation, analytics, the daily snapshot
+ * and the performance series all read through valuePortfolio(), so they are
+ * computed from the same rows and the same prices in the same request and
+ * cannot disagree with one another.
  */
 @Injectable()
 export class ValuationService {
-  private readonly logger = new Logger(ValuationService.name);
-
   constructor(
     private readonly repo: PortfolioRepository,
     private readonly calculator: PortfolioCalculator,
   ) {}
 
-  /**
-   * Get current valuations for all holdings.
-   */
-  async getValuations(userId: string): Promise<HoldingDetail[]> {
+  async valuePortfolio(userId: string, now: Date = new Date()): Promise<Valued> {
     const holdings = await this.repo.findUserHoldings(userId);
 
-    // Portfolio value = market value of holdings only (cash is separate
-    // money); weights therefore sum to 100% across owned assets.
-    const summary = this.calculator.calculateSummary(holdings, new Decimal(0));
-    const totalPortfolioValue = summary.totalMarketValue;
+    // Shares bought since a stock's latest price session are measured from
+    // their purchase price. The oldest session among the holdings bounds
+    // how far back those buys need fetching.
+    const sessions = holdings
+      .map((h) => h.stock.prices[0]?.tradedAt)
+      .filter((d): d is Date => d instanceof Date);
+    const since = sessions.length
+      ? new Date(Math.min(...sessions.map((d) => d.getTime())))
+      : now;
+    const recentBuys = holdings.length ? await this.repo.findBuysSince(userId, since) : [];
 
-    return this.calculator.calculateHoldings(holdings as any, totalPortfolioValue);
+    return this.calculator.value(holdings, recentBuys, now);
   }
 
-  /**
-   * Get valuation for a single holding.
-   */
+  async getValuations(userId: string): Promise<HoldingDetail[]> {
+    return (await this.valuePortfolio(userId)).details;
+  }
+
   async getHoldingValuation(userId: string, stockId: string): Promise<HoldingDetail | null> {
-    const holding = await this.repo.findUserHolding(userId, stockId);
-    if (!holding || holding.quantity.lte(0)) return null;
-
-    const holdings = await this.repo.findUserHoldings(userId);
-    const summary = this.calculator.calculateSummary(holdings, new Decimal(0));
-    const totalPortfolioValue = summary.totalMarketValue;
-
-    const details = this.calculator.calculateHoldings([holding] as any, totalPortfolioValue);
-    return details[0] ?? null;
+    const { details } = await this.valuePortfolio(userId);
+    return details.find((d) => d.stockId === stockId) ?? null;
   }
 }

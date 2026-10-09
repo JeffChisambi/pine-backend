@@ -206,7 +206,7 @@ export class CorporateActionsRepository {
   async findShareholdersByStock(stockId: string) {
     return this.prisma.holding.findMany({
       where: { stockId, quantity: { gt: 0 } },
-      select: { userId: true, quantity: true, averageCost: true },
+      select: { userId: true, quantity: true, averageCost: true, averagePrice: true },
     });
   }
 

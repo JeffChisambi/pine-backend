@@ -5,7 +5,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { PortfolioRepository } from '../repositories/portfolio.repository';
 import { PortfolioCalculator, PortfolioSummary } from './portfolio-calculator.service';
 import { ValuationService } from './valuation.service';
-import { PerformanceService } from './performance.service';
+import { PerformanceService, type PerformancePeriod } from './performance.service';
 import { AllocationService } from './allocation.service';
 import { AnalyticsService } from './analytics.service';
 import { SnapshotService } from './snapshot.service';
@@ -100,40 +100,15 @@ export class PortfolioService {
    * GET /portfolio — full portfolio overview.
    */
   async getPortfolioSummary(userId: string): Promise<PortfolioSummary> {
-    // Single source of truth — the value is DERIVED on every read, never
-    // stored:  Portfolio Value = Σ(quantity × latest market price).
-    // Wallet cash is SEPARATE money (shown on the home screen) and is
-    // deliberately NOT part of the portfolio value; it is reported in
-    // cashBalance for reference only.
-    const [holdings, cash] = await Promise.all([
-      this.repo.findUserHoldings(userId),
+    // Derived on every read, never stored, and from the same valuation as
+    // the holdings list. Wallet cash is separate money: reported for
+    // reference, never part of the portfolio value or its returns.
+    const [valued, cash, realized] = await Promise.all([
+      this.valuationService.valuePortfolio(userId),
       this.repo.getAvailableCash(userId),
+      this.repo.sumRealized(userId),
     ]);
-    const cashBalance = cash.available;
-
-    const summary = this.calculator.calculateSummary(holdings, cashBalance);
-    const totalMarketValue = summary.totalMarketValue;
-    const portfolioValue = totalMarketValue;
-
-    const pnlPercent = summary.totalInvested.gt(0)
-      ? summary.totalUnrealizedPnl.div(summary.totalInvested).mul(100).toNumber()
-      : 0;
-
-    const dailyChangePct = portfolioValue.gt(0) && !summary.dailyChange.eq(0)
-      ? summary.dailyChange.div(portfolioValue.sub(summary.dailyChange)).mul(100).toNumber()
-      : 0;
-
-    return {
-      cashBalance: cashBalance.toNumber(),
-      totalInvested: summary.totalInvested.toNumber(),
-      totalMarketValue: totalMarketValue.toNumber(),
-      totalUnrealizedPnl: summary.totalUnrealizedPnl.toNumber(),
-      totalPnlPercent: Math.round(pnlPercent * 100) / 100,
-      portfolioValue: portfolioValue.toNumber(),
-      dailyChange: summary.dailyChange.toNumber(),
-      dailyChangePct: Math.round(dailyChangePct * 100) / 100,
-      holdingsCount: holdings.length,
-    };
+    return this.calculator.summarize(valued, cash.available, realized);
   }
 
   /**
@@ -153,8 +128,8 @@ export class PortfolioService {
   /**
    * GET /portfolio/performance — returns over time.
    */
-  async getPerformance(userId: string) {
-    return this.performanceService.getPerformance(userId);
+  async getPerformance(userId: string, period?: PerformancePeriod) {
+    return this.performanceService.getPerformance(userId, period);
   }
 
   /**

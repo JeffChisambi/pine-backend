@@ -234,10 +234,13 @@ export class DistributionEngine {
         await prisma.$transaction(async (tx) => {
           const newQuantity = holder.quantity.mul(multiplier);
           const newAvgCost = holder.averageCost.div(multiplier);
+          // Both averages move with the split, or price gain would be measured
+          // against a pre-split price and show a huge false gain or loss.
+          const newAvgPrice = holder.averagePrice.div(multiplier);
 
           await tx.holding.updateMany({
             where: { userId: holder.userId, stockId: split.stockId },
-            data: { quantity: newQuantity, averageCost: newAvgCost },
+            data: { quantity: newQuantity, averageCost: newAvgCost, averagePrice: newAvgPrice },
           });
 
           affected++;
@@ -310,10 +313,12 @@ export class DistributionEngine {
           // Adjust average cost: total cost stays the same, spread across more shares
           const totalCost = holder.averageCost.mul(holder.quantity);
           const newAvgCost = totalCost.div(newQuantity);
+          // Same spreading for the fee-free average.
+          const newAvgPrice = holder.averagePrice.mul(holder.quantity).div(newQuantity);
 
           await tx.holding.updateMany({
             where: { userId: holder.userId, stockId: bonus.stockId },
-            data: { quantity: newQuantity, averageCost: newAvgCost },
+            data: { quantity: newQuantity, averageCost: newAvgCost, averagePrice: newAvgPrice },
           });
 
           affected++;
