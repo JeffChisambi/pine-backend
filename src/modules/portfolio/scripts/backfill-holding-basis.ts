@@ -98,8 +98,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  // eslint-disable-next-line no-console
-  console.error('Backfill failed:', error);
+// Exit explicitly: the application context leaves timers and queue
+// connections behind after close(), which otherwise keep a one-off container
+// running indefinitely.
+main()
+  .then(() => process.exit(0))
+  .catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error('Backfill failed:', error);
   process.exit(1);
 });
